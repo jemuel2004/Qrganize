@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="720" viewBox="0 0 1100 720" role="img" aria-labelledby="title desc">
+  <title id="title">Conceptual Framework</title>
+  <desc id="desc">Input-Process-Output conceptual framework of QRganize</desc>
+
+  <rect width="1100" height="720" fill="#ffffff"/>
+
+  <text x="40" y="36" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#000000">Conceptual Framework</text>
+
+  <!-- Column headers -->
+  <text x="200" y="72" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#000000">INPUT</text>
+  <text x="550" y="72" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#000000">PROCESS</text>
+  <text x="900" y="72" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#000000">OUTPUT</text>
+
+  <!-- Boxes -->
+  <rect x="40" y="88" width="320" height="590" fill="#ffffff" stroke="#000000" stroke-width="1.5"/>
+  <rect x="390" y="88" width="320" height="590" fill="#ffffff" stroke="#000000" stroke-width="1.5"/>
+  <rect x="740" y="88" width="320" height="590" fill="#ffffff" stroke="#000000" stroke-width="1.5"/>
+
+  <!-- Arrows -->
+  <line x1="360" y1="383" x2="382" y2="383" stroke="#000000" stroke-width="2"/>
+  <polygon points="390,383 378,377 378,389" fill="#000000"/>
+  <line x1="710" y1="383" x2="732" y2="383" stroke="#000000" stroke-width="2"/>
+  <polygon points="740,383 728,377 728,389" fill="#000000"/>
+
+  <!-- INPUT content -->
+  <text x="56" y="118" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="700" fill="#000000">Data Requirements:</text>
+  <text x="64" y="140" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">" Faculty Profiles and Teaching Loads</text>
+  <text x="64" y="158" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">" Academic Designations</text>
+  <text x="64" y="176" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">" Program Requirements and Class Schedules</text>
+  <text x="64" y="194" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">" Room Utilization Data</text>
+
+  <text x="56" y="224" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="700" fill="#000000">SOFTWARE / TECHNOLOGY STACK:</text>
+
+  <text x="64" y="246" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="700" fill="#000000">" Programming Language:</text>
+  <text x="78" y="262" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">- TypeScript</text>
+  <text x="78" y="278" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">- JavaScript</text>
+
+  <text x="64" y="300" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="700" fill="#000000">" Frontend:</text>
+  <text x="78" y="316" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">- Next.js</text>
+  <text x="78" y="332" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">- React</text>
+  <text x="78" y="348" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">- Tailwind CSS</text>
+
+  <text x="64" y="370" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="700" fill="#000000">" Backend / API:</text>
+  <text x="78" y="386" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">- Next.js API Routes (Node.js)</text>
+
+  <text x="64" y="408" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="700" fill="#000000">" Database:</text>
+  <text x="78" y="424" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">- PostgreSQL</text>
+
+  <text x="64" y="446" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="700" fill="#000000">" Authentication / Security:</text>
+  <text x="78" y="462" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">- bcryptjs</text>
+  <text x="78" y="478" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">- JWT (jose)</text>
+  <text x="78" y="494" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">- Google OAuth</text>
+  <text x="78" y="510" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">- Nodemailer (Email OTP)</text>
+
+  <text x="64" y="532" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="700" fill="#000000">" Libraries / Tools:</text>
+  <text x="78" y="548" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">- qrcode / html5-qrcode</text>
+  <text x="78" y="564" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">- Recharts / lucide-react / xlsx</text>
+
+  <text x="64" y="586" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="700" fill="#000000">" Development Tools:</text>
+  <text x="78" y="602" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">- Visual Studio Code</text>
+  <text x="78" y="618" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">- Node.js</text>
+
+  <text x="56" y="648" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="700" fill="#000000">HARDWARE:</text>
+  <text x="64" y="666" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">" Workstation/Laptop</text>
+
+  <!-- PROCESS content -->
+  <text x="414" y="140" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">" Agile Model</text>
+
+  <text x="406" y="172" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="700" fill="#000000">Modelling Tools:</text>
+  <text x="414" y="194" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">" Deployment Diagram</text>
+  <text x="414" y="212" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">" Use-case Diagram</text>
+  <text x="414" y="230" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">" Requirement Analysis</text>
+
+  <text x="406" y="262" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="700" fill="#000000">System Validation:</text>
+  <text x="414" y="284" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#000000">" Use-case Diagram</text>
+
+  <!-- OUTPUT content -->
+  <text x="770" y="300" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="700" fill="#000000">
+    <tspan x="900" dy="0" text-anchor="middle">QRGanize: QR-Based Room</tspan>
+    <tspan x="900" dy="20" text-anchor="middle">Scheduler &amp; Monitoring System</tspan>
+    <tspan x="900" dy="20" text-anchor="middle">based on Programs &amp;</tspan>
+    <tspan x="900" dy="20" text-anchor="middle">Instructors' Workload</tspan>
+  </text>
+</svg>

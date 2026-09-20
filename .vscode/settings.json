@@ -1,0 +1,16 @@
+{
+    "sqltools.connections": [
+        {
+            "ssh": "Disabled",
+            "previewLimit": 50,
+            "server": "localhost",
+            "port": 5432,
+            "driver": "PostgreSQL",
+            "name": "qr_ganized",
+            "password": "Jemuel1026202004",
+            "username": "postgres",
+            "connectionTimeout": 30,
+            "database": "qr_ganized"
+        }
+    ]
+}
