@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUser } from '@/server/auth';
 import { query } from '@/server/db';
 import { ensureSystemSettingsTable } from '@/server/schema-guard';
@@ -63,7 +63,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || (auth.role !== 'admin' && auth.role !== 'department_chair')) {
+    if (!auth || (auth.role !== 'admin' && auth.role !== 'program_chair')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

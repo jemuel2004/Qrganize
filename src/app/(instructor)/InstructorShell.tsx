@@ -55,7 +55,7 @@ export default function InstructorShell({ children }: { children: React.ReactNod
         <NotificationProvider role="instructor">
           <ToastProvider>
             <div className="flex flex-col h-screen overflow-hidden dashboard-layout-root">
-              <header className="sticky top-0 flex-shrink-0 z-40 bg-[#3074B8] isolate no-print">
+              <header className="qr-app-header sticky top-0 flex-shrink-0 z-40 bg-[#12408F] isolate no-print">
                 <div className="h-[72px] flex items-center gap-6 px-4 sm:px-6 min-w-0">
                   <Link
                     href="/instructor"

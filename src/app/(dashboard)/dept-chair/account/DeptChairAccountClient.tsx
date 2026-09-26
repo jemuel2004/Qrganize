@@ -5,6 +5,7 @@ import Script from 'next/script';
 import { useToast } from '@/client/context/ToastContext';
 import { useScrollLock } from '@/client/hooks/useScrollLock';
 import { PageLoadTransition } from '@/client/components/ui/PageLoadTransition';
+import BackButton from '@/client/components/ui/BackButton';
 import { FormSkeleton } from '@/client/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/client/hooks/useMinLoading';
 import {
@@ -44,8 +45,8 @@ function InputField({
       onChange={e => onChange(e.target.value)}
       placeholder={placeholder}
       disabled={disabled}
-      className="w-full border border-[#CBD5E1] rounded-xl px-3.5 py-2.5 text-sm text-[#1E3A5F] placeholder-[#CBD5E1]
-        focus:outline-none focus:ring-2 focus:ring-[#3C91E6] focus:border-[#3C91E6]
+      className="w-full border border-[#CBD5E1] rounded-xl px-3.5 py-2.5 text-sm text-[#0B2A5B] placeholder-[#CBD5E1]
+        focus:outline-none focus:ring-2 focus:ring-[#1D5BD6] focus:border-[#1D5BD6]
         bg-white disabled:bg-[#F8FAFC] disabled:text-[#94A3B8] disabled:cursor-not-allowed transition-all"
     />
   );
@@ -107,13 +108,13 @@ function AccordionCard({
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className="w-full flex items-center gap-4 px-6 py-5 text-left hover:bg-[#F8FAFC] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#3C91E6] focus-visible:ring-inset"
+        className="w-full flex items-center gap-4 px-6 py-5 text-left hover:bg-[#F8FAFC] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1D5BD6] focus-visible:ring-inset"
       >
         <div className="flex-shrink-0 w-11 h-11 bg-[#EFF6FF] rounded-xl flex items-center justify-center">
-          <Icon className="w-5 h-5 text-[#3C91E6]" />
+          <Icon className="w-5 h-5 text-[#1D5BD6]" />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-[15px] font-bold text-[#1E3A5F] leading-tight">{title}</p>
+          <p className="text-[15px] font-bold text-[#0B2A5B] leading-tight">{title}</p>
           <p className="text-sm text-[#64748B] mt-0.5 leading-snug">{subtitle}</p>
         </div>
         <ChevronDown
@@ -162,10 +163,10 @@ function SecurityActionRow({
       className="w-full flex items-center gap-4 px-4 py-3.5 text-left rounded-xl hover:bg-[#F8FAFC] transition-colors"
     >
       <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-[#EFF6FF] flex items-center justify-center">
-        <Icon className="w-4 h-4 text-[#3C91E6]" />
+        <Icon className="w-4 h-4 text-[#1D5BD6]" />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-[#1E3A5F]">{title}</p>
+        <p className="text-sm font-semibold text-[#0B2A5B]">{title}</p>
         <p className="text-[12px] text-[#64748B] mt-0.5">{description}</p>
       </div>
       <ChevronRight className="w-4 h-4 text-[#94A3B8] flex-shrink-0" />
@@ -205,11 +206,11 @@ function LightModal({
         className={`relative w-full ${wide ? 'max-w-lg' : 'max-w-md'} rounded-2xl border border-[#E2E8F0] bg-white shadow-xl max-h-[90vh] overflow-y-auto`}
       >
         <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-[#E2E8F0] sticky top-0 bg-white z-10">
-          <h2 className="text-base font-bold text-[#1E3A5F]">{title}</h2>
+          <h2 className="text-base font-bold text-[#0B2A5B]">{title}</h2>
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-[#94A3B8] hover:text-[#1E3A5F] hover:bg-[#F8FAFC] transition-colors"
+            className="p-1.5 rounded-lg text-[#94A3B8] hover:text-[#0B2A5B] hover:bg-[#F8FAFC] transition-colors"
             aria-label="Close dialog"
           >
             <X className="w-4 h-4" />
@@ -327,7 +328,7 @@ function GoogleVerificationSection() {
   if (loading) {
     return (
       <div className="flex justify-center py-6">
-        <div className="w-5 h-5 border-2 border-[#E2E8F0] border-t-[#3C91E6] rounded-full animate-spin" />
+        <div className="w-5 h-5 border-2 border-[#E2E8F0] border-t-[#1D5BD6] rounded-full animate-spin" />
       </div>
     );
   }
@@ -377,7 +378,7 @@ function GoogleVerificationSection() {
           <button
             type="button"
             onClick={() => setShowChange(s => !s)}
-            className="text-sm font-semibold text-[#3C91E6] hover:text-[#2563EB]"
+            className="text-sm font-semibold text-[#1D5BD6] hover:text-[#164BB5]"
           >
             {showChange ? 'Cancel' : 'Change Google account'}
           </button>
@@ -445,7 +446,7 @@ function ProfileSettingsSection() {
 
   if (loading) return (
     <div className="flex items-center justify-center py-6">
-      <div className="w-5 h-5 border-2 border-[#E2E8F0] border-t-[#3C91E6] rounded-full animate-spin" />
+      <div className="w-5 h-5 border-2 border-[#E2E8F0] border-t-[#1D5BD6] rounded-full animate-spin" />
     </div>
   );
 
@@ -479,7 +480,7 @@ function ProfileSettingsSection() {
           <button
             onClick={save}
             disabled={saving}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-[#3C91E6] hover:bg-[#2563EB] disabled:opacity-50 text-white shadow-sm transition-all flex-shrink-0"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-[#1D5BD6] hover:bg-[#164BB5] disabled:opacity-50 text-white shadow-sm transition-all flex-shrink-0"
           >
             {saving ? <><Spinner />Saving…</> : <><CheckCircle className="w-4 h-4" />Save Profile</>}
           </button>
@@ -540,7 +541,7 @@ function ChangePasswordSection() {
       <button
         onClick={changePassword}
         disabled={saving || !form.current || !form.next || !form.confirm}
-        className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-[#3C91E6] hover:bg-[#2563EB] disabled:opacity-50 text-white shadow-sm transition-all"
+        className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-[#1D5BD6] hover:bg-[#164BB5] disabled:opacity-50 text-white shadow-sm transition-all"
       >
         {saving ? <><Spinner />Changing…</> : <><ShieldCheck className="w-4 h-4" />Change Password</>}
       </button>
@@ -570,7 +571,7 @@ function DeptChairProfilePicture() {
 
   if (!loaded) return (
     <div className="flex justify-center py-5">
-      <div className="w-5 h-5 border-2 border-[#E2E8F0] border-t-[#3C91E6] rounded-full animate-spin" />
+      <div className="w-5 h-5 border-2 border-[#E2E8F0] border-t-[#1D5BD6] rounded-full animate-spin" />
     </div>
   );
 
@@ -616,7 +617,7 @@ function AppearanceSection() {
               : <Sun className="w-4 h-4 text-amber-500" />}
           </div>
           <div>
-            <p className="text-sm font-semibold text-[#1E3A5F]">Dark Mode</p>
+            <p className="text-sm font-semibold text-[#0B2A5B]">Dark Mode</p>
             <p className="text-xs text-[#64748B] mt-0.5">
               {isDark ? 'Currently using dark theme' : 'Currently using light theme'}
             </p>
@@ -628,9 +629,9 @@ function AppearanceSection() {
           onClick={toggle}
           aria-label="Toggle dark mode"
           aria-pressed={isDark}
-          className={`relative inline-flex h-7 w-12 flex-shrink-0 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-[#3C91E6] focus:ring-offset-2 ${
+          className={`relative inline-flex h-7 w-12 flex-shrink-0 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-[#1D5BD6] focus:ring-offset-2 ${
             isDark
-              ? 'bg-[#3C91E6] focus:ring-offset-[#111827]'
+              ? 'bg-[#1D5BD6] focus:ring-offset-[#111827]'
               : 'bg-[#CBD5E1] focus:ring-offset-white'
           }`}
         >
@@ -725,10 +726,8 @@ export default function DeptChairAccountClient() {
     <div className="min-h-screen bg-[#F8FAFC] p-5 md:p-7 lg:p-8">
       <div className="max-w-2xl">
         <div className="mb-7">
-          <h1 className="text-2xl font-bold text-[#1E3A5F]">Settings</h1>
-          <p className="text-[#64748B] text-sm mt-1">
-            Manage your profile and account preferences.
-          </p>
+          <BackButton />
+          <h1 className="text-2xl font-bold text-[#0B2A5B]">Settings</h1>
         </div>
 
         <PageLoadTransition

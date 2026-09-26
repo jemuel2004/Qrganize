@@ -5,8 +5,9 @@ import { releaseFacultyAssignments } from '@/server/releaseFacultyAssignments';
 import bcrypt from 'bcryptjs';
 import { revokeAccountAccess, revokeInstructorAccessByFacultyId } from '@/server/trustedDevices';
 import { INSTRUCTOR_EMAIL_GOOGLE_SQL, parsePosition, resolveRequiredProgramId } from '@/server/facultyValidation';
-import { ensureInstructorGooglePicture } from '@/server/schema-guard';
+import { ensureFacultyProfileColumns, ensureInstructorGooglePicture } from '@/server/schema-guard';
 import { assertEmailAvailable, EMAIL_ALREADY_REGISTERED, assertUsernameAllowed } from '@/server/emailIdentity';
+import { PRIORITY_SUBJECTS_SUBQUERY, setPrioritySubjects, type PrioritySubject } from '@/server/facultyPrioritySubjects';
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -14,10 +15,11 @@ type Params = { params: Promise<{ id: string }> };
 export async function GET(req: NextRequest, { params }: Params) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    if (!auth || !['admin', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    await ensureFacultyProfileColumns();
     const { id } = await params;
     const result = await query(`
       SELECT
@@ -25,8 +27,9 @@ export async function GET(req: NextRequest, { params }: Params) {
         ia.is_active, ia.google_verified, ia.google_verified_at,
         ia.created_at AS account_created_at, ia.updated_at AS account_updated_at,
         f.name, f.first_name, f.last_name, f.middle_name, f.employee_id,
-        f.position, f.employment_status, f.program_id, f.profile_picture,
-        p.code AS program_code, p.name AS program_name
+        f.position, f.employment_status, f.program_id, f.profile_picture, f.specialization,
+        p.code AS program_code, p.name AS program_name,
+        ${PRIORITY_SUBJECTS_SUBQUERY} AS priority_subjects
       FROM instructor_accounts ia
       JOIN faculty f ON ia.faculty_id = f.id
       LEFT JOIN programs p ON f.program_id = p.id
@@ -49,14 +52,14 @@ export async function PUT(req: NextRequest, { params }: Params) {
     const auth = await getAuthUser(req);
     if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const role = auth.role as string;
-    if (role !== 'admin' && role !== 'department_chair') {
+    if (role !== 'admin' && role !== 'program_chair') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
     await ensureInstructorGooglePicture();
 
     const { id } = await params;
-    const { first_name, last_name, middle_name, program_id, position, username, email, password } = await req.json();
+    const { first_name, last_name, middle_name, program_id, position, username, email, password, priority_subjects } = await req.json();
 
     // Required field validation
     if (!first_name?.trim())
@@ -162,14 +165,17 @@ export async function PUT(req: NextRequest, { params }: Params) {
         [emailCheck.email, accountId]
       );
 
+      await setPrioritySubjects(client, Number(id), priority_subjects as PrioritySubject[] | undefined);
+
       const row = await client.query(`
         SELECT
           ia.id AS account_id, ia.faculty_id, ia.username, ia.email, ia.role,
           ia.is_active, ia.google_verified, ia.google_verified_at,
           ia.created_at AS account_created_at, ia.updated_at AS account_updated_at,
           f.name, f.first_name, f.last_name, f.middle_name, f.employee_id,
-          f.position, f.employment_status, f.program_id, f.profile_picture,
-          p.code AS program_code, p.name AS program_name
+          f.position, f.employment_status, f.program_id, f.profile_picture, f.specialization,
+          p.code AS program_code, p.name AS program_name,
+          ${PRIORITY_SUBJECTS_SUBQUERY} AS priority_subjects
         FROM instructor_accounts ia
         JOIN faculty f ON ia.faculty_id = f.id
         LEFT JOIN programs p ON f.program_id = p.id
@@ -199,7 +205,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     const auth = await getAuthUser(req);
     if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const role = auth.role as string;
-    if (role !== 'admin' && role !== 'department_chair') {
+    if (role !== 'admin' && role !== 'program_chair') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
@@ -259,7 +265,7 @@ export async function DELETE(req: NextRequest, { params }: Params) {
     const auth = await getAuthUser(req);
     if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const role = auth.role as string;
-    if (role !== 'admin' && role !== 'department_chair') {
+    if (role !== 'admin' && role !== 'program_chair') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 

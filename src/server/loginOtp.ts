@@ -1,4 +1,4 @@
-import { createHmac, randomInt, randomUUID, timingSafeEqual } from 'crypto';
+﻿import { createHmac, randomInt, randomUUID, timingSafeEqual } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { query, transaction } from '@/server/db';
 import {
@@ -30,6 +30,7 @@ export const OTP_CODE_LENGTH = 6;
 export type SessionPayload =
   | { kind: 'admin'; id: number; username: string }
   | { kind: 'department_chair'; id: number; username: string; program_id?: number | null }
+  | { kind: 'program_chair'; id: number; username: string; program_id?: number | null }
   | {
       kind: 'instructor';
       account_id: number;
@@ -107,7 +108,7 @@ function asSessionPayload(raw: unknown): SessionPayload | null {
     const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
     if (!data || typeof data !== 'object') return null;
     const kind = (data as SessionPayload).kind;
-    if (kind !== 'admin' && kind !== 'department_chair' && kind !== 'instructor') return null;
+    if (kind !== 'admin' && kind !== 'department_chair' && kind !== 'program_chair' && kind !== 'instructor') return null;
     return data as SessionPayload;
   } catch {
     return null;
@@ -139,12 +140,21 @@ async function instructorGoogleVerified(accountId: number): Promise<boolean> {
   return result.rows[0]?.google_verified === true;
 }
 
+/**
+ * Google-verify requirement applies to Program Chair only — Department Chair
+ * (new, near-admin role) has no Google-verify UI to reach and is treated like
+ * admin for OTP/email-ownership purposes (see isEmailOwnershipVerified).
+ */
 async function chairGoogleVerified(accountId: number): Promise<boolean> {
   const result = await query(
-    `SELECT google_verified FROM users WHERE id = $1 AND role = 'department_chair'`,
+    `SELECT google_verified FROM users WHERE id = $1 AND role = 'program_chair'`,
     [accountId]
   ).catch(() => ({ rows: [] as Array<{ google_verified?: boolean }> }));
   return result.rows[0]?.google_verified === true;
+}
+
+function isChairRole(role: string): boolean {
+  return role === 'program_chair';
 }
 
 const OTP_REQUIRES_VERIFIED_GMAIL =
@@ -176,7 +186,7 @@ export async function startLoginOtp(params: {
   if (params.accountKind === 'instructor' && !(await instructorGoogleVerified(params.accountId))) {
     return NextResponse.json({ error: OTP_REQUIRES_VERIFIED_GMAIL }, { status: 403 });
   }
-  if (params.role === 'department_chair' && !(await chairGoogleVerified(params.accountId))) {
+  if (isChairRole(params.role) && !(await chairGoogleVerified(params.accountId))) {
     return NextResponse.json({ error: OTP_REQUIRES_VERIFIED_GMAIL }, { status: 403 });
   }
   if (!isMailConfigured()) {
@@ -272,7 +282,7 @@ export async function getOtpStatus(challengeId: string | undefined) {
     );
     return null;
   }
-  if (row.role === 'department_chair' && !(await chairGoogleVerified(row.account_id))) {
+  if (isChairRole(row.role) && !(await chairGoogleVerified(row.account_id))) {
     await query(
       `UPDATE login_otp_challenges SET used_at = NOW() WHERE id = $1 AND used_at IS NULL`,
       [row.id]
@@ -342,9 +352,9 @@ export async function verifyOtpCode(req: NextRequest, challengeId: string | unde
         return { kind: 'unverified' as const };
       }
     }
-    if (row.role === 'department_chair') {
+    if (isChairRole(row.role)) {
       const gv = await client.query(
-        `SELECT google_verified FROM users WHERE id = $1 AND role = 'department_chair'`,
+        `SELECT google_verified FROM users WHERE id = $1 AND role = 'program_chair'`,
         [row.account_id]
       );
       if (gv.rows[0]?.google_verified !== true) {
@@ -430,8 +440,8 @@ export async function verifyOtpCode(req: NextRequest, challengeId: string | unde
   let response: NextResponse;
   if (payload.kind === 'admin') {
     response = await adminLoginResponse(payload, loginOpts);
-  } else if (payload.kind === 'department_chair') {
-    response = await chairLoginResponse(payload, loginOpts);
+  } else if (payload.kind === 'department_chair' || payload.kind === 'program_chair') {
+    response = await chairLoginResponse(payload, payload.kind, loginOpts);
   } else {
     response = await instructorLoginResponse(payload, loginOpts);
   }
@@ -480,9 +490,9 @@ export async function resendOtp(challengeId: string | undefined): Promise<NextRe
         return { kind: 'unverified' as const };
       }
     }
-    if (row.role === 'department_chair') {
+    if (isChairRole(row.role)) {
       const gv = await client.query(
-        `SELECT google_verified FROM users WHERE id = $1 AND role = 'department_chair'`,
+        `SELECT google_verified FROM users WHERE id = $1 AND role = 'program_chair'`,
         [row.account_id]
       );
       if (gv.rows[0]?.google_verified !== true) {
@@ -918,7 +928,7 @@ export async function startDisableOtpChallenge(params: {
       { status: 403 }
     );
   }
-  if (params.role === 'department_chair' && !(await chairGoogleVerified(params.accountId))) {
+  if (isChairRole(params.role) && !(await chairGoogleVerified(params.accountId))) {
     return NextResponse.json(
       { error: 'Verify your Google email account before turning off Two-Step Verification.' },
       { status: 403 }

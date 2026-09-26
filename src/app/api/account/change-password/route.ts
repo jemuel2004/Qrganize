@@ -4,11 +4,11 @@ import { query } from '@/server/db';
 import bcrypt from 'bcryptjs';
 import { clearTrustedDeviceCookie, revokeAccountAccess } from '@/server/trustedDevices';
 
-// POST /api/account/change-password — change own password (admin or department_chair)
+// POST /api/account/change-password — change own password (admin or program_chair)
 export async function POST(req: NextRequest) {
   try {
     const auth = await getAuthUser(req) as { role?: string; id?: number } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

@@ -18,7 +18,7 @@ import {
   CartesianGrid,
 } from 'recharts';
 
-const BLUE = '#3C91E6';
+const BLUE = '#1D5BD6';
 const SLATE = '#CBD5E1';
 
 export interface OverviewSegment {
@@ -73,7 +73,7 @@ export function RoomUtilizationOverviewChart({ segments, total }: OverviewProps)
           </PieChart>
         </ResponsiveContainer>
         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-          <span className="text-2xl font-bold tabular-nums" style={{ color: '#1E3A5F' }}>
+          <span className="text-2xl font-bold tabular-nums" style={{ color: '#0B2A5B' }}>
             {total}
           </span>
           <span className="text-[11px] font-medium" style={{ color: '#94A3B8' }}>
@@ -96,7 +96,7 @@ export function RoomUtilizationOverviewChart({ segments, total }: OverviewProps)
                   {seg.name} ({seg.value})
                 </span>
               </span>
-              <span className="font-semibold tabular-nums flex-shrink-0" style={{ color: '#1E3A5F' }}>
+              <span className="font-semibold tabular-nums flex-shrink-0" style={{ color: '#0B2A5B' }}>
                 {pct}%
               </span>
             </li>
@@ -149,7 +149,7 @@ export function RoomUtilizationTrendChart({ data }: TrendProps) {
             if (name === 'rate') return [`${n.toFixed(2)}%`, 'Relative activity'];
             return [String(n), String(name ?? '')];
           }}
-          labelStyle={{ color: '#1E3A5F', fontWeight: 600 }}
+          labelStyle={{ color: '#0B2A5B', fontWeight: 600 }}
         />
         <Line
           type="monotone"

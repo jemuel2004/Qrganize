@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
@@ -12,6 +12,7 @@ import UserProfileDropdown from '@/client/components/ui/UserProfileDropdown';
 import SystemLogo from '@/client/components/ui/SystemLogo';
 import { useScrollLock } from '@/client/hooks/useScrollLock';
 import { logoHover, logoTap, NAV_DURATION, NAV_EASE } from '@/client/components/layout/navMotion';
+import { useSchedulingPendingCounts } from '@/client/hooks/useSchedulingPendingCounts';
 
 /**
  * Admin chrome: sticky top navigation + full-width content.
@@ -22,6 +23,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
   const [mobileOpen, setMobileOpen] = useState(false);
   const [role, setRole] = useState('admin');
   const isWorkloadPrint = pathname === '/workload/print' || pathname.startsWith('/workload/print/');
+  const pendingCounts = useSchedulingPendingCounts();
 
   useEffect(() => {
     setMobileOpen(false);
@@ -57,12 +59,11 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
   }
 
   const homeHref = adminHomeHref(role);
-  const roleLabel = role === 'department_chair' ? 'Dept. Chair' : 'Admin';
 
   return (
-    <NotificationProvider role={role === 'department_chair' ? 'department_chair' : 'admin'}>
+    <NotificationProvider role={role === 'program_chair' || role === 'department_chair' ? role : 'admin'}>
       <div className="flex flex-col h-screen overflow-hidden dashboard-layout-root">
-        <header className="sticky top-0 flex-shrink-0 z-40 bg-[#3074B8] isolate no-print">
+        <header className="qr-app-header sticky top-0 flex-shrink-0 z-40 bg-[#12408F] isolate no-print">
           <div className="h-[72px] flex items-center gap-6 px-4 sm:px-6 min-w-0">
             <motion.div
               className="flex-shrink-0"
@@ -85,14 +86,11 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
                 <span className="text-[16px] font-semibold text-white tracking-tight">
                   QRganize
                 </span>
-                <span className="hidden sm:inline text-[12px] font-medium text-white bg-white/20 rounded-full px-2.5 py-1 leading-none">
-                  {roleLabel}
-                </span>
               </Link>
             </motion.div>
 
             <div className="hidden lg:flex flex-1 min-w-0 items-stretch">
-              <Sidebar onNavigate={() => setMobileOpen(false)} />
+              <Sidebar onNavigate={() => setMobileOpen(false)} pendingCounts={pendingCounts} />
             </div>
 
             <div className="flex items-center gap-2.5 ml-auto flex-shrink-0">
@@ -111,7 +109,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
           </div>
 
           {mobileOpen && (
-            <AdminMobileNav onNavigate={() => setMobileOpen(false)} />
+            <AdminMobileNav onNavigate={() => setMobileOpen(false)} pendingCounts={pendingCounts} />
           )}
         </header>
 

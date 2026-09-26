@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/server/db';
 import { ensureUsersSchema } from '@/server/ensure-users-schema';
 import bcrypt from 'bcryptjs';
@@ -84,78 +84,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Username and password are required.' }, { status: 400 });
     }
 
-    if (!role || !['admin', 'department_chair', 'instructor'].includes(String(role))) {
+    if (!role || !['admin_chair', 'instructor'].includes(String(role))) {
       return NextResponse.json({ error: 'Please select a valid role.' }, { status: 400 });
     }
 
-    /* Client must never dictate OTP or verification; only DB state is trusted. */
-    if (role === 'admin') {
-      const result = await query(
-        'SELECT id, username, email, role, password_hash, is_active, otp_enabled FROM users WHERE username = $1 OR email = $1',
-        [loginId]
-      );
-
-      if (result.rows.length === 0) {
-        recordFailure(ip);
-        return NextResponse.json({ error: 'Invalid username or password.' }, { status: 401 });
-      }
-
-      const user = result.rows[0];
-      const validPassword = await bcrypt.compare(String(password), user.password_hash);
-      if (!validPassword) {
-        recordFailure(ip);
-        return NextResponse.json({ error: 'Invalid username or password.' }, { status: 401 });
-      }
-
-      if (user.role !== 'admin') {
-        recordFailure(ip);
-        return NextResponse.json(
-          { error: 'This account is not allowed to login as Administrator.' },
-          { status: 403 }
-        );
-      }
-
-      if (user.is_active === false) {
-        return NextResponse.json(
-          { error: 'This account has been deactivated. Please contact the administrator.' },
-          { status: 403 }
-        );
-      }
-
-      /* Admin: OTP only when otp_enabled (no Google verify product). */
-      const otpEnabled = user.otp_enabled === true;
-      if (!otpEnabled) {
-        clearFailures(ip);
-        return withLoginCookies(
-          await adminLoginResponse({ id: user.id, username: user.username }, { req, registerDevice: true })
-        );
-      }
-
-      const trusted = await findTrustedDevice(req, 'user', user.id);
-      if (trusted) {
-        clearFailures(ip);
-        return withLoginCookies(
-          await adminLoginResponse(
-            { id: user.id, username: user.username },
-            { req, registerDevice: true }
-          )
-        );
-      }
-
-      const blocked = tooManyOtpStarts(ip);
-      if (blocked) return blocked;
-
-      return withLoginCookies(
-        await startLoginOtp({
-          accountKind: 'user',
-          accountId: user.id,
-          role: 'admin',
-          email: String(user.email ?? ''),
-          payload: { kind: 'admin', id: user.id, username: user.username },
-        })
-      );
-
-    } else if (role === 'department_chair') {
+    /*
+     * Administrator, Department Chair, and Program Chair share one login
+     * option ("Administrator / Chair"). The client never states which of the
+     * three it is — the row's actual `role` column (trusted DB state, never
+     * a client claim) decides which login response/permissions apply.
+     */
+    if (role === 'admin_chair') {
       const result = await query(
         `SELECT id, username, email, role, password_hash, is_active, program_id, google_verified, otp_enabled
          FROM users WHERE username = $1 OR email = $1`,
@@ -174,10 +113,11 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Invalid username or password.' }, { status: 401 });
       }
 
-      if (user.role !== 'department_chair') {
+      const actualRole = user.role as string;
+      if (!['admin', 'department_chair', 'program_chair'].includes(actualRole)) {
         recordFailure(ip);
         return NextResponse.json(
-          { error: 'This account is not registered as a Department Chair.' },
+          { error: 'This account is not allowed to login as Administrator / Chair.' },
           { status: 403 }
         );
       }
@@ -189,8 +129,47 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      if (actualRole === 'admin') {
+        /* Admin: OTP only when otp_enabled (no Google verify product). */
+        const otpEnabled = user.otp_enabled === true;
+        if (!otpEnabled) {
+          clearFailures(ip);
+          return withLoginCookies(
+            await adminLoginResponse({ id: user.id, username: user.username }, { req, registerDevice: true })
+          );
+        }
+
+        const trusted = await findTrustedDevice(req, 'user', user.id);
+        if (trusted) {
+          clearFailures(ip);
+          return withLoginCookies(
+            await adminLoginResponse(
+              { id: user.id, username: user.username },
+              { req, registerDevice: true }
+            )
+          );
+        }
+
+        const blocked = tooManyOtpStarts(ip);
+        if (blocked) return blocked;
+
+        return withLoginCookies(
+          await startLoginOtp({
+            accountKind: 'user',
+            accountId: user.id,
+            role: 'admin',
+            email: String(user.email ?? ''),
+            payload: { kind: 'admin', id: user.id, username: user.username },
+          })
+        );
+      }
+
+      // department_chair or program_chair — same chair-style login flow,
+      // differing only in the permissions/home page chairLoginResponse assigns.
+      const chairRole = actualRole as 'department_chair' | 'program_chair';
+
       const emailVerified = isEmailOwnershipVerified({
-        role: 'department_chair',
+        role: chairRole,
         google_verified: user.google_verified,
       });
       const blockedEmailId = rejectUnverifiedEmailLogin(loginId, emailVerified);
@@ -207,7 +186,7 @@ export async function POST(req: NextRequest) {
       if (!otpEnabled) {
         clearFailures(ip);
         return withLoginCookies(
-          await chairLoginResponse(chairUser, { req, registerDevice: true })
+          await chairLoginResponse(chairUser, chairRole, { req, registerDevice: true })
         );
       }
 
@@ -215,7 +194,7 @@ export async function POST(req: NextRequest) {
       if (trusted) {
         clearFailures(ip);
         return withLoginCookies(
-          await chairLoginResponse(chairUser, { req, registerDevice: true })
+          await chairLoginResponse(chairUser, chairRole, { req, registerDevice: true })
         );
       }
 
@@ -226,9 +205,9 @@ export async function POST(req: NextRequest) {
         await startLoginOtp({
           accountKind: 'user',
           accountId: user.id,
-          role: 'department_chair',
+          role: chairRole,
           email: String(user.email ?? ''),
-          payload: { kind: 'department_chair', ...chairUser },
+          payload: { kind: chairRole, ...chairUser },
         })
       );
 

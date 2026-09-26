@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/server/db';
 import { instructorLoginResponse } from '@/server/auth';
 import { isGoogleIdentity, verifyGoogleIdToken } from '@/server/verifyGoogleIdToken';
@@ -78,7 +78,7 @@ export async function POST(req: NextRequest) {
     const role = String((body as { role?: unknown }).role ?? '');
     const credential = (body as { credential?: unknown }).credential;
 
-    if (!['admin', 'department_chair', 'instructor'].includes(role)) {
+    if (!['admin', 'program_chair', 'instructor'].includes(role)) {
       return NextResponse.json({ error: 'Please select a valid role.' }, { status: 400 });
     }
 

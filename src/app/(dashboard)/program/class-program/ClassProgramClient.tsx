@@ -1,7 +1,9 @@
-'use client';
+﻿'use client';
 
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { useSchoolYear } from '@/client/context/SchoolYearContext';
+import BackButton from '@/client/components/ui/BackButton';
+import WatermarkTitle from '@/client/components/ui/WatermarkTitle';
 import { FilterBar, FilterSelect, SF_INPUT } from '@/components/ui/SearchFilter';
 import { CardSkeleton, FiltersSkeleton } from '@/client/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/client/hooks/useMinLoading';
@@ -177,7 +179,7 @@ export default function ClassProgramPage() {
   const [chairProgramId, setChairProgramId] = useState<number | null>(null);
   const [chairNoProgram, setChairNoProgram] = useState(false);
 
-  // Single source of truth for Program → Year Level → Block cascade.
+  // Single source of truth for Program â†’ Year Level â†’ Block cascade.
   const [filterProgram,   setFilterProgram]   = useState('');
   const [filterYearLevel, setFilterYearLevel] = useState('');
   const [selectedBlockId, setSelectedBlockId] = useState('');
@@ -195,7 +197,7 @@ export default function ClassProgramPage() {
         if (cancelled) return;
         const list: Program[] = progData.programs || [];
         setPrograms(list);
-        if (meData.user?.role === 'department_chair') {
+        if (meData.user?.role === 'program_chair') {
           setIsChair(true);
           const pid = meData.user.program_id != null ? Number(meData.user.program_id) : null;
           if (pid == null) {
@@ -467,9 +469,9 @@ export default function ClassProgramPage() {
       <style dangerouslySetInnerHTML={{ __html: PRINT_CSS }} />
 
       {/* ── Page header (same structure as Master Schedule) ── */}
-      <div className="no-print mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="no-print mb-2 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold text-[#1E3A5F]">Class Program</h1>
+          <BackButton />
         </div>
 
         <div className="flex flex-shrink-0 flex-wrap gap-2.5" role="group" aria-label="Class program actions">
@@ -481,7 +483,7 @@ export default function ClassProgramPage() {
             className={[
               ACTION_BTN,
               showActions
-                ? 'bg-[#3C91E6] text-white hover:bg-[#2E7DD1]'
+                ? 'bg-[#1D5BD6] text-white hover:bg-[#2E7DD1]'
                 : 'cursor-not-allowed border border-[#E2E8F0] bg-slate-100 text-slate-400',
             ].join(' ')}
           >
@@ -509,7 +511,7 @@ export default function ClassProgramPage() {
             className={[
               ACTION_BTN,
               showActions
-                ? 'border border-[#E2E8F0] bg-white text-[#1E3A5F] hover:bg-[#F8FAFC]'
+                ? 'border border-[#E2E8F0] bg-white text-[#0B2A5B] hover:bg-[#F8FAFC]'
                 : 'cursor-not-allowed border border-[#E2E8F0] bg-white text-slate-400',
             ].join(' ')}
           >
@@ -517,15 +519,18 @@ export default function ClassProgramPage() {
           </button>
         </div>
       </div>
+      <div className="no-print mt-4 sm:mt-7 mb-10">
+        <WatermarkTitle>Class Program</WatermarkTitle>
+      </div>
 
       {/* ── Filter panel (same FilterBar as Master Schedule) ── */}
       <FilterBar className="no-print relative z-20">
         <div id="cp-selection" className="space-y-4">
-          <p className="text-sm font-semibold text-[#1E3A5F]">Class Program Selection</p>
+          <p className="text-sm font-semibold text-[#0B2A5B]">Class Program Selection</p>
 
           {!semLoading && !globalSemester && (
             <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-700">
-              No active semester configured. Set one in Settings → School Year Management to continue.
+              No active semester configured. Set one in Settings â†’ School Year Management to continue.
             </div>
           )}
 
@@ -594,7 +599,7 @@ export default function ClassProgramPage() {
                 {blocks.map(b => (
                   <option key={b.id} value={b.id}>
                     Block {b.block_name} ({b.curriculum_version === 'new' ? 'New Curriculum' : 'Old Curriculum'})
-                    {b.subject_count ? ` · ${b.subject_count} subjects` : ''}
+                    {b.subject_count ? ` Â· ${b.subject_count} subjects` : ''}
                   </option>
                 ))}
               </FilterSelect>
@@ -626,7 +631,7 @@ export default function ClassProgramPage() {
 
       {/* ── Document settings ── */}
       {showSettings && showDocument && (
-        <div className="no-print mb-6 rounded-2xl border border-[#E2E8F0] bg-white p-5 shadow-sm text-[#1E3A5F]">
+        <div className="no-print mb-6 rounded-2xl border border-[#E2E8F0] bg-white p-5 shadow-sm text-[#0B2A5B]">
           <p className="mb-1 text-sm font-semibold">Document Settings</p>
           <p className="mb-4 text-xs text-slate-400">Campus contact details and signatories for print output.</p>
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Campus Information</p>
@@ -672,9 +677,10 @@ export default function ClassProgramPage() {
         </div>
       ) : !showDocument ? (
         <div className="no-print rounded-2xl border border-[#E2E8F0] bg-white px-6 py-14 text-center shadow-sm">
-          <p className="text-sm font-semibold text-[#1E3A5F]">{emptyTitle()}</p>
+          <p className="text-sm font-semibold text-[#0B2A5B]">{emptyTitle()}</p>
         </div>
       ) : (
+        <div className="no-print overflow-x-auto">
         <div id="cp-preview" className="cp-shell">
           <div className="page">
 
@@ -881,6 +887,7 @@ export default function ClassProgramPage() {
             </div>
 
           </div>
+        </div>
         </div>
       )}
 

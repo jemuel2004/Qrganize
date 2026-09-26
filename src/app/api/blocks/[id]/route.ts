@@ -66,7 +66,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await getAuthUser(req) as { id?: number; role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const { id } = await params;
@@ -90,7 +90,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await getAuthUser(req) as { id?: number; role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const { id } = await params;

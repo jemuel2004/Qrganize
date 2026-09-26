@@ -5,7 +5,7 @@ import { getAuthUser } from '@/server/auth';
 export async function GET(req: NextRequest) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

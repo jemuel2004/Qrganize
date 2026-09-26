@@ -6,6 +6,7 @@ import {
   Users, Monitor, BookOpen, CalendarDays, Building2,
 } from 'lucide-react';
 import { PageLoadTransition } from '@/client/components/ui/PageLoadTransition';
+import BackButton from '@/client/components/ui/BackButton';
 import { FiltersSkeleton, ListSkeleton } from '@/client/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/client/hooks/useMinLoading';
 
@@ -37,7 +38,7 @@ function fmt12(t: string): string {
 }
 
 const inputClass =
-  'w-full bg-white border border-[#E2E8F0] text-[#1E3A5F] text-sm font-medium rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#3C91E6]/30 focus:border-[#3C91E6]';
+  'w-full bg-white border border-[#E2E8F0] text-[#0B2A5B] text-sm font-medium rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#1D5BD6]/30 focus:border-[#1D5BD6]';
 
 export default function AvailableRoomsClient() {
   const [day,       setDay]       = useState('Monday');
@@ -84,19 +85,17 @@ export default function AvailableRoomsClient() {
     <div className="min-h-full bg-[#F8FAFC] p-4 sm:p-6 lg:p-8 overflow-x-hidden min-w-0">
       {/* ── Header ────────────────────────────────────────────────── */}
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-[#1E3A5F]">Find Available Rooms</h1>
-        <p className="text-[#64748B] text-sm mt-1">
-          Search for unoccupied rooms at a specific day and time
-        </p>
+        <BackButton />
+        <h1 className="text-2xl font-bold text-[#0B2A5B]">Find Available Rooms</h1>
       </div>
 
       {/* ── Filter panel ──────────────────────────────────────────── */}
       <div className="bg-white rounded-2xl border border-[#E2E8F0] shadow-[0_1px_3px_rgba(0,0,0,0.06)] p-4 sm:p-6 mb-5 min-w-0">
         <div className="flex items-center gap-2 mb-4">
           <div className="w-7 h-7 bg-[#EFF6FF] rounded-lg flex items-center justify-center">
-            <Search className="w-3.5 h-3.5 text-[#3C91E6]" />
+            <Search className="w-3.5 h-3.5 text-[#1D5BD6]" />
           </div>
-          <span className="font-semibold text-[#1E3A5F] text-sm">Search Filters</span>
+          <span className="font-semibold text-[#0B2A5B] text-sm">Search Filters</span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
@@ -145,8 +144,8 @@ export default function AvailableRoomsClient() {
                   onClick={() => setRoomType(rt.value)}
                   className={`flex-1 min-w-[5.5rem] min-h-11 px-2 py-2.5 rounded-xl text-xs font-semibold transition-colors border ${
                     roomType === rt.value
-                      ? 'bg-[#3C91E6] text-white border-[#3C91E6] shadow-sm'
-                      : 'bg-white text-[#1E3A5F] border-[#E2E8F0] hover:bg-[#F8FAFC] active:bg-[#F1F5F9]'
+                      ? 'bg-[#1D5BD6] text-white border-[#1D5BD6] shadow-sm'
+                      : 'bg-white text-[#0B2A5B] border-[#E2E8F0] hover:bg-[#F8FAFC] active:bg-[#F1F5F9]'
                   }`}
                 >
                   {rt.label}
@@ -160,7 +159,7 @@ export default function AvailableRoomsClient() {
           type="button"
           onClick={handleSearch}
           disabled={loading}
-          className="inline-flex items-center justify-center gap-2 w-full sm:w-auto min-h-11 bg-[#3C91E6] hover:bg-[#2E7DD1] active:bg-[#2670BD] disabled:opacity-50 text-white font-semibold px-5 py-2.5 rounded-xl text-sm transition-colors shadow-sm"
+          className="inline-flex items-center justify-center gap-2 w-full sm:w-auto min-h-11 bg-[#1D5BD6] hover:bg-[#2E7DD1] active:bg-[#2670BD] disabled:opacity-50 text-white font-semibold px-5 py-2.5 rounded-xl text-sm transition-colors shadow-sm"
         >
           {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
           {loading ? 'Searching…' : 'Search Rooms'}
@@ -204,7 +203,7 @@ export default function AvailableRoomsClient() {
               <span className="text-[#991B1B] font-semibold text-sm">{unavailable.length} Unavailable</span>
             </div>
             <div className="inline-flex items-center gap-1.5 bg-white border border-[#E2E8F0] rounded-xl px-3.5 py-2 min-w-0">
-              <CalendarDays className="w-3.5 h-3.5 text-[#3C91E6] flex-shrink-0" />
+              <CalendarDays className="w-3.5 h-3.5 text-[#1D5BD6] flex-shrink-0" />
               <span className="text-[#475569] font-medium text-sm break-words">
                 {day} · {fmt12(startTime)} – {fmt12(endTime)}
               </span>
@@ -217,7 +216,7 @@ export default function AvailableRoomsClient() {
                 <AlertTriangle className="w-5 h-5 text-[#94A3B8]" />
               </div>
               <div>
-                <p className="text-[#1E3A5F] font-semibold text-base mb-1">No rooms found</p>
+                <p className="text-[#0B2A5B] font-semibold text-base mb-1">No rooms found</p>
                 <p className="text-[#64748B] text-sm">No active rooms match your filter. Try a different room type.</p>
               </div>
             </div>
@@ -232,12 +231,12 @@ export default function AvailableRoomsClient() {
                     <div className="flex items-center gap-2.5 min-w-0">
                       <div className="w-9 h-9 rounded-xl bg-[#EFF6FF] border border-[#BFDBFE] flex items-center justify-center flex-shrink-0">
                         {room.room_type === 'Laboratory'
-                          ? <Monitor className="w-4 h-4 text-[#3C91E6]" />
-                          : <BookOpen className="w-4 h-4 text-[#3C91E6]" />}
+                          ? <Monitor className="w-4 h-4 text-[#1D5BD6]" />
+                          : <BookOpen className="w-4 h-4 text-[#1D5BD6]" />}
                       </div>
                       <div className="min-w-0">
-                        <p className="text-base font-bold text-[#1E3A5F] leading-tight break-words">{room.room_name}</p>
-                        <p className="text-xs text-[#3C91E6] font-semibold mt-0.5">{room.room_type}</p>
+                        <p className="text-base font-bold text-[#0B2A5B] leading-tight break-words">{room.room_name}</p>
+                        <p className="text-xs text-[#1D5BD6] font-semibold mt-0.5">{room.room_type}</p>
                       </div>
                     </div>
                     <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#059669] bg-[#ECFDF5] border border-[#A7F3D0] px-2.5 py-1 rounded-lg flex-shrink-0">

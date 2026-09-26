@@ -7,6 +7,7 @@ import { fetchBlocksWithAssignmentCounts } from '@/server/blockAssignmentCounts'
 import {
   curriculumVersionLabel,
   parseCurriculumVersion,
+  blockCurriculumVersion,
 } from '@/lib/curriculumVersion';
 
 export async function GET(req: NextRequest) {
@@ -23,7 +24,7 @@ export async function GET(req: NextRequest) {
      * - When omitted (e.g. Instructor Workload), do not force the chair's program.
      */
     let effectiveProgramId: string | number | null = programId;
-    if (authGet.role === 'department_chair' && programId) {
+    if (authGet.role === 'program_chair' && programId) {
       const scope = await resolveProgramScope(authGet, { requestedProgramId: programId });
       if (!scope.ok) return scope.response;
       effectiveProgramId = scope.programId;
@@ -46,13 +47,22 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const auth = await getAuthUser(req) as { id?: number; role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const body = await req.json();
-    const { year_level, semester, academic_year, block_name, number_of_students } = body;
+    const { year_level, semester, academic_year, number_of_students } = body;
     const curriculum_version = parseCurriculumVersion(body.curriculum_version);
+
+    // Accepts `block_names: string[]` (bulk create) or the legacy single
+    // `block_name`. Normalised to unique uppercase letters in A→Z order.
+    const BLOCK_SEQ = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
+    const rawNames: unknown[] = Array.isArray(body.block_names)
+      ? body.block_names
+      : body.block_name ? [body.block_name] : [];
+    const blockNames = [...new Set(rawNames.map(n => String(n).trim().toUpperCase()))]
+      .sort((a, b) => BLOCK_SEQ.indexOf(a) - BLOCK_SEQ.indexOf(b));
 
     await ensureBlockCurriculumVersion();
 
@@ -63,8 +73,22 @@ export async function POST(req: NextRequest) {
     if (!scope.ok) return scope.response;
     const program_id = scope.programId!;
 
-    if (!year_level || !semester || !academic_year || !block_name) {
+    if (!year_level || !semester || !academic_year || blockNames.length === 0) {
       return NextResponse.json({ error: 'All required fields must be filled.' }, { status: 400 });
+    }
+    if (blockNames.some(n => !BLOCK_SEQ.includes(n))) {
+      return NextResponse.json({ error: 'Block names must be letters A–Z.' }, { status: 400 });
+    }
+    // Selected letters must be consecutive (e.g. A, B, C — not A, C) so the
+    // Block A → B → C order is never broken.
+    const firstIdx = BLOCK_SEQ.indexOf(blockNames[0]);
+    if (blockNames.some((n, i) => BLOCK_SEQ.indexOf(n) !== firstIdx + i)) {
+      return NextResponse.json({
+        error: 'BLOCK_ORDER',
+        detail: 'Selected blocks must be consecutive (e.g. Block A, B, C).',
+        required_block: BLOCK_SEQ[firstIdx + blockNames.findIndex((n, i) => BLOCK_SEQ.indexOf(n) !== firstIdx + i)],
+        requested_block: blockNames[blockNames.length - 1],
+      }, { status: 400 });
     }
     if (!curriculum_version) {
       return NextResponse.json({ error: 'Curriculum is required.' }, { status: 400 });
@@ -73,6 +97,26 @@ export async function POST(req: NextRequest) {
     // Fetch curriculum subjects before opening the transaction — read-only, safe outside
     const progRow = await query('SELECT code FROM programs WHERE id=$1', [program_id]);
     const progCode = progRow.rows[0]?.code ?? `Program ID ${program_id}`;
+
+    // Curriculum must stay consistent across every block under the same Program +
+    // Year Level. Once one exists, later blocks for that combo must match it —
+    // enforced here as a backstop; the UI already locks the field once set.
+    const establishedResult = await query(
+      `SELECT curriculum_version FROM blocks
+       WHERE program_id=$1 AND year_level=$2 AND is_active=true
+       LIMIT 1`,
+      [program_id, year_level]
+    );
+    const establishedVersion = establishedResult.rows[0]
+      ? blockCurriculumVersion(establishedResult.rows[0].curriculum_version)
+      : null;
+    if (establishedVersion && establishedVersion !== curriculum_version) {
+      return NextResponse.json({
+        error: 'CURRICULUM_LOCKED',
+        detail: `${progCode} ${year_level} already uses ${curriculumVersionLabel(establishedVersion)}. All blocks under this Program and Year Level must use the same curriculum.`,
+        established_curriculum: establishedVersion,
+      }, { status: 409 });
+    }
 
     const curriculumResult = await query(
       `SELECT id FROM curriculums
@@ -99,27 +143,29 @@ export async function POST(req: NextRequest) {
     // The partial unique index (WHERE is_active=true) enforces this at the DB level,
     // but this pre-check gives a clear, human-readable error with the exact details.
     const dupCheck = await query(`
-      SELECT b.id
+      SELECT UPPER(b.block_name) AS block_name
       FROM blocks b
       WHERE b.program_id    = $1
         AND b.year_level    = $2
         AND b.semester      = $3
         AND b.academic_year = $4
-        AND UPPER(b.block_name) = UPPER($5)
+        AND UPPER(b.block_name) = ANY($5::text[])
         AND b.curriculum_version = $6
         AND b.is_active     = true
-    `, [program_id, year_level, semester, academic_year, block_name, curriculum_version]);
+      ORDER BY 1
+    `, [program_id, year_level, semester, academic_year, blockNames, curriculum_version]);
 
     if (dupCheck.rows.length > 0) {
+      const taken = dupCheck.rows.map((r: { block_name: string }) => r.block_name).join(', ');
       return NextResponse.json({
         error: 'BLOCK_EXISTS',
-        detail: `Block ${String(block_name).toUpperCase()} already exists for ${progCode}, ${curriculumVersionLabel(curriculum_version)}, ${year_level}, ${semester}, ${academic_year}. Choose a different Block Name (e.g., Block B) or Academic Year.`,
+        detail: `Block ${taken} already exists for ${progCode}, ${curriculumVersionLabel(curriculum_version)}, ${year_level}, ${semester}, ${academic_year}. Choose a different Block Name or Academic Year.`,
       }, { status: 409 });
     }
 
-    // Sequential block order check: Block B requires Block A, ..., Block Z requires Block Y.
-    const BLOCK_SEQ = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
-    const blockIdx = BLOCK_SEQ.indexOf(String(block_name).toUpperCase());
+    // Sequential block order check: the first selected block needs the one
+    // before it (Block B requires Block A, ..., Block Z requires Block Y).
+    const blockIdx = firstIdx;
     if (blockIdx > 0) {
       const requiredBlock = BLOCK_SEQ[blockIdx - 1];
       const prevCheck = await query(`
@@ -132,56 +178,60 @@ export async function POST(req: NextRequest) {
       if (prevCheck.rows.length === 0) {
         return NextResponse.json({
           error: 'BLOCK_ORDER',
-          detail: `Block ${requiredBlock} must be created first before creating Block ${String(block_name).toUpperCase()} for ${progCode}, ${curriculumVersionLabel(curriculum_version)}, ${year_level}, ${semester}.`,
+          detail: `Block ${requiredBlock} must be created first before creating Block ${blockNames[0]} for ${progCode}, ${curriculumVersionLabel(curriculum_version)}, ${year_level}, ${semester}.`,
           required_block: requiredBlock,
-          requested_block: String(block_name).toUpperCase(),
+          requested_block: blockNames[0],
         }, { status: 400 });
       }
     }
 
-    // Atomic transaction: create block → load block_subjects → create master_schedule entries.
-    // If any step fails the entire block creation is rolled back — no orphaned data.
-    const { block, subjects_loaded } = await transaction(async (client) => {
-      // 1. Insert the block
-      const blockResult = await client.query<{ id: number; [k: string]: unknown }>(`
-        INSERT INTO blocks (program_id, year_level, semester, academic_year, block_name, number_of_students, curriculum_version)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING *
-      `, [program_id, year_level, semester, academic_year, String(block_name).toUpperCase(), Number(number_of_students) || 0, curriculum_version]);
+    // Atomic transaction: for every selected block, create block → load
+    // block_subjects → create master_schedule entries. If any step fails for any
+    // block, the whole batch is rolled back — no half-created sets, no orphans.
+    const created = await transaction(async (client) => {
+      const results: { block: { id: number; [k: string]: unknown }; subjects_loaded: number }[] = [];
+      for (const name of blockNames) {
+        // 1. Insert the block
+        const blockResult = await client.query<{ id: number; [k: string]: unknown }>(`
+          INSERT INTO blocks (program_id, year_level, semester, academic_year, block_name, number_of_students, curriculum_version)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          RETURNING *
+        `, [program_id, year_level, semester, academic_year, name, Number(number_of_students) || 0, curriculum_version]);
+        const newBlock = blockResult.rows[0];
 
-      const newBlock = blockResult.rows[0];
-
-      // 2. Load each curriculum subject into block_subjects
-      for (const curriculumId of curriculumIds) {
+        // 2. Load every curriculum subject into block_subjects in one statement
         await client.query(
           `INSERT INTO block_subjects (block_id, curriculum_id, status)
-           VALUES ($1, $2, 'Unscheduled')
+           SELECT $1, cid, 'Unscheduled' FROM unnest($2::int[]) AS cid
            ON CONFLICT (block_id, curriculum_id) DO NOTHING`,
-          [newBlock.id, curriculumId]
+          [newBlock.id, curriculumIds]
         );
-      }
 
-      // 3. Fetch the newly created block_subjects
-      const bsResult = await client.query<{ id: number }>(
-        'SELECT id FROM block_subjects WHERE block_id=$1',
-        [newBlock.id]
-      );
-
-      // 4. Create a master_schedule placeholder for each block subject.
-      //    ON CONFLICT DO NOTHING guards against re-runs if migration already seeded entries.
-      for (const bs of bsResult.rows) {
+        // 3. Create a master_schedule placeholder for each block subject.
+        //    ON CONFLICT DO NOTHING guards against re-runs if migration already seeded entries.
         await client.query(
           `INSERT INTO master_schedule (block_subject_id, status, academic_year, semester)
-           VALUES ($1, 'Unassigned', $2, $3)
+           SELECT bs.id, 'Unassigned', $2, $3 FROM block_subjects bs WHERE bs.block_id = $1
            ON CONFLICT DO NOTHING`,
-          [bs.id, academic_year, semester]
+          [newBlock.id, academic_year, semester]
         );
-      }
+        const countResult = await client.query<{ n: number }>(
+          'SELECT COUNT(*)::int AS n FROM block_subjects WHERE block_id=$1',
+          [newBlock.id]
+        );
 
-      return { block: newBlock, subjects_loaded: bsResult.rows.length };
+        results.push({ block: newBlock, subjects_loaded: countResult.rows[0].n });
+      }
+      return results;
     });
 
-    return NextResponse.json({ block, subjects_loaded }, { status: 201 });
+    return NextResponse.json({
+      // `block` / `subjects_loaded` kept for single-block callers
+      block: created[0].block,
+      subjects_loaded: created[0].subjects_loaded,
+      blocks: created.map(c => c.block),
+      total_subjects_loaded: created.reduce((sum, c) => sum + c.subjects_loaded, 0),
+    }, { status: 201 });
 
   } catch (error) {
     const msg = String(error);

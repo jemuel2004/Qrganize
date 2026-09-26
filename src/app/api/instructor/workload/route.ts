@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUser } from '@/server/auth';
 import { query } from '@/server/db';
+import { ensurePraiseSplitColumn } from '@/server/praiseSplit';
 import {
   getActiveAcademicPeriod,
   isActivePeriodConfigured,
@@ -26,6 +27,7 @@ async function ensureInstructorWorkloadSchema() {
     try {
       await query(`ALTER TABLE instructor_loads ADD COLUMN IF NOT EXISTS overload_component VARCHAR(10) DEFAULT 'full'`);
       await query(`ALTER TABLE schedule_sessions ADD COLUMN IF NOT EXISTS type VARCHAR(3) DEFAULT 'lec'`);
+      await ensurePraiseSplitColumn();
       schemaReady = true;
     } catch (e) {
       console.error('[instructor/workload] schema DDL failed — will retry:', e);
@@ -138,6 +140,10 @@ export async function GET(req: NextRequest) {
          WHERE o2.faculty_id = il.faculty_id AND o2.master_schedule_id = il.master_schedule_id) AS split_overload_units,
         (SELECT COALESCE(SUM(o2.hours), 0) FROM overloads o2
          WHERE o2.faculty_id = il.faculty_id AND o2.master_schedule_id = il.master_schedule_id) AS split_overload_hours,
+        -- Split portion is Praise Load (only the Lec or Lab), not Overload
+        EXISTS(SELECT 1 FROM overloads o3
+               WHERE o3.faculty_id = il.faculty_id AND o3.master_schedule_id = il.master_schedule_id
+                 AND o3.is_praise = true) AS split_is_praise,
         EXISTS(SELECT 1 FROM schedule_sessions ss_l WHERE ss_l.master_schedule_id = ms.id AND ss_l.type = 'lec') AS lec_scheduled,
         EXISTS(SELECT 1 FROM schedule_sessions ss_b WHERE ss_b.master_schedule_id = ms.id AND ss_b.type = 'lab') AS lab_scheduled,
         (SELECT ss_lt.start_time FROM schedule_sessions ss_lt
@@ -197,7 +203,7 @@ export async function GET(req: NextRequest) {
     let overloadQuery = `
       SELECT COALESCE(SUM(units), 0) AS total_overload_units,
              COALESCE(SUM(hours), 0) AS total_overload_hours
-      FROM overloads WHERE faculty_id = $1
+      FROM overloads WHERE faculty_id = $1 AND is_praise = false
     `;
     const overloadParams: unknown[] = [facultyId];
     let oi = 2;
@@ -209,14 +215,23 @@ export async function GET(req: NextRequest) {
     const totalOverloadHours = parseFloat(olTotals.rows[0].total_overload_hours) || 0;
 
     const praiseLoads = loadsResult.rows.filter(r => r.load_category === 'Praise');
+    // Split Praise portions (only the Lec or Lab moved to Praise; the row stays Regular)
+    const praiseSplitRows = loadsResult.rows.filter(r => r.load_category === 'Regular' && r.split_is_praise);
+    const splitPraiseUnits = praiseSplitRows.reduce((s, r) => s + (parseFloat(r.split_overload_units) || 0), 0);
+    const splitPraiseHours = praiseSplitRows.reduce((s, r) => {
+      if (parseFloat(r.split_overload_hours) > 0) return s + parseFloat(r.split_overload_hours);
+      const comp = r.overload_component;
+      return s + (comp === 'lab' ? (parseFloat(r.laboratory_hours) || 0) : comp === 'lec' ? (parseFloat(r.lecture_hours) || 0) : 0);
+    }, 0);
+
     const totalPraiseUnits = praiseLoads.reduce((sum, r) => {
       const lh = parseFloat(r.lecture_hours) || 0;
       const labh = parseFloat(r.laboratory_hours) || 0;
       return sum + lh * 1.0 + labh * 0.75;
-    }, 0);
+    }, 0) + splitPraiseUnits;
     const totalPraiseHours = praiseLoads.reduce((sum, r) => {
       return sum + (parseFloat(r.curriculum_total_hours) || parseFloat(r.hours) || 0);
-    }, 0);
+    }, 0) + splitPraiseHours;
 
     const currentLoad   = faculty.employment_status === 'Permanent' ? totalRegularUnits : totalRegularHours;
     const remainingLoad = regularLoadLimit - currentLoad;

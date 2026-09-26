@@ -7,6 +7,125 @@
 }
 .toast-in { animation: toast-in 0.28s cubic-bezier(0.16, 1, 0.3, 1) both; }
 
+@keyframes toast-check-pop {
+  0%   { transform: scale(0); opacity: 0; }
+  60%  { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.toast-check-pop { animation: toast-check-pop 0.4s cubic-bezier(0.16, 1, 0.3, 1) 0.15s both; }
+
+/* ── Save-success checkmark overlay ──────────────── */
+@keyframes save-success-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes save-success-circle {
+  from { stroke-dashoffset: 166; }
+  to   { stroke-dashoffset: 0; }
+}
+@keyframes save-success-check {
+  from { stroke-dashoffset: 48; }
+  to   { stroke-dashoffset: 0; }
+}
+@keyframes save-success-pop {
+  0%   { transform: scale(0.6); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+/* Success / delete overlays (every "saved!" check and trash-drop card).
+   Solid-ish frosted fill so the dialog behind never shows through — some
+   mobile browsers (e.g. Messenger's in-app browser) ignore backdrop-filter,
+   which left the overlay fully transparent. Blur is layered on where supported,
+   with the -webkit- prefix for iOS Safari. */
+.save-success-overlay {
+  animation: save-success-fade-in 0.2s ease-out both;
+  background-color: rgba(244, 247, 252, 0.9);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+html:not(.light) .save-success-overlay { background-color: rgba(10, 20, 38, 0.88); }
+.save-success-badge { animation: save-success-pop 0.3s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.save-success-circle {
+  stroke-dasharray: 166;
+  stroke-dashoffset: 166;
+  animation: save-success-circle 0.5s cubic-bezier(0.65, 0, 0.45, 1) 0.1s forwards;
+}
+.save-success-check {
+  stroke-dasharray: 48;
+  stroke-dashoffset: 48;
+  animation: save-success-check 0.35s ease-out 0.55s forwards;
+}
+
+/* ── Trash drop (TrashDropAnimation.tsx) ─────────────
+   Timeline (1.15s): pop in → lid opens → paper arcs in → lid snaps shut →
+   can settles. Fits inside the 1.3s delete-success overlays. */
+@keyframes trash-drop-pop {
+  0%   { transform: scale(0.5); opacity: 0; }
+  60%  { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes trash-drop-lid {
+  0%, 12%  { transform: rotate(0deg); }
+  26%, 68% { transform: rotate(38deg); }
+  80%      { transform: rotate(-6deg); }
+  88%      { transform: rotate(3deg); }
+  100%     { transform: rotate(0deg); }
+}
+@keyframes trash-drop-paper {
+  0%, 20% { transform: translate(4px, 30px) rotate(0deg) scale(0.9); opacity: 0; }
+  26%     { transform: translate(6px, 26px) rotate(-30deg) scale(1); opacity: 1; }
+  40%     { transform: translate(14px, 6px) rotate(-150deg); opacity: 1; }
+  52%     { transform: translate(24px, 4px) rotate(-260deg); opacity: 1; }
+  64%     { transform: translate(32px, 22px) rotate(-360deg); opacity: 1; }
+  74%     { transform: translate(32px, 38px) rotate(-400deg); opacity: 1; }
+  78%, 100% { transform: translate(32px, 42px) rotate(-410deg); opacity: 0; }
+}
+@keyframes trash-drop-settle {
+  0%, 78% { transform: translateY(0) scale(1); }
+  84%     { transform: translateY(1.5px) scaleY(0.96); }
+  92%     { transform: translateY(-0.5px) scaleY(1.01); }
+  100%    { transform: translateY(0) scale(1); }
+}
+.trash-drop {
+  animation: trash-drop-pop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.trash-drop-lid {
+  transform-box: view-box;
+  transform-origin: 50px 24px;
+  animation: trash-drop-lid 1.15s cubic-bezier(0.45, 0, 0.3, 1) 0.05s both;
+}
+.trash-drop-paper {
+  animation: trash-drop-paper 1.15s linear 0.05s both;
+}
+.trash-drop-can {
+  transform-box: view-box;
+  transform-origin: 32px 57px;
+  animation: trash-drop-settle 1.15s ease-out 0.05s both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .trash-drop,
+  .trash-drop-lid,
+  .trash-drop-can { animation: none; }
+  .trash-drop-paper { animation: none; opacity: 0; }
+}
+
+/* ── Import stepper progress connector ───────────── */
+@keyframes stepper-shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+.stepper-shimmer {
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.85) 50%, transparent 100%);
+  animation: stepper-shimmer 1.3s ease-in-out infinite;
+}
+@keyframes stepper-fill {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+.stepper-fill { animation: stepper-fill 0.45s cubic-bezier(0.16, 1, 0.3, 1) both; transform-origin: left; }
+
 @keyframes qr-attention-blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.25; }
@@ -26,11 +145,53 @@
   .qr-attention-ring { animation: none; }
 }
 
+/* ── Workload "Other" row — pending-classification pulse ─────────────
+   Animates the row's own background-color (not border-color), so the
+   whole item container fills with color — previously the tint (#FEF2F2,
+   Tailwind red-50) was nearly indistinguishable from the white row
+   background, which read as "not pulsing" even though it was running.
+   red-100 gives enough contrast to be clearly visible while staying soft. */
+@keyframes qr-flag-pulse {
+  0%, 100% { background-color: #ffffff; }
+  50%      { background-color: #FEE2E2; }
+}
+.qr-flag-pulse {
+  animation: qr-flag-pulse 1.5s ease-in-out infinite;
+}
+/* ── Filter "guide" pulse — highlights the next field the user should pick.
+   Uses `outline` (not border/box-shadow) so it can never be defeated by the
+   `border-0` / shadow utilities already on the select — outline is its own
+   CSS property and always paints on top, following the element's radius. */
+@keyframes qr-guide-pulse {
+  0%, 100% { outline-color: rgba(220, 38, 38, 0.95); box-shadow: 0 0 0 5px rgba(220, 38, 38, 0.18); }
+  50%      { outline-color: rgba(220, 38, 38, 0.35); box-shadow: 0 0 0 5px rgba(220, 38, 38, 0.04); }
+}
+.qr-guide-pulse {
+  outline: 2.5px solid rgba(220, 38, 38, 0.95);
+  outline-offset: 2px;
+  animation: qr-guide-pulse 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .qr-guide-pulse {
+    animation: none;
+    outline-color: rgba(220, 38, 38, 0.85);
+    box-shadow: 0 0 0 5px rgba(220, 38, 38, 0.12);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qr-flag-pulse {
+    animation: none;
+    background-color: #FEE2E2;
+  }
+}
+
 /* ── Login page fade-in ──────────────────────────── */
 @keyframes loginFadeIn {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+
 
 /* ── Admin UI: shimmer skeleton + content enter ─── */
 @keyframes qr-shimmer {
@@ -69,6 +230,18 @@
 }
 .qr-backdrop-in { animation: qr-backdrop-in 0.2s ease-out both; }
 .qr-modal-in { animation: qr-modal-in 0.22s ease-out both; }
+
+@keyframes qr-content-fade-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.qr-content-fade-in {
+  animation: qr-content-fade-in 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.qr-content-fade-in-item {
+  animation: qr-content-fade-in 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: var(--qr-fade-delay, 0ms);
+}
 
 .dashboard-layout-root button:not(:disabled):active {
   opacity: 0.92;
@@ -117,53 +290,132 @@ html:not(.light) .qr-hover-card:hover {
    Dark (default / no html.light): calm blue-neutral surfaces.
    Light (html.light): soft cool paper. Blue stays brand accent only.
    ────────────────────────────────────────────── */
+/* Palette (NEMSU reference): royal blue #1D5BD6 accents, deep royal #12408F
+   header/strong, navy #0B2A5B headings, soft blue-white page background,
+   white cards. Employment: soft teal (Permanent) / soft amber (Contractual). */
 :root {
-  --background: #0B1220;
-  --background-secondary: #111827;
-  --surface: #1E2A3F;
-  --surface-elevated: #273549;
-  --border: #4B5C73;
-  --border-subtle: #3A4A5E;
+  --background: #0A1426;
+  --background-secondary: #0E1B33;
+  --surface: #14233F;
+  --surface-elevated: #1B2E50;
+  --border: #3A5078;
+  --border-subtle: #2A3D60;
   --table-row-line: transparent;
   /* Comfortable hierarchy — readable for long sessions / older users */
   --foreground: #F8FAFC;
   --foreground-secondary: #F1F5F9;
   --foreground-muted: #E2E8F0;
   --foreground-disabled: #A8B6C8;
-  --primary: #3C91E6;
-  --primary-strong: #3074B8;
+  --primary: #4D86EC;
+  --primary-strong: #2E63C8;
   --success: #34D399;
   --warning: #FBBF24;
   --destructive: #F87171;
-  --skeleton-base: #1E293B;
-  --skeleton-shine: #334155;
+  /* Employment type — Permanent vs Contractual faculty */
+  --permanent: #5CCFA6;
+  --permanent-bg: rgba(92, 207, 166, 0.14);
+  --contractual: #F0B061;
+  --contractual-bg: rgba(240, 176, 97, 0.14);
+  --skeleton-base: #1A2A47;
+  --skeleton-shine: #2A3D60;
 }
 html.light {
-  /* Soft cool paper — enough separation that cards never look like skeletons */
-  --background: #e4e9f2;
-  --background-secondary: #dde3ee;
-  --surface: #f4f6fb;
-  --surface-elevated: #fafbfd;
-  --border: rgba(70, 90, 130, 0.28);
-  --border-subtle: rgba(70, 90, 130, 0.18);
-  --table-row-line: #D8DEE9;
-  --foreground: #1a2638;
-  --foreground-secondary: #2e3d52;
-  --foreground-muted: #5e7285;
-  --foreground-disabled: #8a9db0;
-  --primary: #3C91E6;
-  --primary-strong: #3074B8;
+  /* Soft blue-white page, crisp white cards (matches the reference) */
+  --background: #EEF3FA;
+  --background-secondary: #E6EDF7;
+  --surface: #FFFFFF;
+  --surface-elevated: #FFFFFF;
+  --border: rgba(29, 70, 150, 0.16);
+  --border-subtle: rgba(29, 70, 150, 0.10);
+  --table-row-line: #E3E9F3;
+  --foreground: #0B2A5B;
+  --foreground-secondary: #22406F;
+  --foreground-muted: #5B6F8C;
+  --foreground-disabled: #8FA1BA;
+  --primary: #1D5BD6;
+  --primary-strong: #12408F;
   --success: #0a6640;
   --warning: #a05c0a;
   --destructive: #b32020;
+  --permanent: #1F9D74;
+  --permanent-bg: rgba(31, 157, 116, 0.10);
+  --contractual: #C9761A;
+  --contractual-bg: rgba(233, 150, 62, 0.12);
   /* Skeletons must read as loading, not as finished empty cards */
-  --skeleton-base: #d5dce8;
-  --skeleton-shine: #eef2f8;
+  --skeleton-base: #DCE4F0;
+  --skeleton-shine: #F1F5FB;
 }
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: system-ui, -apple-system, sans-serif;
+}
+/* Light: faint blue wash like the reference instead of a flat fill */
+html.light body {
+  background:
+    radial-gradient(1200px 600px at 100% 0%, rgba(29, 91, 214, 0.07), transparent 60%),
+    radial-gradient(900px 500px at 0% 100%, rgba(29, 91, 214, 0.05), transparent 60%),
+    var(--background);
+  background-attachment: fixed;
+}
+/* Glowing action button (e.g. "View Timetable") — royal-blue halo that
+   breathes slowly; stronger glow + lift on hover. Brand palette only. */
+@keyframes qr-glow-breathe {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(29, 91, 214, 0.28), 0 0 10px -2px rgba(29, 91, 214, 0.30); }
+  50%      { box-shadow: 0 0 0 1px rgba(29, 91, 214, 0.45), 0 0 18px 0 rgba(29, 91, 214, 0.42); }
+}
+.qr-glow-btn {
+  color: #1D5BD6;
+  background-image: linear-gradient(180deg, #FFFFFF 0%, #EEF4FE 100%);
+  border: 1px solid #BFD3F5;
+  animation: qr-glow-breathe 2.8s ease-in-out infinite;
+  transition: transform 200ms ease, color 200ms ease, background-image 200ms ease;
+}
+.qr-glow-btn:hover {
+  color: #164BB5;
+  transform: translateY(-1px);
+  animation-play-state: paused;
+  box-shadow: 0 0 0 1px rgba(29, 91, 214, 0.55), 0 6px 22px -4px rgba(29, 91, 214, 0.55);
+}
+.qr-glow-btn:active { transform: translateY(0); }
+html:not(.light) .qr-glow-btn {
+  color: #93C5FD;
+  background-image: linear-gradient(180deg, var(--surface-elevated) 0%, var(--surface) 100%);
+  border-color: rgba(96, 165, 250, 0.45);
+}
+@media (prefers-reduced-motion: reduce) {
+  .qr-glow-btn { animation: none; box-shadow: 0 0 0 1px rgba(29, 91, 214, 0.4), 0 0 14px -2px rgba(29, 91, 214, 0.38); }
+}
+
+/* Watermark page title (WatermarkTitle.tsx): soft navy→royal gradient text at
+   low opacity so it reads as a watermark, still legible. */
+:root { --watermark-rule: rgba(203, 213, 225, 0.30); }
+html.light { --watermark-rule: rgba(100, 116, 139, 0.30); }
+/* html-prefixed so it outranks the dark-mode `html:not(.light) h1` color rule */
+html .qr-watermark-title,
+html:not(.light) .qr-watermark-title {
+  /* Soft slate — blends into the page like a watermark */
+  background-image: linear-gradient(180deg, #CBD5E1 0%, #94A3B8 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  opacity: 0.45;
+}
+html.light .qr-watermark-title {
+  /* Slate grey with a faint navy undertone (was navy→royal blue) */
+  background-image: linear-gradient(180deg, #3E4C63 0%, #7485A1 100%);
+  opacity: 0.34;
+}
+
+/* App header: navy → royal → sky-blue sweep with soft light glows and a thin
+   light accent line along the bottom (not a flat dark blue). !important so no
+   theme override on bg-[#12408F] can flatten it. */
+.qr-app-header {
+  background-image:
+    radial-gradient(520px 140px at 88% -30%, rgba(147, 197, 253, 0.45), transparent 70%),
+    radial-gradient(420px 120px at 38% 140%, rgba(96, 165, 250, 0.28), transparent 70%),
+    linear-gradient(100deg, #0B2A5B 0%, #12408F 30%, #1D5BD6 68%, #3B82F6 100%) !important;
+  box-shadow: inset 0 -2px 0 rgba(147, 197, 253, 0.45), 0 4px 18px -6px rgba(11, 42, 91, 0.45);
 }
 
 /* ── Print helpers ───────────────────────────── */
@@ -212,7 +464,7 @@ body {
      Sidebar:    #f0f3f8  slightly distinct from page
      Borders:    cool blue-gray with low opacity — gentle, not sharp
      Text:       #1a2638  dark ink blue-gray (softer than pure black)
-     Accents:    blue (#3C91E6) primary accent
+     Accents:    blue (#1D5BD6) primary accent
 
    CSS [class~="token"] attribute selectors target Tailwind's
    literal class tokens in the HTML — no component files need
@@ -248,12 +500,12 @@ html.light [class~="bg-white/10"]   { background-color: rgba(60,80,120,0.07)  !i
 html.light [class~="bg-white/20"]   { background-color: rgba(60,80,120,0.10)  !important; }
 
 /* Active nav item — blue tint so it reads on the deeper sidebar bg */
-html.light [class~="bg-white/[0.08]"]  { background-color: rgba(60,145,230,0.16) !important; }
+html.light [class~="bg-white/[0.08]"]  { background-color: rgba(29,91,214,0.16) !important; }
 html.light [class~="bg-white/[0.05]"]  { background-color: rgba(60,80,120,0.05) !important; }
 
 /* Preserve white overlays inside colored gradient headers */
-html.light [class~="bg-[#3C91E6]"] [class~="bg-white/20"] { background-color: rgba(255,255,255,0.20) !important; }
-html.light [class~="bg-[#3C91E6]"] [class~="bg-white/10"] { background-color: rgba(255,255,255,0.10) !important; }
+html.light [class~="bg-[#1D5BD6]"] [class~="bg-white/20"] { background-color: rgba(255,255,255,0.20) !important; }
+html.light [class~="bg-[#1D5BD6]"] [class~="bg-white/10"] { background-color: rgba(255,255,255,0.10) !important; }
 
 /* Inputs stand out from card bg with a distinct but soft fill */
 html.light input[class~="bg-[#0b0f1a]"],
@@ -333,51 +585,51 @@ html.light [class*="bg-violet-6"]  [class~="text-white"],
 html.light [class*="bg-slate-7"]   [class~="text-white"],
 html.light [class*="bg-slate-8"]   [class~="text-white"],
 /* Arbitrary blue used in curriculum / schedule group headers */
-html.light [class~="bg-[#3C91E6]"] [class~="text-white"]  { color: #ffffff !important; }
-html.light [class~="bg-[#2563EB]"] [class~="text-white"],
-html.light [class~="bg-[#2563EB]"] [class~="!text-white"] { color: #ffffff !important; }
+html.light [class~="bg-[#1D5BD6]"] [class~="text-white"]  { color: #ffffff !important; }
+html.light [class~="bg-[#164BB5]"] [class~="text-white"],
+html.light [class~="bg-[#164BB5]"] [class~="!text-white"] { color: #ffffff !important; }
 
 /* Same-element coloured-bg + text-white — curriculum header badge */
-html.light [class~="bg-[#3C91E6]"][class~="text-white"] { color: #ffffff !important; }
+html.light [class~="bg-[#1D5BD6]"][class~="text-white"] { color: #ffffff !important; }
 
-/* Disabled primary buttons still carry bg-[#3C91E6] in className;
+/* Disabled primary buttons still carry bg-[#1D5BD6] in className;
    don't force white label onto the gray disabled surface. */
-html.light :is(button, a)[class~="bg-[#3C91E6]"][class~="text-white"]:disabled,
-html.light :is(button, a)[class~="bg-[#2563EB]"][class~="text-white"]:disabled,
-html.light :is(button, a)[class~="bg-[#3074B8]"][class~="text-white"]:disabled {
+html.light :is(button, a)[class~="bg-[#1D5BD6]"][class~="text-white"]:disabled,
+html.light :is(button, a)[class~="bg-[#164BB5]"][class~="text-white"]:disabled,
+html.light :is(button, a)[class~="bg-[#12408F]"][class~="text-white"]:disabled {
   color: #64748B !important;
   background-color: #E4E6EB !important;
 }
-html:not(.light) :is(button, a)[class~="bg-[#3C91E6]"][class~="text-white"]:disabled,
-html:not(.light) :is(button, a)[class~="bg-[#2563EB]"][class~="text-white"]:disabled,
-html:not(.light) :is(button, a)[class~="bg-[#3074B8]"][class~="text-white"]:disabled {
+html:not(.light) :is(button, a)[class~="bg-[#1D5BD6]"][class~="text-white"]:disabled,
+html:not(.light) :is(button, a)[class~="bg-[#164BB5]"][class~="text-white"]:disabled,
+html:not(.light) :is(button, a)[class~="bg-[#12408F]"][class~="text-white"]:disabled {
   color: #94A3B8 !important;
   background-color: rgba(148, 163, 184, 0.18) !important;
 }
-html.light [class~="bg-[#2563EB]"][class~="text-white"],
-html.light [class~="bg-[#2563EB]"][class~="!text-white"] { color: #ffffff !important; }
+html.light [class~="bg-[#164BB5]"][class~="text-white"],
+html.light [class~="bg-[#164BB5]"][class~="!text-white"] { color: #ffffff !important; }
 
 /* Brand-blue buttons: always white labels (class bg or inline style) */
-html.light :is(button, a, label)[class~="bg-[#3C91E6]"]:not(:disabled),
-html.light :is(button, a, label)[class~="bg-[#2563EB]"]:not(:disabled),
-html.light :is(button, a, label)[class~="bg-[#3074B8]"]:not(:disabled),
+html.light :is(button, a, label)[class~="bg-[#1D5BD6]"]:not(:disabled),
+html.light :is(button, a, label)[class~="bg-[#164BB5]"]:not(:disabled),
+html.light :is(button, a, label)[class~="bg-[#12408F]"]:not(:disabled),
 html.light :is(button, a, label)[class~="bg-[#2E7DD1]"]:not(:disabled),
 html.light :is(button, a, label)[class~="bg-blue-600"]:not(:disabled),
 html.light :is(button, a, label)[class~="bg-blue-500"]:not(:disabled) {
   color: #ffffff !important;
 }
-html.light button[style*="background-color: #3C91E6"],
-html.light button[style*="background-color:#3C91E6"],
-html.light button[style*="background-color: rgb(60, 145, 230)"],
-html.light button[style*="background-color:rgb(60, 145, 230)"],
-html.light button[style*="background-color: #2563EB"],
-html.light button[style*="background-color:#2563EB"],
-html.light button[style*="background-color: rgb(37, 99, 235)"],
-html.light button[style*="background-color:rgb(37, 99, 235)"],
-html.light button[style*="background-color: #3074B8"],
-html.light button[style*="background-color:#3074B8"],
-html.light button[style*="background-color: rgb(48, 116, 184)"],
-html.light button[style*="background-color:rgb(48, 116, 184)"],
+html.light button[style*="background-color: #1D5BD6"],
+html.light button[style*="background-color:#1D5BD6"],
+html.light button[style*="background-color: rgb(29, 91, 214)"],
+html.light button[style*="background-color:rgb(29, 91, 214)"],
+html.light button[style*="background-color: #164BB5"],
+html.light button[style*="background-color:#164BB5"],
+html.light button[style*="background-color: rgb(22, 75, 181)"],
+html.light button[style*="background-color:rgb(22, 75, 181)"],
+html.light button[style*="background-color: #12408F"],
+html.light button[style*="background-color:#12408F"],
+html.light button[style*="background-color: rgb(18, 64, 143)"],
+html.light button[style*="background-color:rgb(18, 64, 143)"],
 html.light button[style*="background-color: #2E7DD1"],
 html.light button[style*="background-color:#2E7DD1"],
 html.light button[style*="background-color: rgb(46, 125, 209)"],
@@ -385,31 +637,31 @@ html.light button[style*="background-color:rgb(46, 125, 209)"] {
   color: #ffffff !important;
 }
 
-/* Admin header (bg-[#3074B8]) — keep white labels/icons on blue */
-html.light [class~="bg-[#3074B8]"] [class~="text-white"],
-html.light [class~="bg-[#3074B8]"][class~="text-white"] {
+/* Admin header (bg-[#12408F]) — keep white labels/icons on blue */
+html.light [class~="bg-[#12408F]"] [class~="text-white"],
+html.light [class~="bg-[#12408F]"][class~="text-white"] {
   color: #ffffff !important;
 }
-html.light [class~="bg-[#3074B8]"] [class~="hover:text-white"]:hover {
+html.light [class~="bg-[#12408F]"] [class~="hover:text-white"]:hover {
   color: #ffffff !important;
 }
 
 /*
   Admin header nav HOVER (light only)
-  Problem: idle used hover:text-[#3C91E6] on frost — washed-out / low contrast.
+  Problem: idle used hover:text-[#1D5BD6] on frost — washed-out / low contrast.
   Keep a soft white frost; keep labels/icons white (weaker than active white chip).
   Dark mode continues to use the original Tailwind hover classes unchanged.
 */
-html.light [class~="bg-[#3074B8]"] .qr-nav-chrome-idle:hover,
-html.light [class~="bg-[#3074B8]"] a:focus-visible .qr-nav-chrome-idle,
-html.light [class~="bg-[#3074B8]"] button:focus-visible .qr-nav-chrome-idle {
+html.light [class~="bg-[#12408F]"] .qr-nav-chrome-idle:hover,
+html.light [class~="bg-[#12408F]"] a:focus-visible .qr-nav-chrome-idle,
+html.light [class~="bg-[#12408F]"] button:focus-visible .qr-nav-chrome-idle {
   color: #ffffff !important;
   background-color: rgba(255, 255, 255, 0.16) !important;
 }
-html.light [class~="bg-[#3074B8]"] .qr-nav-chrome-idle:hover .qr-nav-chrome-chevron,
-html.light [class~="bg-[#3074B8]"] .qr-nav-chrome-idle:hover [class~="group-hover:text-[#3C91E6]"],
-html.light [class~="bg-[#3074B8]"] a:focus-visible .qr-nav-chrome-idle .qr-nav-chrome-chevron,
-html.light [class~="bg-[#3074B8]"] button:focus-visible .qr-nav-chrome-idle .qr-nav-chrome-chevron {
+html.light [class~="bg-[#12408F]"] .qr-nav-chrome-idle:hover .qr-nav-chrome-chevron,
+html.light [class~="bg-[#12408F]"] .qr-nav-chrome-idle:hover [class~="group-hover:text-[#1D5BD6]"],
+html.light [class~="bg-[#12408F]"] a:focus-visible .qr-nav-chrome-idle .qr-nav-chrome-chevron,
+html.light [class~="bg-[#12408F]"] button:focus-visible .qr-nav-chrome-idle .qr-nav-chrome-chevron {
   color: rgba(255, 255, 255, 0.92) !important;
 }
 
@@ -418,7 +670,7 @@ html.light [class~="bg-[#3074B8]"] button:focus-visible .qr-nav-chrome-idle .qr-
 html.light .qr-nav-menu [class~="hover:bg-[#F8FAFC]"]:hover {
   background-color: #EFF6FF !important;
 }
-html.light .qr-nav-menu [class~="hover:text-[#3C91E6]"]:hover {
+html.light .qr-nav-menu [class~="hover:text-[#1D5BD6]"]:hover {
   color: #1D4ED8 !important;
 }
 
@@ -539,7 +791,7 @@ html.light [class~="bg-slate-900"] { scrollbar-color: rgba(70,95,135,0.28) trans
    DARK MODE — Light-first admin UI remapping
 
    Newer dashboard pages use light-first Tailwind tokens
-   (bg-white, text-[#1E3A5F], border-[#E5E7EB], …). Those
+   (bg-white, text-[#0B2A5B], border-[#E5E7EB], …). Those
    stay correct under html.light, but break when dark mode
    removes that class. Remap them to the calm dark palette
    without rewriting every page.
@@ -599,7 +851,7 @@ html:not(.light) [class~="rounded-full"][class~="bg-[#F1F5F9]"] {
 html:not(.light) [class~="bg-[#EFF6FF]"],
 html:not(.light) [class~="bg-[#DBEAFE]"],
 html:not(.light) [class~="bg-[#E8F1FB]"] {
-  background-color: rgba(60, 145, 230, 0.18) !important;
+  background-color: rgba(29, 91, 214, 0.18) !important;
 }
 html:not(.light) [class~="bg-[#ECFDF5]"],
 html:not(.light) [class~="bg-[#D1FAE5]"],
@@ -645,7 +897,7 @@ html:not(.light) [class~="hover:bg-red-50"]:hover {
   background-color: rgba(248, 113, 113, 0.12) !important;
 }
 html:not(.light) [class~="hover:bg-[#EFF6FF]"]:hover {
-  background-color: rgba(60, 145, 230, 0.16) !important;
+  background-color: rgba(29, 91, 214, 0.16) !important;
 }
 html:not(.light) [class~="hover:border-[#D1D5DB]"]:hover,
 html:not(.light) [class~="hover:border-[#CBD5E1]"]:hover {
@@ -691,7 +943,7 @@ html:not(.light) [class~="border-yellow-200"] {
   border-color: rgba(251, 191, 36, 0.45) !important;
 }
 html:not(.light) [class~="border-[#BFDBFE]"] {
-  border-color: rgba(60, 145, 230, 0.40) !important;
+  border-color: rgba(29, 91, 214, 0.40) !important;
 }
 /* Row dividers — remove near-white light lines in dark mode
    (Tailwind divide can paint border-bottom on :not(:last-child), so target all children) */
@@ -714,7 +966,7 @@ html:not(.light) [class~="divide-[color:var(--border-subtle)]"] > * {
 html:not(.light) [class~="text-[#0F172A]"],
 html:not(.light) [class~="text-[#111827]"],
 html:not(.light) [class~="text-[#1E293B]"],
-html:not(.light) [class~="text-[#1E3A5F]"],
+html:not(.light) [class~="text-[#0B2A5B]"],
 html:not(.light) [class~="text-[#18181B]"],
 html:not(.light) [class~="text-[#1a2638]"],
 html:not(.light) [class~="text-black"],
@@ -807,8 +1059,8 @@ html:not(.light) button[disabled] {
   color: var(--foreground-muted) !important;
 }
 /* Keep brand blue disabled states muted (not bright white-on-blue) */
-html:not(.light) button:disabled[class~="bg-[#2563EB]"],
-html:not(.light) button:disabled[class~="bg-[#3C91E6]"] {
+html:not(.light) button:disabled[class~="bg-[#164BB5]"],
+html:not(.light) button:disabled[class~="bg-[#1D5BD6]"] {
   color: #94A3B8 !important;
   background-color: rgba(148, 163, 184, 0.18) !important;
   opacity: 1 !important;
@@ -870,7 +1122,7 @@ html:not(.light) textarea::placeholder {
 }
 
 /* Hover text lifts — keep readable */
-html:not(.light) [class~="hover:text-[#1E3A5F]"]:hover,
+html:not(.light) [class~="hover:text-[#0B2A5B]"]:hover,
 html:not(.light) [class~="hover:text-[#0F172A]"]:hover,
 html:not(.light) [class~="hover:text-[#111827]"]:hover,
 html:not(.light) [class~="hover:text-[#374151]"]:hover {
@@ -928,14 +1180,14 @@ html:not(.light) [class~="text-red-700"] {
 }
 html:not(.light) [class~="text-[#0369A1]"],
 html:not(.light) [class~="text-[#0284C7]"],
-html:not(.light) [class~="text-[#2563EB]"],
-html:not(.light) [class~="text-[#3C91E6]"],
+html:not(.light) [class~="text-[#164BB5]"],
+html:not(.light) [class~="text-[#1D5BD6]"],
 html:not(.light) [class~="text-blue-600"],
-html:not(.light) [class~="hover:text-[#2563EB]"]:hover,
+html:not(.light) [class~="hover:text-[#164BB5]"]:hover,
 html:not(.light) [class~="hover:text-[#1D4ED8]"]:hover {
   color: #93C5FD !important;
 }
-html:not(.light) [class~="hover:text-[#3C91E6]"]:hover {
+html:not(.light) [class~="hover:text-[#1D5BD6]"]:hover {
   color: #7DB8EA !important;
 }
 html:not(.light) [class~="text-[#EF4444]"],
@@ -955,7 +1207,7 @@ html:not(.light) [class~="rounded-full"][class~="text-emerald-600"],
 html:not(.light) [class~="rounded-full"][class~="text-green-700"] {
   color: #A7F3D0 !important;
 }
-html:not(.light) [class~="rounded-full"][class~="text-[#2563EB]"] {
+html:not(.light) [class~="rounded-full"][class~="text-[#164BB5]"] {
   color: #93C5FD !important;
 }
 html:not(.light) [class~="rounded-full"][class~="text-[#B45309]"] {
@@ -987,10 +1239,10 @@ html:not(.light) [style*="color: #111827"],
 html:not(.light) [style*="color:#111827"],
 html:not(.light) [style*="color: rgb(17, 24, 39)"],
 html:not(.light) [style*="color:rgb(17, 24, 39)"],
-html:not(.light) [style*="color: #1E3A5F"],
-html:not(.light) [style*="color:#1E3A5F"],
-html:not(.light) [style*="color: rgb(30, 58, 95)"],
-html:not(.light) [style*="color:rgb(30, 58, 95)"],
+html:not(.light) [style*="color: #0B2A5B"],
+html:not(.light) [style*="color:#0B2A5B"],
+html:not(.light) [style*="color: rgb(11, 42, 91)"],
+html:not(.light) [style*="color:rgb(11, 42, 91)"],
 html:not(.light) [style*="color: #1E293B"],
 html:not(.light) [style*="color:#1E293B"],
 html:not(.light) [style*="color: rgb(30, 41, 59)"],
@@ -1039,10 +1291,10 @@ html:not(.light) [style*="color: rgb(203, 213, 225)"],
 html:not(.light) [style*="color:rgb(203, 213, 225)"] {
   color: var(--foreground-muted) !important;
 }
-html:not(.light) [style*="color: #3C91E6"],
-html:not(.light) [style*="color:#3C91E6"],
-html:not(.light) [style*="color: rgb(60, 145, 230)"],
-html:not(.light) [style*="color:rgb(60, 145, 230)"] {
+html:not(.light) [style*="color: #1D5BD6"],
+html:not(.light) [style*="color:#1D5BD6"],
+html:not(.light) [style*="color: rgb(29, 91, 214)"],
+html:not(.light) [style*="color:rgb(29, 91, 214)"] {
   color: #93C5FD !important;
 }
 html:not(.light) [style*="color: #EF4444"],
@@ -1055,13 +1307,13 @@ html:not(.light) [style*="background-color: #EFF6FF"],
 html:not(.light) [style*="background-color:#EFF6FF"],
 html:not(.light) [style*="background-color: rgb(239, 246, 255)"],
 html:not(.light) [style*="background-color:rgb(239, 246, 255)"] {
-  background-color: rgba(60, 145, 230, 0.18) !important;
+  background-color: rgba(29, 91, 214, 0.18) !important;
 }
 html:not(.light) [style*="border-color: #BFDBFE"],
 html:not(.light) [style*="border-color:#BFDBFE"],
 html:not(.light) [style*="border-color: rgb(191, 219, 254)"],
 html:not(.light) [style*="border-color:rgb(191, 219, 254)"] {
-  border-color: rgba(60, 145, 230, 0.40) !important;
+  border-color: rgba(29, 91, 214, 0.40) !important;
 }
 html:not(.light) [style*="border-color: #E2E8F0"],
 html:not(.light) [style*="border-color:#E2E8F0"],
@@ -1136,9 +1388,9 @@ html:not(.light) [class~="focus:bg-white"]:focus {
   background-color: var(--background-secondary) !important;
   color: var(--foreground) !important;
 }
-html:not(.light) input[class~="text-[#1E3A5F]"],
-html:not(.light) select[class~="text-[#1E3A5F]"],
-html:not(.light) textarea[class~="text-[#1E3A5F]"],
+html:not(.light) input[class~="text-[#0B2A5B]"],
+html:not(.light) select[class~="text-[#0B2A5B]"],
+html:not(.light) textarea[class~="text-[#0B2A5B]"],
 html:not(.light) input[class~="text-slate-800"],
 html:not(.light) select[class~="text-slate-800"] {
   color: var(--foreground) !important;
@@ -1156,10 +1408,10 @@ html:not(.light) [class~="hover:bg-slate-200/60"]:hover {
   background-color: rgba(255, 255, 255, 0.06) !important;
 }
 html:not(.light) [class~="bg-blue-50"] {
-  background-color: rgba(60, 145, 230, 0.16) !important;
+  background-color: rgba(29, 91, 214, 0.16) !important;
 }
 html:not(.light) [class~="border-blue-200"] {
-  border-color: rgba(60, 145, 230, 0.40) !important;
+  border-color: rgba(29, 91, 214, 0.40) !important;
 }
 html:not(.light) [class~="border-slate-100"],
 html:not(.light) [class~="border-slate-200"] {
@@ -1183,28 +1435,28 @@ html:not(.light) [class~="shadow-xl"] {
 /* ━━ Preserve brand-blue chrome (admin header / instructor sidebar) ━━
    Only in-bar chips (active nav pills) stay white — NOT dropdown overlays.
    Overlays use .qr-nav-menu and must follow the dark elevated surface system. */
-html:not(.light) [class~="bg-[#3074B8]"] [class~="qr-nav-chrome-chip"],
-html:not(.light) [class~="bg-[#3C91E6]"] [class~="qr-nav-chrome-chip"],
+html:not(.light) [class~="bg-[#12408F]"] [class~="qr-nav-chrome-chip"],
+html:not(.light) [class~="bg-[#1D5BD6]"] [class~="qr-nav-chrome-chip"],
 html:not(.light) [class~="qr-nav-chrome-chip"] {
   background-color: #ffffff !important;
-  color: #3074B8 !important;
+  color: #12408F !important;
 }
-html:not(.light) [class~="bg-[#3074B8]"] [class~="text-white"],
-html:not(.light) [class~="bg-[#3074B8]"][class~="text-white"],
-html:not(.light) [class~="bg-[#3C91E6]"] [class~="text-white"],
-html:not(.light) [class~="bg-[#3C91E6]"][class~="text-white"] {
+html:not(.light) [class~="bg-[#12408F]"] [class~="text-white"],
+html:not(.light) [class~="bg-[#12408F]"][class~="text-white"],
+html:not(.light) [class~="bg-[#1D5BD6]"] [class~="text-white"],
+html:not(.light) [class~="bg-[#1D5BD6]"][class~="text-white"] {
   color: #ffffff !important;
 }
-html:not(.light) [class~="bg-[#3074B8]"] [class~="text-[#3074B8]"],
-html:not(.light) [class~="qr-nav-chrome-chip"][class~="text-[#3074B8]"] {
-  color: #3074B8 !important;
+html:not(.light) [class~="bg-[#12408F]"] [class~="text-[#12408F]"],
+html:not(.light) [class~="qr-nav-chrome-chip"][class~="text-[#12408F]"] {
+  color: #12408F !important;
 }
 
 /* ━━ Navigation overlays (submenus, account, notifications, mobile drawer) ━━ */
 html:not(.light) .qr-nav-menu,
 html:not(.light) .qr-nav-menu[class~="bg-white"],
-html:not(.light) [class~="bg-[#3074B8]"] .qr-nav-menu,
-html:not(.light) [class~="bg-[#3074B8]"] .qr-nav-menu[class~="bg-white"] {
+html:not(.light) [class~="bg-[#12408F]"] .qr-nav-menu,
+html:not(.light) [class~="bg-[#12408F]"] .qr-nav-menu[class~="bg-white"] {
   background-color: var(--surface-elevated) !important;
   border-color: var(--border) !important;
   color: var(--foreground);
@@ -1225,7 +1477,7 @@ html:not(.light) .qr-nav-menu [class~="hover:bg-[#F9FAFB]"]:hover,
 html:not(.light) .qr-nav-menu [class~="hover:bg-[#F1F5F9]"]:hover,
 html:not(.light) .qr-nav-menu [class~="hover:bg-[#F3F4F6]"]:hover,
 html:not(.light) .qr-nav-menu [class~="hover:bg-red-50"]:hover {
-  background-color: rgba(60, 145, 230, 0.14) !important;
+  background-color: rgba(29, 91, 214, 0.14) !important;
 }
 html:not(.light) .qr-nav-menu [class~="hover:bg-red-50"]:hover {
   background-color: rgba(248, 113, 113, 0.12) !important;
@@ -1234,14 +1486,14 @@ html:not(.light) .qr-nav-menu a[class~="bg-[#E8F1FB]"],
 html:not(.light) .qr-nav-menu [class~="bg-[#E8F1FB]"],
 html:not(.light) .qr-nav-menu [class~="bg-[#EFF6FF]"],
 html:not(.light) .qr-nav-menu [class~="bg-[#F4F4F5]"] {
-  background-color: rgba(60, 145, 230, 0.20) !important;
+  background-color: rgba(29, 91, 214, 0.20) !important;
 }
 html:not(.light) .qr-nav-menu [class~="bg-[#0F172A]"] {
   background-color: var(--foreground) !important;
 }
 html:not(.light) .qr-nav-menu [class~="text-[#0F172A]"],
 html:not(.light) .qr-nav-menu [class~="text-[#1E293B]"],
-html:not(.light) .qr-nav-menu [class~="text-[#1E3A5F]"],
+html:not(.light) .qr-nav-menu [class~="text-[#0B2A5B]"],
 html:not(.light) .qr-nav-menu [class~="text-[#18181B]"],
 html:not(.light) .qr-nav-menu [class~="text-[#111827]"] {
   color: var(--foreground) !important;
@@ -1260,10 +1512,10 @@ html:not(.light) .qr-nav-menu [class~="text-[#A1A1AA]"],
 html:not(.light) .qr-nav-menu [class~="text-[#CBD5E1]"] {
   color: var(--foreground-muted) !important;
 }
-html:not(.light) .qr-nav-menu [class~="text-[#2563EB]"],
-html:not(.light) .qr-nav-menu [class~="text-[#3C91E6]"],
-html:not(.light) .qr-nav-menu [class~="hover:text-[#3C91E6]"]:hover,
-html:not(.light) .qr-nav-menu [class~="hover:text-[#2563EB]"]:hover,
+html:not(.light) .qr-nav-menu [class~="text-[#164BB5]"],
+html:not(.light) .qr-nav-menu [class~="text-[#1D5BD6]"],
+html:not(.light) .qr-nav-menu [class~="hover:text-[#1D5BD6]"]:hover,
+html:not(.light) .qr-nav-menu [class~="hover:text-[#164BB5]"]:hover,
 html:not(.light) .qr-nav-menu [class~="hover:text-[#1D4ED8]"]:hover {
   color: #93C5FD !important;
 }
@@ -1285,9 +1537,9 @@ html:not(.light) .qr-nav-menu [class~="hover:text-red-600"]:hover {
 }
 
 /* Primary blue buttons keep white labels */
-html:not(.light) :is(button, a, label)[class~="bg-[#3C91E6]"]:not(:disabled),
-html:not(.light) :is(button, a, label)[class~="bg-[#2563EB]"]:not(:disabled),
-html:not(.light) :is(button, a, label)[class~="bg-[#3074B8]"]:not(:disabled),
+html:not(.light) :is(button, a, label)[class~="bg-[#1D5BD6]"]:not(:disabled),
+html:not(.light) :is(button, a, label)[class~="bg-[#164BB5]"]:not(:disabled),
+html:not(.light) :is(button, a, label)[class~="bg-[#12408F]"]:not(:disabled),
 html:not(.light) :is(button, a, label)[class~="bg-[#2E7DD1]"]:not(:disabled) {
   color: #ffffff !important;
 }
@@ -1325,12 +1577,20 @@ body {
 
 /* ─── 2. Global focus ring ─────────────────────────────── */
 *:focus-visible {
-  outline: 2.5px solid #f97316 !important;
+  outline: 2.5px solid #1D5BD6 !important;
   outline-offset: 2px !important;
   border-radius: 4px;
 }
 
-/* Remove focus ring/outline from form inputs — overrides browser OS-level orange.
+/* Recharts makes the chart surface focusable, so clicking a bar drew a black
+   box around the whole chart — suppress it on mouse focus. */
+.recharts-wrapper:focus,
+.recharts-wrapper :focus:not(:focus-visible),
+.recharts-surface:focus:not(:focus-visible) {
+  outline: none !important;
+}
+
+/* Remove focus ring/outline from form inputs — overrides the global focus-visible outline above.
    Subtle 1-pixel accent border + feather-light ring instead of the old thick 2-px border.
    Matches the Google / Facebook "nearly invisible until focused" input aesthetic. */
 select:focus,
@@ -1509,4 +1769,197 @@ html.light * { scrollbar-color: rgba(71,85,105,0.22) transparent; }
     opacity: 1 !important;
     transform: none !important;
   }
+}
+
+/* ── Success animation "floats" on its own ─────────────────────────────
+   While a ✓ / 🗑 success card is showing inside a dialog, the dialog itself
+   (white box, border, shadow, title, content) is hidden and only the
+   animation card remains over the dimmed page. Kept last in the file so it
+   outranks the light-mode dialog background override. */
+html .qr-modal-panel:has(.save-success-overlay) {
+  background-color: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+html .qr-modal-panel:has(.save-success-overlay) > * { visibility: hidden; }
+html .qr-modal-panel:has(.save-success-overlay) .save-success-overlay {
+  visibility: visible;
+  background-color: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+/* Page-level success overlay (not inside a dialog): soft dim instead of the
+   white frosted fill, so only the animation card stands out. */
+.save-success-overlay.qr-overlay-page {
+  background-color: rgba(11, 42, 91, 0.28);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+
+/* ── Master Schedule filter fields (.qr-ms-field on FilterSelect) ─────────
+   Solid white, always-outlined, same 42px height as the read-only boxes.
+   Selectors are html-prefixed + !important so they beat FilterSelect's
+   border-0 / bg utilities and the light-mode "strip focus border" rule. */
+html select.qr-ms-field,
+html.light select.qr-ms-field,
+html.light select.qr-ms-field:focus,
+html.light select.qr-ms-field:focus-visible {
+  height: 42px;
+  background-color: #FFFFFF !important;
+  border: 1px solid #D6E0EF !important;
+  color: #0B2A5B;
+  font-weight: 600;
+  opacity: 1;
+  box-shadow: 0 1px 2px rgba(11, 42, 91, 0.05) !important;
+}
+html select.qr-ms-field:not(:disabled):hover { border-color: #9DB8E8 !important; }
+html select.qr-ms-field:not(:disabled):focus,
+html.light select.qr-ms-field:not(:disabled):focus {
+  border-color: #1D5BD6 !important;
+  box-shadow: 0 0 0 3px rgba(29, 91, 214, 0.14) !important;
+}
+/* Locked (no program yet): calm solid grey, not faded/dashed */
+html select.qr-ms-field:disabled,
+html.light select.qr-ms-field:disabled {
+  background-color: #F4F7FC !important;
+  border: 1px solid #E3E9F3 !important;
+  color: #94A3B8;
+  font-weight: 500;
+  box-shadow: none !important;
+  cursor: not-allowed;
+}
+/* Dark mode */
+html:not(.light) select.qr-ms-field { background-color: var(--surface-elevated) !important; border-color: var(--border) !important; color: var(--foreground); }
+html:not(.light) select.qr-ms-field:disabled { background-color: var(--surface) !important; border-color: var(--border-subtle) !important; color: var(--foreground-disabled); }
+
+/* ── Load breakdown donut (LoadBreakdownDonut.tsx) ─────────────────────────
+   Regular / Overload / Praise. Validated with the dataviz palette checker:
+   light vs #FFFFFF card, dark vs #14233F card. */
+:root {
+  --load-regular:  #4F86EE;
+  --load-overload: #D24428;
+  --load-praise:   #AF9230;
+  --donut-track:   rgba(148, 163, 184, 0.18);
+}
+html.light {
+  --load-regular:  #1D5BD6;
+  --load-overload: #DC4A0A;
+  --load-praise:   #C99A06;
+  --donut-track:   #EEF2F8;
+}
+/* Panel + hovered legend row */
+.qr-donut-panel {
+  background: linear-gradient(135deg, #F7FAFF 0%, #FFFFFF 100%);
+  border: 1px solid #E3E9F3;
+}
+.qr-donut-row-active { background-color: #EEF3FB; }
+html:not(.light) .qr-donut-panel {
+  background: linear-gradient(135deg, var(--surface-elevated) 0%, var(--surface) 100%);
+  border-color: var(--border);
+}
+html:not(.light) .qr-donut-row-active { background-color: rgba(79, 134, 238, 0.12); }
+
+/* ── Master Schedule: "Unassigned" attention cues ──────────────────────────
+   Red = needs action. Pill + tile breathe a soft red glow; the Assign button
+   glows royal blue and, every few seconds, hops up with a small shake.
+   Rows get staggered animation-delays inline so the table never shakes in unison. */
+@keyframes qr-attn-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+  50%      { box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.14), 0 0 12px rgba(239, 68, 68, 0.32); }
+}
+@keyframes qr-attn-ping {
+  0%   { transform: scale(1);   opacity: 0.6; }
+  80%, 100% { transform: scale(2.6); opacity: 0; }
+}
+.qr-unassigned-pill { animation: qr-attn-glow 2.4s ease-in-out infinite; }
+.qr-unassigned-pill .qr-pulse-dot { position: relative; }
+.qr-unassigned-pill .qr-pulse-dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: #EF4444;
+  animation: qr-attn-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+.qr-attn-tile { animation: qr-attn-glow 2.4s ease-in-out infinite; }
+
+@keyframes qr-assign-nudge {
+  0%, 70%, 100% { transform: translateY(0) rotate(0deg); }
+  74% { transform: translateY(-4px) rotate(0deg); }
+  78% { transform: translateY(-4px) rotate(-5deg); }
+  82% { transform: translateY(-4px) rotate(5deg); }
+  86% { transform: translateY(-4px) rotate(-3deg); }
+  90% { transform: translateY(-2px) rotate(2deg); }
+  95% { transform: translateY(0) rotate(0deg); }
+}
+@keyframes qr-assign-glow {
+  0%, 100% { box-shadow: 0 2px 6px -2px rgba(29, 91, 214, 0.35); }
+  50%      { box-shadow: 0 0 0 3px rgba(29, 91, 214, 0.16), 0 0 14px rgba(29, 91, 214, 0.45); }
+}
+.qr-assign-btn {
+  display: inline-block;
+  color: #FFFFFF;
+  background-image: linear-gradient(180deg, #2B6BE0 0%, #1D5BD6 100%);
+  border: 1px solid #1D5BD6;
+  transform-origin: 50% 100%;
+  animation: qr-assign-nudge 3.6s ease-in-out infinite, qr-assign-glow 2.4s ease-in-out infinite;
+  transition: filter 150ms ease;
+}
+.qr-assign-btn:hover {
+  animation-play-state: paused;
+  transform: translateY(-2px);
+  filter: brightness(1.08);
+  box-shadow: 0 0 0 3px rgba(29, 91, 214, 0.2), 0 6px 16px -4px rgba(29, 91, 214, 0.55);
+}
+@media (prefers-reduced-motion: reduce) {
+  .qr-unassigned-pill, .qr-attn-tile { animation: none; box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.18); }
+  .qr-unassigned-pill .qr-pulse-dot::after { animation: none; opacity: 0; }
+  .qr-assign-btn { animation: none; box-shadow: 0 0 0 2px rgba(29, 91, 214, 0.2); }
+}
+
+/* Chart card — soft grey tone instead of stark white, easier on the eyes.
+   Used by the Faculty Profiles stats chart. */
+.qr-chart-card {
+  background-color: #F5F7FA;
+  border: 1px solid #E3E8F0;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 1px 3px rgba(11, 42, 91, 0.05);
+}
+html:not(.light) .qr-chart-card {
+  background-color: var(--background-secondary);
+  border-color: var(--border-subtle);
+  box-shadow: none;
+}
+
+/* Section "you are here" pulse — pending / done / overload shortcuts open a
+   section in Assigned Subjects and this ring breathes twice (~1.6s). */
+@keyframes qr-section-flash {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(29, 91, 214, 0); }
+  30%      { box-shadow: 0 0 0 4px rgba(29, 91, 214, 0.28); }
+  60%      { box-shadow: 0 0 0 2px rgba(29, 91, 214, 0.12); }
+  80%      { box-shadow: 0 0 0 4px rgba(29, 91, 214, 0.22); }
+}
+.qr-section-flash { animation: qr-section-flash 1.6s ease-in-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .qr-section-flash { animation: none; box-shadow: 0 0 0 3px rgba(29, 91, 214, 0.25); }
+}
+
+
+/* ── Softer primary button — a washed-out royal blue so actions don't read as
+   the same deep blue as the header. White label set here (not text-white),
+   because the light-mode rule repaints text-white as dark ink. */
+html .qr-btn-soft,
+html.light .qr-btn-soft {
+  color: #FFFFFF !important;
+  background-image: linear-gradient(180deg, #5C8FEA 0%, #4A80E4 100%);
+  background-color: #4A80E4;
+  box-shadow: 0 6px 16px -8px rgba(74, 128, 228, 0.55);
+}
+html .qr-btn-soft:not(:disabled):hover {
+  background-image: linear-gradient(180deg, #4F85E6 0%, #3F74DB 100%);
+}
+
+/* Room Utilization stat cards: light status-colour wash (set inline) —
+   in dark mode fall back to the normal dark card surface */
+html:not(.light) .qr-stat-tint {
+  background: var(--surface-elevated) !important;
 }

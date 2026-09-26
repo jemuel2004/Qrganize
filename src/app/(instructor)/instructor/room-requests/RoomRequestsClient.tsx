@@ -8,6 +8,7 @@ import {
   QrCode, Loader2, Trash2,
 } from 'lucide-react';
 import { PageLoadTransition } from '@/client/components/ui/PageLoadTransition';
+import BackButton from '@/client/components/ui/BackButton';
 import { ListSkeleton } from '@/client/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/client/hooks/useMinLoading';
 
@@ -131,7 +132,7 @@ function getTypeInfo(lecH: number, labH: number): { label: string; color: string
   const lab = parseFloat(String(labH)) || 0;
   if (lec > 0 && lab > 0) return { label: 'Lec + Lab', color: 'text-[#7C3AED]' };
   if (lab > 0) return { label: 'Laboratory', color: 'text-[#7C3AED]' };
-  return { label: 'Lecture', color: 'text-[#3C91E6]' };
+  return { label: 'Lecture', color: 'text-[#1D5BD6]' };
 }
 
 const DAY_SHORT: Record<string, string> = {
@@ -140,7 +141,7 @@ const DAY_SHORT: Record<string, string> = {
 };
 
 const INPUT_CLS =
-  'w-full bg-[var(--surface-elevated)] border border-[color:var(--border)] text-[color:var(--foreground)] text-base rounded-xl px-4 py-3 min-h-12 focus:outline-none focus:ring-2 focus:ring-[#3C91E6]/30 focus:border-[#3C91E6]';
+  'w-full bg-[var(--surface-elevated)] border border-[color:var(--border)] text-[color:var(--foreground)] text-base rounded-xl px-4 py-3 min-h-12 focus:outline-none focus:ring-2 focus:ring-[#1D5BD6]/30 focus:border-[#1D5BD6]';
 
 const CARD =
   'bg-[var(--surface-elevated)] rounded-2xl border border-[color:var(--border)] shadow-[0_1px_3px_rgba(15,23,42,0.05)]';
@@ -148,7 +149,7 @@ const CARD =
 const ACTIVE_STATUSES = new Set(['Pending', 'Pending Confirmation', 'In-Use']);
 
 const BTN_PRIMARY =
-  'inline-flex items-center justify-center gap-2 min-h-12 px-5 rounded-xl text-base font-bold text-white bg-[#3C91E6] hover:bg-[#2E7DD1] active:bg-[#2670BD] transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
+  'inline-flex items-center justify-center gap-2 min-h-12 px-5 rounded-xl text-base font-bold text-white bg-[#1D5BD6] hover:bg-[#2E7DD1] active:bg-[#2670BD] transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
 
 const BTN_SECONDARY =
   'inline-flex items-center justify-center gap-2 min-h-12 px-4 rounded-xl text-base font-semibold bg-[var(--surface-elevated)] border border-[color:var(--border)] text-[color:var(--foreground-secondary)] hover:bg-[var(--background-secondary)] transition-colors disabled:opacity-40';
@@ -192,9 +193,9 @@ const STATUS_CFG: Record<string, {
   'Pending Confirmation': {
     label: 'Pending Confirmation',
     bg: 'bg-[#EFF6FF]',
-    text: 'text-[#3C91E6]',
+    text: 'text-[#1D5BD6]',
     border: 'border-[#BFDBFE]',
-    dot: 'bg-[#3C91E6]',
+    dot: 'bg-[#1D5BD6]',
   },
   'In-Use': {
     label: 'In-Use',
@@ -248,7 +249,7 @@ function Alert({
   const cfg = {
     success: 'bg-[#ECFDF5] border-[#A7F3D0] text-[#059669]',
     error: 'bg-[#FEF2F2] border-[#FECACA] text-[#DC2626]',
-    info: 'bg-[#EFF6FF] border-[#BFDBFE] text-[#3C91E6]',
+    info: 'bg-[#EFF6FF] border-[#BFDBFE] text-[#1D5BD6]',
   }[type];
   const Icon = { success: CheckCircle, error: XCircle, info: AlertTriangle }[type];
   return (
@@ -479,7 +480,7 @@ function RequestCard({
             <p className="mt-1 text-base font-semibold text-[color:var(--foreground)] break-words">
               {req.original_room_name ?? 'No room'}
               <span className="text-[color:var(--foreground-muted)] mx-1.5">→</span>
-              <span className="text-[#3C91E6]">{req.requested_room_name ?? 'N/A'}</span>
+              <span className="text-[#1D5BD6]">{req.requested_room_name ?? 'N/A'}</span>
             </p>
           </div>
           <div className="rounded-xl bg-[var(--background-secondary)] border border-[color:var(--border)] px-4 py-3">
@@ -501,7 +502,7 @@ function RequestCard({
         {isPendingConf && (
           <div className="flex flex-col sm:flex-row sm:items-center gap-3 bg-[#EFF6FF] border border-[#BFDBFE] rounded-xl px-4 py-4">
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-bold text-[#1E3A5F]">Scan QR code to confirm</p>
+              <p className="text-sm font-bold text-[#0B2A5B]">Scan QR code to confirm</p>
               <p className="text-sm text-[#475569] mt-1 leading-relaxed break-words">
                 Go to <strong>{req.requested_room_name}</strong> and scan within 15 minutes.
               </p>
@@ -720,6 +721,7 @@ export default function RoomRequestsClient() {
 
         <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
+            <BackButton />
             <h1 className="text-2xl font-bold text-[color:var(--foreground)] tracking-tight">
               Room Requests
             </h1>
@@ -756,13 +758,13 @@ export default function RoomRequestsClient() {
             <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap mb-1">
-                  <p className="text-base font-bold text-[#1E3A5F]">Scan QR code to confirm</p>
+                  <p className="text-base font-bold text-[#0B2A5B]">Scan QR code to confirm</p>
                   {activeConfirmation.confirmation_deadline && (
                     <CountdownBadge deadline={activeConfirmation.confirmation_deadline} />
                   )}
                 </div>
                 <p className="text-sm text-[#475569] leading-relaxed break-words">
-                  Go to <span className="font-semibold text-[#1E3A5F]">{activeConfirmation.requested_room_name}</span> and scan its QR code.
+                  Go to <span className="font-semibold text-[#0B2A5B]">{activeConfirmation.requested_room_name}</span> and scan its QR code.
                 </p>
               </div>
               <Link href="/instructor/scan" className={`${BTN_PRIMARY} w-full sm:w-auto`}>
@@ -822,7 +824,7 @@ export default function RoomRequestsClient() {
                             onClick={() => { setSelectedScheduleId(String(s.id)); setRequestedRoomId(''); }}
                             className={`w-full text-left rounded-xl border px-4 py-3.5 min-w-0 min-h-12 transition-colors ${
                               selected
-                                ? 'border-[#3C91E6] bg-[#EFF6FF] ring-2 ring-[#3C91E6]/20'
+                                ? 'border-[#1D5BD6] bg-[#EFF6FF] ring-2 ring-[#1D5BD6]/20'
                                 : 'border-[color:var(--border)] bg-[var(--surface-elevated)] hover:bg-[var(--background-secondary)]'
                             }`}
                           >
@@ -830,7 +832,7 @@ export default function RoomRequestsClient() {
                               <span
                                 aria-hidden
                                 className={`mt-1 w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
-                                  selected ? 'border-[#3C91E6] bg-[#3C91E6]' : 'border-[#CBD5E1]'
+                                  selected ? 'border-[#1D5BD6] bg-[#1D5BD6]' : 'border-[#CBD5E1]'
                                 }`}
                               >
                                 {selected && <span className="w-2 h-2 rounded-full bg-white" />}
@@ -840,7 +842,7 @@ export default function RoomRequestsClient() {
                                   <p className="text-base font-semibold text-[color:var(--foreground)] break-words leading-snug">
                                     {s.subject_code} — {s.subject_name}
                                   </p>
-                                  {selected && <span className="flex-shrink-0 text-sm font-semibold text-[#3C91E6]">Selected</span>}
+                                  {selected && <span className="flex-shrink-0 text-sm font-semibold text-[#1D5BD6]">Selected</span>}
                                 </div>
                                 <p className="text-sm text-[color:var(--foreground-muted)] mt-1 break-words">
                                   Block {s.block_name} · {s.year_level}
@@ -848,7 +850,7 @@ export default function RoomRequestsClient() {
                                 </p>
                                 <div className="mt-1.5 flex flex-col gap-1">
                                   {sessions.map((ss, i) => (
-                                    <span key={i} className="text-sm text-[#3C91E6] break-words">
+                                    <span key={i} className="text-sm text-[#1D5BD6] break-words">
                                       {formatSessionOption(ss)}
                                       {ss.room_name && ss.room_name !== s.room_name ? ` · ${ss.room_name}` : ''}
                                     </span>
@@ -880,7 +882,7 @@ export default function RoomRequestsClient() {
                             onClick={() => setRequestedRoomId(String(r.id))}
                             className={`text-left rounded-xl border px-4 py-3.5 min-w-0 min-h-12 transition-colors ${
                               selected
-                                ? 'border-[#3C91E6] bg-[#EFF6FF] ring-2 ring-[#3C91E6]/20'
+                                ? 'border-[#1D5BD6] bg-[#EFF6FF] ring-2 ring-[#1D5BD6]/20'
                                 : 'border-[color:var(--border)] bg-[var(--surface-elevated)] hover:bg-[var(--background-secondary)]'
                             }`}
                           >

@@ -1,5 +1,5 @@
 ﻿import { NextRequest, NextResponse } from 'next/server';
-import { query } from '@/server/db';
+import { query, transaction } from '@/server/db';
 import { getAuthUser } from '@/server/auth';
 import { assertBlockProgramAccess } from '@/server/programScope';
 import { ensureBlockCurriculumVersion } from '@/server/migrateCurriculum';
@@ -9,7 +9,7 @@ import { blockCurriculumVersion } from '@/lib/curriculumVersion';
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await getAuthUser(req) as { id?: number; role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const { id } = await params;
@@ -30,19 +30,26 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       [block.program_id, block.year_level, block.semester, version]
     );
 
+    // block_subjects + its companion master_schedule row must commit together —
+    // otherwise a failure between the two inserts leaves an orphaned block_subjects
+    // row with no master_schedule row, which /api/master-schedule (INNER JOINs from
+    // master_schedule) then silently excludes from every "Unassigned" result.
     let added = 0;
     for (const subject of subjects.rows) {
-      const bs = await query(
-        'INSERT INTO block_subjects (block_id, curriculum_id, status) VALUES ($1,$2,\'Unscheduled\') ON CONFLICT (block_id, curriculum_id) DO NOTHING RETURNING id',
-        [id, subject.id]
-      );
-      if (bs.rows.length > 0) {
-        await query(
+      const inserted = await transaction(async client => {
+        const bs = await client.query(
+          'INSERT INTO block_subjects (block_id, curriculum_id, status) VALUES ($1,$2,\'Unscheduled\') ON CONFLICT (block_id, curriculum_id) DO NOTHING RETURNING id',
+          [id, subject.id]
+        );
+        if (bs.rows.length === 0) return false;
+
+        await client.query(
           'INSERT INTO master_schedule (block_subject_id, status, academic_year, semester) VALUES ($1,\'Unassigned\',$2,$3)',
           [bs.rows[0].id, block.academic_year, block.semester]
         );
-        added++;
-      }
+        return true;
+      });
+      if (inserted) added++;
     }
 
     return NextResponse.json({ success: true, added, total: subjects.rows.length });

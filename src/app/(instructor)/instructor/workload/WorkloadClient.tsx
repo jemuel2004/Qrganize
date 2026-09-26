@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import { useVisibilityAwareInterval } from '@/client/hooks/useVisibilityAwareInterval';
+import BackButton from '@/client/components/ui/BackButton';
 import {
   AlertTriangle, Printer, ChevronDown, RefreshCw,
 } from 'lucide-react';
@@ -56,6 +57,8 @@ interface WorkloadLoad {
   lec_room_name: string | null; lab_room_name: string | null;
   day_pattern: string | null; start_time: string | null; end_time: string | null;
   split_overload_units?: number; split_overload_hours?: number;
+  /** The split-off Lec/Lab portion is Praise Load, not Overload. */
+  split_is_praise?: boolean;
   overload_component?: string;
   lec_scheduled?: boolean; lab_scheduled?: boolean;
   lec_start_time?: string | null; lec_end_time?: string | null;
@@ -278,16 +281,17 @@ export default function InstructorWorkloadClient() {
   const regularPrintLoads  = workload?.loads.filter(l => l.load_category === 'Regular') ?? [];
   const overloadPrintLoads = workload?.loads.filter(l => l.load_category === 'Overload') ?? [];
   const praiseSubjectLoads = workload?.loads.filter(l => l.load_category === 'Praise') ?? [];
-  const splitPrintLoads    = workload?.loads.filter(l =>
-    l.load_category === 'Regular' && (
-      isP
-        ? (parseFloat(String(l.split_overload_units)) || 0) > 0.001
-        : (parseFloat(String(l.split_overload_hours)) || 0) > 0.001
-    )
-  ) ?? [];
+  const isSplitRegular = (l: WorkloadLoad) => l.load_category === 'Regular' && (
+    isP
+      ? (parseFloat(String(l.split_overload_units)) || 0) > 0.001
+      : (parseFloat(String(l.split_overload_hours)) || 0) > 0.001
+  );
+  const splitPrintLoads    = workload?.loads.filter(l => isSplitRegular(l) && !l.split_is_praise) ?? [];
+  /* Only the Lec or Lab moved to Praise — the rest of the subject stays Regular */
+  const praiseSplitLoads   = workload?.loads.filter(l => isSplitRegular(l) && l.split_is_praise) ?? [];
 
   const hasOverloadSection = overloadPrintLoads.length > 0 || splitPrintLoads.length > 0;
-  const hasPraiseSection = (workload?.praise ?? []).length > 0 || praiseSubjectLoads.length > 0;
+  const hasPraiseSection = (workload?.praise ?? []).length > 0 || praiseSubjectLoads.length > 0 || praiseSplitLoads.length > 0;
   const effectiveTab: 'regular' | 'overload' | 'praise' =
     (activeTab === 'overload' && !hasOverloadSection)
     || (activeTab === 'praise' && !hasPraiseSection)
@@ -541,6 +545,9 @@ export default function InstructorWorkloadClient() {
 
   const praiseHoursSum = praiseSubjectLoads.reduce((sum, l) => {
     return sum + (parseFloat(String(l.lecture_hours)) || 0) + (parseFloat(String(l.laboratory_hours)) || 0);
+  }, 0) + praiseSplitLoads.reduce((sum, l) => {
+    if (!isP) return sum + (parseFloat(String(l.split_overload_hours)) || 0);
+    return sum + (parseFloat(String(l.overload_component === 'lab' ? l.laboratory_hours : l.lecture_hours)) || 0);
   }, 0) + (workload?.praise ?? []).reduce(
     (sum, p) => sum + (parseFloat(String(p.equivalent_hours)) || 0),
     0,
@@ -575,6 +582,34 @@ export default function InstructorWorkloadClient() {
         };
       })
     ),
+    ...praiseSplitLoads.flatMap((load) => {
+      const oc = (load.overload_component || 'full') as 'lec' | 'lab' | 'full';
+      const val = isP
+        ? (parseFloat(String(load.split_overload_units)) || 0)
+        : (parseFloat(String(load.split_overload_hours)) || 0);
+      return splitLoad(load, isP).filter(r => oc === 'full' || r.type === oc).map((row) => {
+        const hrs = !isP ? val : parseFloat(String(row.type === 'lab' ? load.laboratory_hours : load.lecture_hours)) || 0;
+        const start = row.type === 'lec' ? (load.lec_start_time ?? load.start_time) : (load.lab_start_time ?? load.start_time);
+        const end   = row.type === 'lec' ? (load.lec_end_time ?? load.end_time) : (load.lab_end_time ?? load.end_time);
+        const day   = row.type === 'lec' ? (load.lec_day_pattern ?? load.day_pattern) : (load.lab_day_pattern ?? load.day_pattern);
+        const yearNum = extractYearNum(load.year_level);
+        const occupied = occupiedRangeFromScheduleTimes(start, end);
+        return {
+          key: `${row.key}-split-praise`,
+          slotId: matchOfficialSlot(day, start, end),
+          timeLabel: formatOfficialTimeRange(start, end),
+          rangeStartMin: occupied?.startMin,
+          rangeEndMin: occupied?.endMin,
+          subjectCode: load.subject_code,
+          description: `${row.description} · Source: Regular`,
+          course: `${load.program_code} ${yearNum}${load.block_name}`,
+          students: load.number_of_students > 0 ? String(load.number_of_students) : '',
+          units: formatOfficialNumber(val),
+          hours: formatOfficialNumber(hrs),
+          room: row.room_name || '',
+        };
+      });
+    }),
     ...(workload?.praise ?? []).map(p => ({
     key: `praise-${p.id}`,
     slotId: null,
@@ -609,7 +644,7 @@ export default function InstructorWorkloadClient() {
       loads: kind === 'overload'
         ? [...overloadPrintLoads, ...splitPrintLoads]
         : kind === 'praise'
-          ? praiseSubjectLoads
+          ? [...praiseSubjectLoads, ...praiseSplitLoads]
           : (workload.loads ?? []),
       praise: kind === 'praise' ? (workload.praise ?? []) : (kind === 'regular' ? (workload.praise ?? []) : []),
       deductions: kind === 'regular' ? (workload.deductions ?? []) : [],
@@ -649,18 +684,16 @@ export default function InstructorWorkloadClient() {
       {/* ── Page header ───────────────────────────────────────────────── */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-5">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold text-[#1E3A5F]">My Workload</h1>
-          <p className="text-[#64748B] text-sm mt-0.5">
-            Read-only view of your teaching load and assignments
-          </p>
+          <BackButton />
+          <h1 className="text-2xl font-bold text-[#0B2A5B]">My Workload</h1>
         </div>
         {workload && (
           <button
             onClick={handlePrint}
             className="inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg text-sm font-semibold text-white transition-colors flex-shrink-0 self-start"
-            style={{ backgroundColor: '#3C91E6' }}
+            style={{ backgroundColor: '#1D5BD6' }}
             onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#2E7DD1'; }}
-            onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#3C91E6'; }}
+            onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#1D5BD6'; }}
           >
             <Printer className="w-4 h-4" />
             Print {effectiveTab === 'regular' ? 'Regular Load' : effectiveTab === 'overload' ? 'Overload' : 'Praise Load'}
@@ -691,7 +724,7 @@ export default function InstructorWorkloadClient() {
             <p className="text-xs font-semibold text-[#64748B] uppercase tracking-wide">
               Active academic period
             </p>
-            <p className="text-sm font-semibold text-[#1E3A5F] mt-0.5">
+            <p className="text-sm font-semibold text-[#0B2A5B] mt-0.5">
               {semester && academicYear
                 ? `${semester} — A.Y. ${academicYear}`
                 : periodReady
@@ -703,7 +736,7 @@ export default function InstructorWorkloadClient() {
             type="button"
             onClick={() => fetchWorkload()}
             disabled={loading}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-[#64748B] hover:text-[#1E3A5F] hover:bg-[#F8FAFC] border border-[#E2E8F0] transition-colors disabled:opacity-50 self-start"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-[#64748B] hover:text-[#0B2A5B] hover:bg-[#F8FAFC] border border-[#E2E8F0] transition-colors disabled:opacity-50 self-start"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
             Refresh
@@ -724,7 +757,7 @@ export default function InstructorWorkloadClient() {
       {/* ── Error ─────────────────────────────────────────────────────── */}
       {!showSkeleton && error && (
         <div className="bg-white border border-[#E2E8F0] rounded-lg px-4 py-6">
-          <p className="text-sm font-semibold text-[#1E3A5F] flex items-center gap-2">
+          <p className="text-sm font-semibold text-[#0B2A5B] flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-[#DC2626]" />
             Failed to load workload data
           </p>
@@ -732,7 +765,7 @@ export default function InstructorWorkloadClient() {
           <button
             type="button"
             onClick={() => fetchWorkload()}
-            className="mt-3 px-3.5 py-2 bg-[#3C91E6] hover:bg-[#2E7DD1] text-white rounded-lg text-sm font-semibold transition-colors"
+            className="mt-3 px-3.5 py-2 bg-[#1D5BD6] hover:bg-[#2E7DD1] text-white rounded-lg text-sm font-semibold transition-colors"
           >
             Try Again
           </button>
@@ -741,7 +774,7 @@ export default function InstructorWorkloadClient() {
 
       {!showSkeleton && !error && noPeriod && (
         <div className="bg-white border border-[#E2E8F0] rounded-lg px-4 py-6">
-          <p className="text-sm font-semibold text-[#1E3A5F]">No active academic period is currently configured.</p>
+          <p className="text-sm font-semibold text-[#0B2A5B]">No active academic period is currently configured.</p>
           <p className="text-sm text-[#64748B] mt-1">
             Workload will appear here once an administrator sets the active school year and semester.
           </p>
@@ -755,7 +788,7 @@ export default function InstructorWorkloadClient() {
         const modalExceeded = Math.max(0, modalRegVal - (s?.regular_load_limit || REGULAR_LOAD_MAX_UNITS));
         const modalIsExceeded = modalExceeded > 0.001;
         const overloadCount = overloadPrintLoads.length + splitPrintLoads.length;
-        const praiseCount = (workload.praise ?? []).length + praiseSubjectLoads.length;
+        const praiseCount = (workload.praise ?? []).length + praiseSubjectLoads.length + praiseSplitLoads.length;
 
         return (
           <>
@@ -764,10 +797,10 @@ export default function InstructorWorkloadClient() {
               <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 sm:p-5 text-center shadow-sm">
                 <div
                   className="text-2xl sm:text-3xl font-black mb-1.5 tabular-nums"
-                  style={{ color: '#1E3A5F' }}
+                  style={{ color: '#0B2A5B' }}
                 >
                   {modalRegVal.toFixed(2)}
-                  <span className="text-base sm:text-lg font-bold text-[#94A3B8]"> / {s?.regular_load_limit}</span>
+                  <span className="text-base sm:text-lg font-bold text-[#94A3B8]"> / {Math.round(Number(s?.regular_load_limit ?? 0))}</span>
                 </div>
                 <div className="text-sm font-medium" style={{ color: '#64748B' }}>
                   {isP ? 'Regular Load' : 'Regular Hours'}
@@ -780,7 +813,7 @@ export default function InstructorWorkloadClient() {
               <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 sm:p-5 text-center shadow-sm">
                 <div
                   className="text-2xl sm:text-3xl font-black mb-1.5 tabular-nums"
-                  style={{ color: '#1E3A5F' }}
+                  style={{ color: '#0B2A5B' }}
                 >
                   {olVal.toFixed(2)}
                 </div>
@@ -793,7 +826,7 @@ export default function InstructorWorkloadClient() {
               <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 sm:p-5 text-center shadow-sm">
                 <div
                   className="text-2xl sm:text-3xl font-black mb-1.5 tabular-nums"
-                  style={{ color: '#1E3A5F' }}
+                  style={{ color: '#0B2A5B' }}
                 >
                   {modalTotal.toFixed(2)}
                 </div>
@@ -808,7 +841,7 @@ export default function InstructorWorkloadClient() {
               <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 sm:p-5 text-center shadow-sm">
                 <div
                   className="text-2xl sm:text-3xl font-black mb-1.5 tabular-nums"
-                  style={{ color: modalIsExceeded ? '#DC2626' : '#1E3A5F' }}
+                  style={{ color: modalIsExceeded ? '#DC2626' : '#0B2A5B' }}
                 >
                   {modalExceeded.toFixed(2)}
                 </div>
@@ -844,11 +877,11 @@ export default function InstructorWorkloadClient() {
                   onClick={() => selectTab('regular')}
                   className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-semibold border transition-colors ${
                     effectiveTab === 'regular'
-                      ? 'bg-[#3C91E6] text-white border-[#3C91E6]'
-                      : 'bg-white text-[#64748B] border-[#E2E8F0] hover:text-[#1E3A5F] hover:border-[#CBD5E1]'
+                      ? 'bg-[#1D5BD6] text-white border-[#1D5BD6]'
+                      : 'bg-white text-[#64748B] border-[#E2E8F0] hover:text-[#0B2A5B] hover:border-[#CBD5E1]'
                   }`}
                 >
-                  Regular Load
+                  Workload
                   <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold ${
                     effectiveTab === 'regular' ? 'bg-white/20' : 'bg-[#F1F5F9] text-[#64748B]'
                   }`}>
@@ -862,8 +895,8 @@ export default function InstructorWorkloadClient() {
                     onClick={() => selectTab('overload')}
                     className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-semibold border transition-colors ${
                       effectiveTab === 'overload'
-                        ? 'bg-[#3C91E6] text-white border-[#3C91E6]'
-                        : 'bg-white text-[#64748B] border-[#E2E8F0] hover:text-[#1E3A5F] hover:border-[#CBD5E1]'
+                        ? 'bg-[#1D5BD6] text-white border-[#1D5BD6]'
+                        : 'bg-white text-[#64748B] border-[#E2E8F0] hover:text-[#0B2A5B] hover:border-[#CBD5E1]'
                     }`}
                   >
                     Overload
@@ -881,8 +914,8 @@ export default function InstructorWorkloadClient() {
                     onClick={() => selectTab('praise')}
                     className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-semibold border transition-colors ${
                       effectiveTab === 'praise'
-                        ? 'bg-[#3C91E6] text-white border-[#3C91E6]'
-                        : 'bg-white text-[#64748B] border-[#E2E8F0] hover:text-[#1E3A5F] hover:border-[#CBD5E1]'
+                        ? 'bg-[#1D5BD6] text-white border-[#1D5BD6]'
+                        : 'bg-white text-[#64748B] border-[#E2E8F0] hover:text-[#0B2A5B] hover:border-[#CBD5E1]'
                     }`}
                   >
                     Praise Load
@@ -898,7 +931,7 @@ export default function InstructorWorkloadClient() {
                   type="button"
                   aria-expanded={tableVisible}
                   onClick={() => setTableVisible(v => !v)}
-                  className="inline-flex items-center gap-1 ml-auto px-2.5 py-2 text-sm font-semibold text-[#3C91E6] hover:text-[#2E7DD1] transition-colors"
+                  className="inline-flex items-center gap-1 ml-auto px-2.5 py-2 text-sm font-semibold text-[#1D5BD6] hover:text-[#2E7DD1] transition-colors"
                 >
                   <ChevronDown
                     className={`w-4 h-4 transition-transform duration-300 ease-in-out ${tableVisible ? 'rotate-180' : 'rotate-0'}`}
@@ -912,7 +945,7 @@ export default function InstructorWorkloadClient() {
                   {effectiveTab === 'regular' && (
                     regularPrintLoads.length === 0 ? (
                       <div className="px-4 py-8 text-center">
-                        <p className="text-sm font-semibold text-[#1E3A5F]">No regular workload assigned</p>
+                        <p className="text-sm font-semibold text-[#0B2A5B]">No regular workload assigned</p>
                         <p className="text-sm text-[#64748B] mt-1">
                           No regular load subjects for the active academic period.
                         </p>

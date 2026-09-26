@@ -8,13 +8,17 @@ import {
   assertEmailAvailable,
   assertUsernameAllowed,
 } from '@/server/emailIdentity';
+import { PRIORITY_SUBJECTS_SUBQUERY, setPrioritySubjects, type PrioritySubject } from '@/server/facultyPrioritySubjects';
+import { ensureFacultyProfileColumns } from '@/server/schema-guard';
 
 export async function GET(req: NextRequest) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    if (!auth || !['admin', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+
+    await ensureFacultyProfileColumns();
 
     const { searchParams } = new URL(req.url);
     const search   = searchParams.get('search')   || '';
@@ -40,9 +44,11 @@ export async function GET(req: NextRequest) {
         f.employment_status,
         f.program_id,
         f.profile_picture,
+        f.specialization,
         f.is_active    AS faculty_active,
         p.code         AS program_code,
-        p.name         AS program_name
+        p.name         AS program_name,
+        ${PRIORITY_SUBJECTS_SUBQUERY} AS priority_subjects
       FROM instructor_accounts ia
       JOIN faculty f ON ia.faculty_id = f.id
       LEFT JOIN programs p ON f.program_id = p.id
@@ -84,12 +90,12 @@ export async function POST(req: NextRequest) {
     const auth = await getAuthUser(req);
     if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const role = auth.role as string;
-    if (role !== 'admin' && role !== 'department_chair') {
+    if (role !== 'admin' && role !== 'program_chair') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
     const body = await req.json();
-    const { first_name, last_name, middle_name, program_id, position, username, email, password } = body;
+    const { first_name, last_name, middle_name, program_id, position, username, email, password, priority_subjects } = body;
 
     // Required field validation
     if (!first_name?.trim())
@@ -175,13 +181,16 @@ export async function POST(req: NextRequest) {
         [emailCheck.email, accountId]
       );
 
+      await setPrioritySubjects(client, facultyId, priority_subjects as PrioritySubject[] | undefined);
+
       const combined = await client.query(`
         SELECT
           ia.id AS account_id, ia.faculty_id, ia.username, ia.email, ia.role,
           ia.is_active, ia.created_at AS account_created_at, ia.updated_at AS account_updated_at,
           f.name, f.first_name, f.last_name, f.middle_name, f.employee_id,
           f.position, f.employment_status, f.program_id, f.profile_picture,
-          p.code AS program_code, p.name AS program_name
+          p.code AS program_code, p.name AS program_name,
+          ${PRIORITY_SUBJECTS_SUBQUERY} AS priority_subjects
         FROM instructor_accounts ia
         JOIN faculty f ON ia.faculty_id = f.id
         LEFT JOIN programs p ON f.program_id = p.id

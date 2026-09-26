@@ -47,8 +47,8 @@ const CFG: Record<ToastType, {
     icon:     <Info className="w-4.5 h-4.5" />,
     bg:       'bg-white',
     border:   'border border-[#BFDBFE]',
-    leftBar:  'bg-[#3C91E6]',
-    iconWrap: 'bg-[#DBEAFE] text-[#2563EB]',
+    leftBar:  'bg-[#1D5BD6]',
+    iconWrap: 'bg-[#DBEAFE] text-[#164BB5]',
     title:    'text-[#1E293B]',
     label:    'Info',
     message:  'text-[#64748B]',
@@ -95,7 +95,7 @@ export default function ToastContainer({
 
             <div className="flex items-center gap-3 px-4 py-3.5 pl-5">
               {/* Icon */}
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${c.iconWrap}`}>
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${c.iconWrap} ${item.type === 'success' ? 'toast-check-pop' : ''}`}>
                 {c.icon}
               </div>
 

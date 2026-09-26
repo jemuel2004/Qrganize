@@ -49,7 +49,7 @@ test('export model is importable and ignores branding, totals, and repeated head
   assert.equal(result.rows[2].semester, '2nd Semester');
   assert.ok(result.rows.every(row => !/total/i.test(row.subjectCode)));
   assert.ok(result.rows.every(row => row.subjectCode !== 'COURSE CODE'));
-  assert.equal(sheet.rows.some(row => row.kind === 'docTitle'), false);
+  assert.equal(sheet.rows.some(row => (row.kind as string) === 'docTitle'), false);
   assert.ok(!sheet.rows.some(row => String(row.values[0]).trim() === 'Curriculum'));
 });
 
@@ -99,7 +99,7 @@ test('generated workbook has no frozen pane and used range matches data rows', a
     groups,
   });
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(buffer);
+  await wb.xlsx.load(buffer as unknown as ArrayBuffer);
   const ws = wb.worksheets[0];
   assert.equal(ws.name, 'Curriculum');
   assert.equal(ws.rowCount, model.lastRow);

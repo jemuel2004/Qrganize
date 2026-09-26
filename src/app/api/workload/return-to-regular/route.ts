@@ -2,11 +2,12 @@
 import { transaction } from '@/server/db';
 import { getAuthUser } from '@/server/auth';
 import { syncWorkloadMonitoringNotifications } from '@/server/workloadMonitoring';
+import { canAccessMasterSchedule } from '@/server/programScope';
 
 export async function POST(req: NextRequest) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { faculty_id, master_schedule_id, return_units } = await req.json();
 
@@ -15,6 +16,10 @@ export async function POST(req: NextRequest) {
         { error: 'faculty_id and master_schedule_id are required' },
         { status: 400 }
       );
+    }
+
+    if (!(await canAccessMasterSchedule(auth, master_schedule_id))) {
+      return NextResponse.json({ error: 'Schedule not found' }, { status: 404 });
     }
 
     const result = await transaction(async (client) => {
@@ -140,7 +145,11 @@ export async function POST(req: NextRequest) {
           'DELETE FROM overloads WHERE faculty_id=$1 AND master_schedule_id=$2',
           [faculty_id, master_schedule_id]
         );
-        return { message: 'Overload portion fully returned to Regular Load.' };
+        return {
+          message: overloadRow.is_praise
+            ? 'Praise Load portion returned to Regular Load.'
+            : 'Overload portion fully returned to Regular Load.',
+        };
       }
 
       // Partial return: add returnValue to regular, subtract from overload

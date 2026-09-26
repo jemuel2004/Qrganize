@@ -89,7 +89,7 @@ function NotificationRow({
       transition={{ duration: NAV_DURATION, ease: NAV_EASE }}
       className={[
         'w-full text-left px-3 sm:px-4 py-3.5 border-b border-[#F1F5F9] last:border-0 min-h-11',
-        'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#2563EB]/30',
+        'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#164BB5]/30',
         n.is_read ? 'bg-white' : 'bg-[#F8FAFC]',
       ].join(' ')}
     >
@@ -113,7 +113,7 @@ function NotificationRow({
         {!n.is_read && (
           <span
             aria-label="Unread"
-            className="flex-shrink-0 w-2 h-2 rounded-full bg-[#2563EB] mt-1.5"
+            className="flex-shrink-0 w-2 h-2 rounded-full bg-[#164BB5] mt-1.5"
           />
         )}
       </div>
@@ -182,14 +182,14 @@ export default function NotificationBell({ theme = 'light' }: NotificationBellPr
   const bellCls =
     theme === 'brand'
       ? open
-        ? 'text-[#3074B8] bg-white shadow-sm'
+        ? 'text-[#12408F] bg-white shadow-sm'
         : 'text-white bg-white/25 ring-1 ring-inset ring-white/40 hover:bg-white/35'
       : theme === 'dark'
         ? open
           ? 'text-white bg-white/15'
           : 'text-white hover:bg-white/10'
         : open
-          ? 'text-[#2563EB] bg-[#EFF6FF]'
+          ? 'text-[#164BB5] bg-[#EFF6FF]'
           : 'text-[#64748B] hover:bg-[#F1F5F9]';
 
   const badgeRing =
@@ -310,7 +310,7 @@ export default function NotificationBell({ theme = 'light' }: NotificationBellPr
                     type="button"
                     onClick={markAllRead}
                     aria-label="Mark all notifications as read"
-                    className="min-h-11 px-2 rounded-lg text-[12px] font-semibold text-[#2563EB] hover:bg-[#EFF6FF] whitespace-nowrap"
+                    className="min-h-11 px-2 rounded-lg text-[12px] font-semibold text-[#164BB5] hover:bg-[#EFF6FF] whitespace-nowrap"
                   >
                     Mark all as read
                   </button>
@@ -389,7 +389,7 @@ export default function NotificationBell({ theme = 'light' }: NotificationBellPr
               <div className="flex-shrink-0 px-4 py-2.5 border-t border-[#E5E7EB] bg-white text-center">
                 <button
                   type="button"
-                  className="min-h-11 text-[13px] font-semibold text-[#2563EB] hover:text-[#1D4ED8]"
+                  className="min-h-11 text-[13px] font-semibold text-[#164BB5] hover:text-[#1D4ED8]"
                   onClick={() => { markAllRead(); setOpen(false); }}
                 >
                   Close

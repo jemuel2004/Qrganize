@@ -4,19 +4,33 @@ import { getAuthUser } from '@/server/auth';
 import { ensureCurriculumFields } from '@/server/migrateCurriculum';
 import { normalizeYearLevel, normalizeSemester } from '@/server/normalizeCurriculum';
 import { categoryFromHours } from '@/lib/subjectCategory';
+import { canAccessProgram } from '@/server/programScope';
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    const auth = await getAuthUser(req) as { role?: string; program_id?: number | null } | null;
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     await ensureCurriculumFields();
 
     const { id } = await params;
+
+    if (auth.role === 'program_chair') {
+      const ownerCheck = await query('SELECT program_id FROM curriculums WHERE id = $1', [id]);
+      if (ownerCheck.rows.length === 0) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+      if (!(await canAccessProgram(auth, ownerCheck.rows[0].program_id))) {
+        return NextResponse.json({ error: 'Not found' }, { status: 404 });
+      }
+    }
+
     const { program_id, year_level, semester, subject_code, subject_name,
             lecture_hours, laboratory_hours, units, prerequisites, grade } = await req.json();
+
+    if (!(await canAccessProgram(auth, Number(program_id)))) {
+      return NextResponse.json({ error: 'You can only manage curriculum for your assigned program.' }, { status: 403 });
+    }
 
     const category = categoryFromHours(lecture_hours, laboratory_hours);
 
@@ -52,11 +66,20 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    const auth = await getAuthUser(req) as { role?: string; program_id?: number | null } | null;
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const { id } = await params;
+
+    if (auth.role === 'program_chair') {
+      const ownerCheck = await query('SELECT program_id FROM curriculums WHERE id = $1', [id]);
+      if (ownerCheck.rows.length === 0) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+      if (!(await canAccessProgram(auth, ownerCheck.rows[0].program_id))) {
+        return NextResponse.json({ error: 'Not found' }, { status: 404 });
+      }
+    }
+
     await query('UPDATE curriculums SET is_active=false, updated_at=NOW() WHERE id=$1', [id]);
     return NextResponse.json({ success: true });
   } catch (error) {

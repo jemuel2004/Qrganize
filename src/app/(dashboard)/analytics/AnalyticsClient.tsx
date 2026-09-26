@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useVisibilityAwareInterval } from '@/client/hooks/useVisibilityAwareInterval';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/client/hooks/useMinLoading';
 import { PageLoadTransition } from '@/client/components/ui/PageLoadTransition';
+import BackButton from '@/client/components/ui/BackButton';
 import { CardSkeleton, TableSkeleton } from '@/client/components/ui/skeletons';
 import Link from 'next/link';
 import {
@@ -70,7 +71,7 @@ const SCAN_STYLE: Record<string, { bg: string; text: string; dot: string; label:
   Invalid: { bg: 'bg-slate-100',  text: 'text-slate-600',   dot: 'bg-slate-400',   label: 'Invalid' },
 };
 
-const PROGRAM_COLORS = ['#3C91E6', '#3074B8', '#1E3A5F', '#64748B', '#94A3B8', '#60A5FA'];
+const PROGRAM_COLORS = ['#1D5BD6', '#12408F', '#0B2A5B', '#64748B', '#94A3B8', '#60A5FA'];
 
 function num(v: string | number | undefined): number {
   const n = typeof v === 'number' ? v : parseInt(String(v ?? '0'), 10);
@@ -114,14 +115,14 @@ function StatCard({ label, value }: { label: string; value: number }) {
   return (
     <div className="min-w-0 rounded-xl border border-[#E2E8F0] bg-white px-4 py-3.5">
       <p className="text-xs text-[#64748B] font-medium truncate">{label}</p>
-      <p className="mt-1.5 text-2xl font-semibold tabular-nums tracking-tight text-[#1E3A5F]">{value}</p>
+      <p className="mt-1.5 text-2xl font-semibold tabular-nums tracking-tight text-[#0B2A5B]">{value}</p>
     </div>
   );
 }
 
 // ─── Vertical Bar Chart ───────────────────────────────────────────────────────
 
-function VerticalBars({ bars, barColor = 'bg-[#3C91E6]', height = 'h-28' }: {
+function VerticalBars({ bars, barColor = 'bg-[#1D5BD6]', height = 'h-28' }: {
   bars: { label: string; value: number; sublabel?: string }[];
   barColor?: string;
   height?: string;
@@ -152,7 +153,7 @@ function VerticalBars({ bars, barColor = 'bg-[#3C91E6]', height = 'h-28' }: {
               />
             </div>
             {b.value > 0 && (
-              <span className="text-[10px] font-semibold text-[#1E3A5F] tabular-nums leading-none">{b.value}</span>
+              <span className="text-[10px] font-semibold text-[#0B2A5B] tabular-nums leading-none">{b.value}</span>
             )}
             <span
               className="text-[10px] font-medium text-slate-500 text-center leading-tight w-full truncate"
@@ -181,7 +182,7 @@ function Panel({ title, subtitle, action, children, className = '', bodyClassNam
     <section className={`bg-white rounded-xl border border-[#E2E8F0] flex flex-col min-w-0 ${className}`}>
       <div className="flex items-start justify-between gap-3 px-5 py-4">
         <div className="min-w-0">
-          <h2 className="text-sm font-semibold text-[#1E3A5F] leading-tight">{title}</h2>
+          <h2 className="text-sm font-semibold text-[#0B2A5B] leading-tight">{title}</h2>
           {subtitle ? <p className="text-xs text-[#64748B] mt-1">{subtitle}</p> : null}
         </div>
         {action}
@@ -261,11 +262,11 @@ export default function AnalyticsPage() {
       <div className="p-8 flex items-center justify-center">
         <div className="text-center max-w-sm">
           <BarChart3 className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-          <p className="text-[#1E3A5F] font-semibold text-base">{error}</p>
+          <p className="text-[#0B2A5B] font-semibold text-base">{error}</p>
           <button
             type="button"
             onClick={() => load()}
-            className="mt-4 inline-flex items-center gap-2 text-sm text-[#3C91E6] hover:text-[#2E7DD1] font-semibold"
+            className="mt-4 inline-flex items-center gap-2 text-sm text-[#1D5BD6] hover:text-[#2E7DD1] font-semibold"
           >
             <RefreshCw className="w-4 h-4" /> Try again
           </button>
@@ -304,7 +305,8 @@ export default function AnalyticsPage() {
 
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight text-[#1E3A5F]">Analytics</h1>
+          <BackButton />
+          <h1 className="text-2xl font-semibold tracking-tight text-[#0B2A5B]">Analytics</h1>
           <p className="text-sm text-[#64748B] mt-1">
             {metaHint || 'System overview'}
             {mounted && lastUpdated ? (
@@ -334,9 +336,9 @@ export default function AnalyticsPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
         <Panel
           title="Workload by program"
-          subtitle="Assigned subjects from Instructor Workload"
+          subtitle="Assigned subjects from Faculty Workload"
           action={
-            <Link href="/workload" className="text-xs font-medium text-[#64748B] hover:text-[#1E3A5F] inline-flex items-center gap-0.5 flex-shrink-0">
+            <Link href="/workload" className="text-xs font-medium text-[#64748B] hover:text-[#0B2A5B] inline-flex items-center gap-0.5 flex-shrink-0">
               Workload <ChevronRight className="w-3.5 h-3.5" />
             </Link>
           }
@@ -344,12 +346,12 @@ export default function AnalyticsPage() {
           {workloadFailed ? (
             <CompactEmpty
               message="Unable to load workload distribution."
-              hint="Try Refresh. If it persists, check Instructor Workload data."
+              hint="Try Refresh. If it persists, check Faculty Workload data."
             />
           ) : workloadRows.length === 0 || workloadTotal === 0 ? (
             <CompactEmpty
               message="No workload distribution data available."
-              hint="Assign subjects in Instructor Workload to see program totals."
+              hint="Assign subjects in Faculty Workload to see program totals."
             />
           ) : (
             <div className="space-y-4">
@@ -376,13 +378,13 @@ export default function AnalyticsPage() {
                         className="w-2 h-2 rounded-full flex-shrink-0"
                         style={{ backgroundColor: PROGRAM_COLORS[i % PROGRAM_COLORS.length] }}
                       />
-                      <span className="font-medium text-[#1E3A5F] w-14 truncate" title={r.program_code}>
+                      <span className="font-medium text-[#0B2A5B] w-14 truncate" title={r.program_code}>
                         {r.program_code}
                       </span>
                       <span className="text-[#64748B] truncate flex-1 min-w-0 hidden sm:inline" title={r.program_name}>
                         {r.program_name}
                       </span>
-                      <span className="font-medium text-[#1E3A5F] tabular-nums">{count}</span>
+                      <span className="font-medium text-[#0B2A5B] tabular-nums">{count}</span>
                       <span className="text-[#94A3B8] tabular-nums w-12 text-right">{`${pct.toFixed(0)}%`}</span>
                     </div>
                   );
@@ -396,12 +398,12 @@ export default function AnalyticsPage() {
           title="Schedules by day"
           subtitle="Active classes per weekday"
           action={
-            <Link href="/scheduling" className="text-xs font-medium text-[#64748B] hover:text-[#1E3A5F] inline-flex items-center gap-0.5 flex-shrink-0">
+            <Link href="/scheduling" className="text-xs font-medium text-[#64748B] hover:text-[#0B2A5B] inline-flex items-center gap-0.5 flex-shrink-0">
               Schedule <ChevronRight className="w-3.5 h-3.5" />
             </Link>
           }
         >
-          <VerticalBars bars={dayBars} barColor="bg-[#3C91E6]" height="h-32" />
+          <VerticalBars bars={dayBars} barColor="bg-[#1D5BD6]" height="h-32" />
         </Panel>
       </div>
 
@@ -409,7 +411,7 @@ export default function AnalyticsPage() {
         title="Room utilization"
         subtitle="Scheduled sessions vs scans in the last 7 days"
         action={
-          <Link href="/rooms" className="text-xs font-medium text-[#64748B] hover:text-[#1E3A5F] inline-flex items-center gap-0.5 flex-shrink-0">
+          <Link href="/rooms" className="text-xs font-medium text-[#64748B] hover:text-[#0B2A5B] inline-flex items-center gap-0.5 flex-shrink-0">
             Rooms <ChevronRight className="w-3.5 h-3.5" />
           </Link>
         }
@@ -448,16 +450,16 @@ export default function AnalyticsPage() {
                     : 'Idle';
                 return (
                   <tr key={room.id} className="hover:bg-[#F8FAFC]">
-                    <td className="px-5 py-2.5 font-medium text-[#1E3A5F] whitespace-nowrap">{room.room_name}</td>
+                    <td className="px-5 py-2.5 font-medium text-[#0B2A5B] whitespace-nowrap">{room.room_name}</td>
                     <td className="px-3 py-2.5 text-[#475569] whitespace-nowrap">{room.room_type}</td>
                     <td className="px-3 py-2.5 text-[#64748B] hidden sm:table-cell">{room.building}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums text-[#1E3A5F]">{scheduled}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums text-[#1E3A5F]">{scannedCnt}</td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-[#0B2A5B]">{scheduled}</td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-[#0B2A5B]">{scannedCnt}</td>
                     <td className="px-3 py-2.5">
                       <div className="flex items-center gap-2 min-w-[100px]">
                         <div className="flex-1 h-1.5 bg-[#F1F5F9] rounded-full overflow-hidden">
                           <div
-                            className="h-full rounded-full bg-[#3C91E6]"
+                            className="h-full rounded-full bg-[#1D5BD6]"
                             style={{ width: `${utilPct}%` }}
                           />
                         </div>
@@ -477,7 +479,7 @@ export default function AnalyticsPage() {
         title="Recent activity"
         subtitle="Latest QR scan events"
         action={
-          <Link href="/room-utilization" className="text-xs font-medium text-[#64748B] hover:text-[#1E3A5F] inline-flex items-center gap-0.5 flex-shrink-0">
+          <Link href="/room-utilization" className="text-xs font-medium text-[#64748B] hover:text-[#0B2A5B] inline-flex items-center gap-0.5 flex-shrink-0">
             Scan history <ChevronRight className="w-3.5 h-3.5" />
           </Link>
         }
@@ -498,7 +500,7 @@ export default function AnalyticsPage() {
                 <div key={act.id} className="flex items-center gap-3 px-5 py-3 hover:bg-[#F8FAFC]">
                   <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${style.dot}`} />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm text-[#1E3A5F] truncate">
+                    <p className="text-sm text-[#0B2A5B] truncate">
                       <span className="font-medium">{act.room_name}</span>
                       <span className="text-[#64748B]"> · {act.actor_name}</span>
                     </p>

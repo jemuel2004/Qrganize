@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useToast } from '@/client/context/ToastContext';
 import { useScrollLock } from '@/client/hooks/useScrollLock';
 import ImageCropDialog from '@/client/components/ui/ImageCropDialog';
+import BackButton from '@/client/components/ui/BackButton';
 import { useSystemLogo } from '@/client/hooks/useSystemLogo';
 import { PageLoadTransition } from '@/client/components/ui/PageLoadTransition';
 import { FormSkeleton } from '@/client/components/ui/skeletons';
@@ -145,7 +146,7 @@ function LogoUploadContent() {
               <div className="w-full h-full bg-[#F8FAFC]" />
             )}
             {preview && (
-              <div className="absolute top-1 right-1 bg-[#3C91E6] rounded-full px-1.5 py-0.5 text-[10px] font-bold text-white leading-none">
+              <div className="absolute top-1 right-1 bg-[#1D5BD6] rounded-full px-1.5 py-0.5 text-[10px] font-bold text-white leading-none">
                 NEW
               </div>
             )}
@@ -177,7 +178,7 @@ function LogoUploadContent() {
                 <button
                   onClick={uploadLogo}
                   disabled={uploading}
-                  className="flex items-center gap-2 bg-[#3C91E6] hover:bg-[#2563EB] disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition-colors shadow-sm"
+                  className="flex items-center gap-2 bg-[#1D5BD6] hover:bg-[#164BB5] disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition-colors shadow-sm"
                 >
                   {uploading
                     ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Uploading…</>
@@ -196,7 +197,7 @@ function LogoUploadContent() {
             <div className="space-y-2.5">
               <button
                 onClick={() => fileRef.current?.click()}
-                className="flex items-center gap-2 bg-[#EFF6FF] hover:bg-[#DBEAFE] border border-[#BFDBFE] text-[#3C91E6] px-4 py-2.5 rounded-xl text-sm font-medium transition-colors w-full sm:w-auto"
+                className="flex items-center gap-2 bg-[#EFF6FF] hover:bg-[#DBEAFE] border border-[#BFDBFE] text-[#1D5BD6] px-4 py-2.5 rounded-xl text-sm font-medium transition-colors w-full sm:w-auto"
               >
                 <ImagePlus className="w-4 h-4" />
                 {currentLogo ? 'Replace Logo' : 'Upload Logo'}
@@ -266,7 +267,7 @@ function AppearanceSection() {
               : <Sun className="w-4 h-4 text-amber-500" />}
           </div>
           <div>
-            <p className="text-sm font-semibold text-[#1E3A5F]">Dark Mode</p>
+            <p className="text-sm font-semibold text-[#0B2A5B]">Dark Mode</p>
             <p className="text-xs text-[#64748B] mt-0.5">
               {isDark ? 'Currently using dark theme' : 'Currently using light theme'}
             </p>
@@ -280,9 +281,9 @@ function AppearanceSection() {
           onClick={toggle}
           aria-label="Toggle dark mode"
           aria-pressed={isDark}
-          className={`relative inline-flex h-7 w-12 flex-shrink-0 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-[#3C91E6] focus:ring-offset-2 ${
+          className={`relative inline-flex h-7 w-12 flex-shrink-0 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-[#1D5BD6] focus:ring-offset-2 ${
             isDark
-              ? 'bg-[#3C91E6] focus:ring-offset-[#111827]'
+              ? 'bg-[#1D5BD6] focus:ring-offset-[#111827]'
               : 'bg-[#CBD5E1] focus:ring-offset-white'
           }`}
         >
@@ -324,8 +325,8 @@ function Input({
       onChange={e => onChange(e.target.value)}
       placeholder={placeholder}
       disabled={disabled}
-      className={`w-full border rounded-xl px-3.5 py-2.5 text-sm text-[#1E3A5F] placeholder-[#CBD5E1]
-        focus:outline-none focus:ring-2 focus:ring-[#3C91E6] focus:border-[#3C91E6]
+      className={`w-full border rounded-xl px-3.5 py-2.5 text-sm text-[#0B2A5B] placeholder-[#CBD5E1]
+        focus:outline-none focus:ring-2 focus:ring-[#1D5BD6] focus:border-[#1D5BD6]
         transition-all duration-150 disabled:bg-[#F8FAFC] disabled:text-[#94A3B8] disabled:cursor-not-allowed ${
         error ? 'border-red-300 bg-red-50' : 'border-[#CBD5E1] bg-white'
       }`}
@@ -389,7 +390,7 @@ function AdminProfilePicture() {
   if (!loaded) {
     return (
       <div className="flex justify-center py-5">
-        <div className="w-5 h-5 border-2 border-[#E2E8F0] border-t-[#3C91E6] rounded-full animate-spin" />
+        <div className="w-5 h-5 border-2 border-[#E2E8F0] border-t-[#1D5BD6] rounded-full animate-spin" />
       </div>
     );
   }
@@ -452,7 +453,7 @@ function OwnProfileSettings() {
 
   if (loading) return (
     <div className="flex items-center justify-center py-6">
-      <div className="w-5 h-5 border-2 border-[#E2E8F0] border-t-[#3C91E6] rounded-full animate-spin" />
+      <div className="w-5 h-5 border-2 border-[#E2E8F0] border-t-[#1D5BD6] rounded-full animate-spin" />
     </div>
   );
 
@@ -482,7 +483,7 @@ function OwnProfileSettings() {
           <button
             onClick={save}
             disabled={saving}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-[#3C91E6] hover:bg-[#2563EB] disabled:opacity-50 text-white shadow-sm transition-all flex-shrink-0"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-[#1D5BD6] hover:bg-[#164BB5] disabled:opacity-50 text-white shadow-sm transition-all flex-shrink-0"
           >
             {saving ? <><Spinner />Saving…</> : <><CheckCircle className="w-4 h-4" />Save Profile</>}
           </button>
@@ -539,7 +540,7 @@ function ChangeOwnPassword({ onSuccess }: { onSuccess?: () => void }) {
       <FieldRow label="Confirm New Password">
         <PasswordInput value={form.confirm} onChange={v => setForm(f => ({ ...f, confirm: v }))} placeholder="Re-enter new password" />
       </FieldRow>
-      <button onClick={changePassword} disabled={saving || !form.current || !form.next || !form.confirm} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-[#3C91E6] hover:bg-[#2563EB] disabled:opacity-50 text-white shadow-sm transition-all">
+      <button onClick={changePassword} disabled={saving || !form.current || !form.next || !form.confirm} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-[#1D5BD6] hover:bg-[#164BB5] disabled:opacity-50 text-white shadow-sm transition-all">
         {saving ? <><Spinner />Changing…</> : <><ShieldCheck className="w-4 h-4" />Change Password</>}
       </button>
     </div>
@@ -565,10 +566,10 @@ function SecurityActionRow({
       className="w-full flex items-center gap-4 px-4 py-3.5 text-left rounded-xl hover:bg-[#F8FAFC] transition-colors"
     >
       <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-[#EFF6FF] flex items-center justify-center">
-        <Icon className="w-4 h-4 text-[#3C91E6]" />
+        <Icon className="w-4 h-4 text-[#1D5BD6]" />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-[#1E3A5F]">{title}</p>
+        <p className="text-sm font-semibold text-[#0B2A5B]">{title}</p>
         <p className="text-[12px] text-[#64748B] mt-0.5">{description}</p>
       </div>
       <ChevronRight className="w-4 h-4 text-[#94A3B8] flex-shrink-0" />
@@ -606,11 +607,11 @@ function LightModal({
         className={`relative w-full ${wide ? 'max-w-lg' : 'max-w-md'} rounded-2xl border border-[#E2E8F0] bg-white shadow-xl max-h-[90vh] overflow-y-auto`}
       >
         <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-[#E2E8F0] sticky top-0 bg-white z-10">
-          <h2 className="text-base font-bold text-[#1E3A5F]">{title}</h2>
+          <h2 className="text-base font-bold text-[#0B2A5B]">{title}</h2>
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-[#94A3B8] hover:text-[#1E3A5F] hover:bg-[#F8FAFC] transition-colors"
+            className="p-1.5 rounded-lg text-[#94A3B8] hover:text-[#0B2A5B] hover:bg-[#F8FAFC] transition-colors"
             aria-label="Close dialog"
           >
             <X className="w-4 h-4" />
@@ -840,7 +841,7 @@ function SchoolYearSection() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <div className="w-6 h-6 border-2 border-[#E2E8F0] border-t-[#3C91E6] rounded-full animate-spin" />
+        <div className="w-6 h-6 border-2 border-[#E2E8F0] border-t-[#1D5BD6] rounded-full animate-spin" />
       </div>
     );
   }
@@ -851,12 +852,12 @@ function SchoolYearSection() {
       {/* ── Active Period Summary ── */}
       {activeYear && (
         <div className="flex items-center gap-3.5 px-4 py-3.5 bg-[#EFF6FF] border border-[#BFDBFE] rounded-2xl">
-          <div className="w-9 h-9 rounded-xl bg-[#3C91E6] flex items-center justify-center flex-shrink-0 shadow-sm">
+          <div className="w-9 h-9 rounded-xl bg-[#1D5BD6] flex items-center justify-center flex-shrink-0 shadow-sm">
             <CalendarDays className="w-4 h-4 text-white" />
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-widest text-[#64748B]">Active Period</p>
-            <p className="text-sm font-bold text-[#1E3A5F] mt-0.5 leading-tight">
+            <p className="text-sm font-bold text-[#0B2A5B] mt-0.5 leading-tight">
               {activeYear.label}
               <span className="font-normal text-[#64748B] ml-2">· {semester}</span>
             </p>
@@ -871,7 +872,7 @@ function SchoolYearSection() {
       {/* ── Default Semester ── */}
       <div className="rounded-2xl border border-[#E2E8F0] bg-white shadow-sm overflow-hidden">
         <div className="px-5 py-3.5 border-b border-[#F1F5F9]">
-          <p className="text-sm font-semibold text-[#1E3A5F]">Default Semester</p>
+          <p className="text-sm font-semibold text-[#0B2A5B]">Default Semester</p>
           <p className="text-xs text-[#94A3B8] mt-0.5">
             Applied across all modules when no semester is explicitly selected.
           </p>
@@ -880,7 +881,7 @@ function SchoolYearSection() {
           <select
             value={semester}
             onChange={e => setSemester(e.target.value)}
-            className="flex-1 border border-[#CBD5E1] rounded-xl px-3.5 py-2.5 text-sm text-[#1E3A5F] bg-white appearance-none focus:outline-none focus:ring-2 focus:ring-[#3C91E6] focus:border-[#3C91E6] transition-all duration-150 cursor-pointer"
+            className="flex-1 border border-[#CBD5E1] rounded-xl px-3.5 py-2.5 text-sm text-[#0B2A5B] bg-white appearance-none focus:outline-none focus:ring-2 focus:ring-[#1D5BD6] focus:border-[#1D5BD6] transition-all duration-150 cursor-pointer"
           >
             {SEMESTERS_LIST.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
@@ -889,7 +890,7 @@ function SchoolYearSection() {
               onClick={saveSemester}
               disabled={saving}
               style={{ color: saving ? '#94A3B8' : '#ffffff' }}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold text-white bg-[#3C91E6] hover:bg-[#2563EB] transition-all duration-150 flex-shrink-0 shadow-sm disabled:bg-[#CBD5E1] disabled:shadow-none disabled:cursor-not-allowed"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold text-white bg-[#1D5BD6] hover:bg-[#164BB5] transition-all duration-150 flex-shrink-0 shadow-sm disabled:bg-[#CBD5E1] disabled:shadow-none disabled:cursor-not-allowed"
             >
               {saving
                 ? <><Spinner />Saving…</>
@@ -910,7 +911,7 @@ function SchoolYearSection() {
         {/* Header */}
         <div className="px-5 py-3.5 border-b border-[#F1F5F9] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-[#1E3A5F]">School Years</p>
+            <p className="text-sm font-semibold text-[#0B2A5B]">School Years</p>
             <p className="text-xs text-[#94A3B8] mt-0.5">Only one school year can be active at a time.</p>
           </div>
           <button
@@ -918,7 +919,7 @@ function SchoolYearSection() {
             onClick={generateNext}
             disabled={creating || years.some(y => y.label === next)}
             title={`Create ${next}`}
-            className="inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold text-white bg-[#3C91E6] hover:bg-[#2563EB] transition-colors duration-150 flex-shrink-0 self-start sm:self-auto disabled:bg-[#CBD5E1] disabled:text-white/80 disabled:cursor-not-allowed"
+            className="inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold text-white bg-[#1D5BD6] hover:bg-[#164BB5] transition-colors duration-150 flex-shrink-0 self-start sm:self-auto disabled:bg-[#CBD5E1] disabled:text-white/80 disabled:cursor-not-allowed"
           >
             {creating && <Spinner />}
             Generate {next}
@@ -948,7 +949,7 @@ function SchoolYearSection() {
                   >
                     {/* Year label */}
                     <span className={`min-w-[5.5rem] sm:min-w-[6.5rem] text-sm font-semibold tabular-nums ${
-                      isActive ? 'text-[#1E3A5F]' : 'text-[#64748B]'
+                      isActive ? 'text-[#0B2A5B]' : 'text-[#64748B]'
                     }`}>
                       {yr.label}
                     </span>
@@ -971,7 +972,7 @@ function SchoolYearSection() {
                           disabled={anyBusy}
                           className="inline-flex items-center justify-center gap-1.5 min-h-[30px] px-3 py-1.5 rounded-lg text-xs font-medium transition-colors duration-150
                             text-[#64748B] border border-[#E2E8F0] bg-white
-                            hover:text-[#1E3A5F] hover:border-[#CBD5E1] hover:bg-[#F8FAFC]
+                            hover:text-[#0B2A5B] hover:border-[#CBD5E1] hover:bg-[#F8FAFC]
                             disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                           {isLoading && <Spinner cls="border-[#E2E8F0] border-t-[#94A3B8]" />}
@@ -984,7 +985,7 @@ function SchoolYearSection() {
                             onClick={() => doAction(yr.id, 'activate')}
                             disabled={anyBusy}
                             style={{ color: (isLoading || anyBusy) ? '#94A3B8' : '#ffffff' }}
-                            className="inline-flex items-center justify-center gap-1.5 min-h-[30px] px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-[#3C91E6] hover:bg-[#2563EB] transition-colors duration-150 disabled:bg-[#CBD5E1] disabled:cursor-not-allowed"
+                            className="inline-flex items-center justify-center gap-1.5 min-h-[30px] px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-[#1D5BD6] hover:bg-[#164BB5] transition-colors duration-150 disabled:bg-[#CBD5E1] disabled:cursor-not-allowed"
                           >
                             {isLoading && <Spinner />}
                             Set Active
@@ -1046,7 +1047,7 @@ function SchoolYearSection() {
       {/* ── Add School Year ── */}
       <div className="rounded-2xl border border-[#E2E8F0] bg-white shadow-sm overflow-hidden">
         <div className="px-5 py-3.5 border-b border-[#F1F5F9]">
-          <p className="text-sm font-semibold text-[#1E3A5F]">Add School Year</p>
+          <p className="text-sm font-semibold text-[#0B2A5B]">Add School Year</p>
           <p className="text-xs text-[#94A3B8] mt-0.5">
             New years are added as Archived. Activate one to set the system default.
           </p>
@@ -1061,8 +1062,8 @@ function SchoolYearSection() {
                 onKeyDown={e => e.key === 'Enter' && addYear(newLabel)}
                 placeholder="e.g. 2027-2028"
                 maxLength={9}
-                className={`w-full border rounded-xl px-3.5 py-2.5 text-sm text-[#1E3A5F] placeholder-[#CBD5E1]
-                  focus:outline-none focus:ring-2 focus:ring-[#3C91E6] focus:border-[#3C91E6] transition-all duration-150 ${
+                className={`w-full border rounded-xl px-3.5 py-2.5 text-sm text-[#0B2A5B] placeholder-[#CBD5E1]
+                  focus:outline-none focus:ring-2 focus:ring-[#1D5BD6] focus:border-[#1D5BD6] transition-all duration-150 ${
                   addError ? 'border-red-300 bg-red-50' : 'border-[#CBD5E1] bg-white'
                 }`}
               />
@@ -1071,7 +1072,7 @@ function SchoolYearSection() {
               onClick={() => addYear(newLabel)}
               disabled={creating || !newLabel.trim()}
               style={{ color: (creating || !newLabel.trim()) ? '#94A3B8' : '#ffffff' }}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-[#3C91E6] hover:bg-[#2563EB] transition-all duration-150 flex-shrink-0 shadow-sm disabled:bg-[#CBD5E1] disabled:shadow-none disabled:cursor-not-allowed"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-[#1D5BD6] hover:bg-[#164BB5] transition-all duration-150 flex-shrink-0 shadow-sm disabled:bg-[#CBD5E1] disabled:shadow-none disabled:cursor-not-allowed"
             >
               {creating
                 ? <><Spinner />Adding…</>
@@ -1158,7 +1159,7 @@ function SystemResetSection() {
           <CheckCircle className="w-6 h-6 text-emerald-500" />
         </div>
         <div>
-          <p className="font-semibold text-[#1E3A5F]">Reset Complete</p>
+          <p className="font-semibold text-[#0B2A5B]">Reset Complete</p>
           <p className="text-xs text-[#64748B] mt-1">
             All operational data has been cleared. Permanent records (faculty, curriculum, rooms) are preserved.
           </p>
@@ -1205,7 +1206,7 @@ function SystemResetSection() {
             onChange={e => { setPassword(e.target.value); setPwdError(''); }}
             onKeyDown={e => e.key === 'Enter' && verify()}
             placeholder="Enter admin password…"
-            className={`w-full bg-[#F8FAFC] border rounded-xl px-3 py-2.5 pr-10 text-sm text-[#1E3A5F] focus:outline-none focus:ring-2 focus:ring-[#3C91E6] focus:border-transparent transition-colors ${
+            className={`w-full bg-[#F8FAFC] border rounded-xl px-3 py-2.5 pr-10 text-sm text-[#0B2A5B] focus:outline-none focus:ring-2 focus:ring-[#1D5BD6] focus:border-transparent transition-colors ${
               pwdError ? 'border-red-300 bg-red-50' : 'border-[#E2E8F0]'
             }`}
           />
@@ -1243,7 +1244,7 @@ function SystemResetSection() {
                 <ShieldAlert className="w-5 h-5 text-red-500" />
               </div>
               <div>
-                <h2 className="font-bold text-[#1E3A5F] text-base">Confirm System Reset</h2>
+                <h2 className="font-bold text-[#0B2A5B] text-base">Confirm System Reset</h2>
                 <p className="text-sm text-[#64748B] mt-1">
                   <strong className="text-red-600">Warning: This action cannot be undone.</strong>
                   {' '}All schedules, workload assignments, and operational logs will be permanently deleted.
@@ -1310,13 +1311,13 @@ function AccordionCard({
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className="w-full flex items-center gap-4 px-6 py-5 text-left hover:bg-[#F8FAFC] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#3C91E6] focus-visible:ring-inset"
+        className="w-full flex items-center gap-4 px-6 py-5 text-left hover:bg-[#F8FAFC] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1D5BD6] focus-visible:ring-inset"
       >
         <div className="flex-shrink-0 w-11 h-11 bg-[#EFF6FF] rounded-xl flex items-center justify-center">
-          <Icon className="w-5 h-5 text-[#3C91E6]" />
+          <Icon className="w-5 h-5 text-[#1D5BD6]" />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-[15px] font-bold text-[#1E3A5F] leading-tight">{title}</p>
+          <p className="text-[15px] font-bold text-[#0B2A5B] leading-tight">{title}</p>
           <p className="text-sm text-[#64748B] mt-0.5 leading-snug">{subtitle}</p>
         </div>
         <ChevronDown
@@ -1360,10 +1361,8 @@ export default function SettingsPage() {
     <div className="min-h-screen bg-[#F8FAFC] p-5 md:p-7 lg:p-8">
       <div className="max-w-6xl">
         <div className="mb-7">
-          <h1 className="text-2xl font-bold text-[#1E3A5F]">Settings</h1>
-          <p className="text-[#64748B] text-sm mt-1">
-            Manage your system and account preferences.
-          </p>
+          <BackButton />
+          <h1 className="text-2xl font-bold text-[#0B2A5B]">Settings</h1>
         </div>
 
         <PageLoadTransition

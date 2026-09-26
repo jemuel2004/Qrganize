@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUser } from '@/server/auth';
 import { query } from '@/server/db';
 import { ensureNotificationsTable } from '@/server/notifications';
@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
     }
 
     await ensureNotificationsTable();
-    if (authUser.role === 'admin' || authUser.role === 'department_chair') {
+    if (authUser.role === 'admin' || authUser.role === 'department_chair' || authUser.role === 'program_chair') {
       await syncWorkloadMonitoringNotifications(false);
     }
 
@@ -39,20 +39,35 @@ export async function GET(req: NextRequest) {
           WHERE  recipient_role = 'admin' AND is_read = false
         `, []),
       ]);
-    } else if (authUser.role === 'department_chair' && authUser.id) {
+    } else if (authUser.role === 'department_chair') {
       [result, countResult] = await Promise.all([
         query(`
           SELECT id, recipient_id, recipient_role, title, message, type,
                  is_read, created_at, related_module, related_id
           FROM   notifications
           WHERE  recipient_role = 'department_chair'
+          ORDER  BY created_at DESC
+          LIMIT  $1
+        `, [limit]),
+        query(`
+          SELECT COUNT(*) AS cnt FROM notifications
+          WHERE  recipient_role = 'department_chair' AND is_read = false
+        `, []),
+      ]);
+    } else if (authUser.role === 'program_chair' && authUser.id) {
+      [result, countResult] = await Promise.all([
+        query(`
+          SELECT id, recipient_id, recipient_role, title, message, type,
+                 is_read, created_at, related_module, related_id
+          FROM   notifications
+          WHERE  recipient_role = 'program_chair'
             AND  recipient_id   = $1
           ORDER  BY created_at DESC
           LIMIT  $2
         `, [authUser.id, limit]),
         query(`
           SELECT COUNT(*) AS cnt FROM notifications
-          WHERE  recipient_role = 'department_chair'
+          WHERE  recipient_role = 'program_chair'
             AND  recipient_id   = $1
             AND  is_read        = false
         `, [authUser.id]),

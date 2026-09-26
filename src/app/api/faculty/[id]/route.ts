@@ -23,22 +23,33 @@ import {
   ensureEmailRegistry,
   assertUsernameAllowed,
 } from '@/server/emailIdentity';
+import { PRIORITY_SUBJECTS_SUBQUERY, setPrioritySubjects, type PrioritySubject } from '@/server/facultyPrioritySubjects';
+import { canAccessProgram } from '@/server/programScope';
 
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    const auth = await getAuthUser(req) as { role?: string; program_id?: number | null } | null;
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     await ensureFacultyProfileColumns();
     const { id } = await params;
+
+    if (auth.role === 'program_chair') {
+      const ownerCheck = await query('SELECT program_id FROM faculty WHERE id = $1', [id]);
+      if (ownerCheck.rows.length === 0) return NextResponse.json({ error: 'Faculty not found.' }, { status: 404 });
+      if (!(await canAccessProgram(auth, ownerCheck.rows[0].program_id))) {
+        return NextResponse.json({ error: 'Faculty not found.' }, { status: 404 });
+      }
+    }
+
     const result = await query(`
       SELECT
         f.id, f.first_name, f.last_name, f.middle_name, f.name, f.employee_id,
         f.program_id, f.position, f.employment_status, f.designation_type,
         f.designation_units, f.load_type, f.contact_number, f.is_active,
-        f.years_in_service, f.educational_qualification, f.major, f.eligibility,
+        f.years_in_service, f.educational_qualification, f.major, f.eligibility, f.specialization,
         p.code AS program_code, p.name AS program_name,
         ia.username, ia.email,
         ia.google_verified, ia.google_verified_at,
@@ -61,7 +72,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
           JOIN block_subjects bs ON ms.block_subject_id = bs.id
           JOIN curriculums c ON bs.curriculum_id = c.id
           WHERE il.faculty_id = f.id AND il.load_category = 'Overload'
-        ), 0) AS current_overload
+        ), 0) AS current_overload,
+        ${PRIORITY_SUBJECTS_SUBQUERY} AS priority_subjects
       FROM faculty f
       LEFT JOIN programs p ON f.program_id = p.id
       LEFT JOIN instructor_accounts ia ON ia.faculty_id = f.id
@@ -80,8 +92,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    // Editing a faculty record is admin-only — Department Chair and Program
+    // Chair can view the Faculty page but not add/edit/delete records there.
+    const auth = await getAuthUser(req) as { role?: string; program_id?: number | null } | null;
+    if (!auth || auth.role !== 'admin') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     await ensureFacultyProfileColumns();
@@ -102,7 +116,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       first_name, last_name, middle_name,
       program_id, position, designation_type, designation_units, load_type,
       username, email, password,
-      years_in_service, educational_qualification, major, eligibility,
+      years_in_service, educational_qualification, major, eligibility, specialization,
+      priority_subjects,
     } = body;
 
     if (!String(first_name ?? '').trim())
@@ -174,13 +189,14 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     const edQual   = educational_qualification ? String(educational_qualification).trim().slice(0, 255) || null : null;
     const majorVal = major ? String(major).trim().slice(0, 255) || null : null;
     const eligVal  = eligibility ? String(eligibility).trim().slice(0, 255) || null : null;
+    const specVal  = specialization ? String(specialization).trim().slice(0, 255) || null : null;
 
-    const prevEmail = await query(
+    const prevAccount = await query(
       'SELECT email FROM instructor_accounts WHERE faculty_id = $1',
       [id]
     );
     const emailDidChange =
-      String(prevEmail.rows[0]?.email ?? '').trim().toLowerCase() !== emailStr;
+      String(prevAccount.rows[0]?.email ?? '').trim().toLowerCase() !== emailStr;
 
     const updated = await transaction(async (client) => {
       const fResult = await client.query(`
@@ -188,12 +204,12 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         SET first_name=$1, last_name=$2, middle_name=$3, name=$4,
             program_id=$5, position=$6, designation_type=$7, designation_units=$8,
             load_type=$9, years_in_service=$10, educational_qualification=$11,
-            major=$12, eligibility=$13, updated_at=NOW()
-        WHERE id=$14 RETURNING id
+            major=$12, eligibility=$13, specialization=$14, updated_at=NOW()
+        WHERE id=$15 RETURNING id
       `, [
         fnStr, lnStr, mid, fullName,
         program.id, pos.position, desType, desUnits,
-        String(load_type || 'Regular').trim(), yis, edQual, majorVal, eligVal, id,
+        String(load_type || 'Regular').trim(), yis, edQual, majorVal, eligVal, specVal, id,
       ]);
 
       if (fResult.rows.length === 0) throw new Error('NOT_FOUND');
@@ -228,15 +244,18 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         [emailStr, accountId]
       );
 
+      await setPrioritySubjects(client, id, priority_subjects as PrioritySubject[] | undefined);
+
       // 3. Return the updated combined record
       const full = await client.query(`
         SELECT
           f.id, f.first_name, f.last_name, f.middle_name, f.name, f.employee_id,
           f.program_id, f.position, f.employment_status, f.designation_type,
           f.designation_units, f.load_type,
-          f.years_in_service, f.educational_qualification, f.major, f.eligibility,
+          f.years_in_service, f.educational_qualification, f.major, f.eligibility, f.specialization,
           ia.username, ia.email, ia.google_verified, ia.google_verified_at,
-          p.code AS program_code
+          p.code AS program_code,
+          ${PRIORITY_SUBJECTS_SUBQUERY} AS priority_subjects
         FROM faculty f
         LEFT JOIN programs p ON f.program_id = p.id
         LEFT JOIN instructor_accounts ia ON ia.faculty_id = f.id
@@ -262,7 +281,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    if (!auth || auth.role !== 'admin') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const { id } = await params;
@@ -300,7 +319,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    // Deleting a faculty record is admin-only — Department Chair and Program
+    // Chair can view the Faculty page but not add/edit/delete records there.
+    if (!auth || auth.role !== 'admin') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const { id } = await params;

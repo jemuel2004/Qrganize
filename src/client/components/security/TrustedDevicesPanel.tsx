@@ -145,10 +145,10 @@ export default function TrustedDevicesPanel({
 
   const dark = variant === 'dark';
   const card = embedded
-    ? (dark ? 'text-slate-200' : 'text-[#1E3A5F]')
+    ? (dark ? 'text-slate-200' : 'text-[#0B2A5B]')
     : dark
       ? 'bg-white/5 border-white/10 text-slate-200'
-      : 'bg-white border-[#E2E8F0] text-[#1E3A5F]';
+      : 'bg-white border-[#E2E8F0] text-[#0B2A5B]';
   const muted = dark ? 'text-slate-400' : 'text-[#64748B]';
   const danger = dark
     ? 'text-red-300 hover:bg-red-500/10'
@@ -167,8 +167,8 @@ export default function TrustedDevicesPanel({
           onClick={() => setDetail(device)}
           className={`w-full flex items-start gap-3 px-3.5 py-3 text-left transition-colors ${rowHover}`}
         >
-          <div className={`mt-0.5 w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${dark ? 'bg-[#3074B8]/15' : 'bg-[#EFF6FF]'}`}>
-            <DeviceIcon type={device.device_type} className={`w-4 h-4 ${dark ? 'text-[#3C91E6]' : 'text-[#3074B8]'}`} />
+          <div className={`mt-0.5 w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${dark ? 'bg-[#12408F]/15' : 'bg-[#EFF6FF]'}`}>
+            <DeviceIcon type={device.device_type} className={`w-4 h-4 ${dark ? 'text-[#1D5BD6]' : 'text-[#12408F]'}`} />
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold truncate">{device.device_label}</p>
@@ -336,8 +336,8 @@ export default function TrustedDevicesPanel({
           <div className={`relative w-full max-w-md rounded-2xl border shadow-xl max-h-[90vh] overflow-y-auto ${dark ? 'bg-[#111827] border-white/10' : 'bg-white border-[#E2E8F0]'}`}>
             <div className={`sticky top-0 flex items-center justify-between gap-3 px-5 py-4 border-b ${dark ? 'border-white/10 bg-[#111827]' : 'border-[#E2E8F0] bg-white'}`}>
               <div className="flex items-center gap-3 min-w-0">
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${dark ? 'bg-[#3074B8]/15' : 'bg-[#EFF6FF]'}`}>
-                  <DeviceIcon type={detail.device_type} className={`w-5 h-5 ${dark ? 'text-[#3C91E6]' : 'text-[#3074B8]'}`} />
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${dark ? 'bg-[#12408F]/15' : 'bg-[#EFF6FF]'}`}>
+                  <DeviceIcon type={detail.device_type} className={`w-5 h-5 ${dark ? 'text-[#1D5BD6]' : 'text-[#12408F]'}`} />
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-bold truncate">{detail.device_label}</p>

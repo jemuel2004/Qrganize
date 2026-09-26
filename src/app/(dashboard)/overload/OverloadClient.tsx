@@ -224,7 +224,7 @@ export default function OverloadClient() {
                   onClick={() => selectFaculty(f)}
                   className={`w-full text-left px-3 py-3 rounded-lg transition mb-1
                     ${selectedFaculty?.id === f.id
-                      ? 'bg-[#3C91E6] text-white'
+                      ? 'bg-[#1D5BD6] text-white'
                       : 'hover:bg-white/5 text-slate-200'}`}
                 >
                   <div className="font-medium text-sm">{f.name}</div>

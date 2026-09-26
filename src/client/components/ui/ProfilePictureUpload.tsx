@@ -152,7 +152,7 @@ export function ProfilePictureUpload({
   const avatarRing = dark ? 'border-4 border-white/[0.08] bg-slate-800' : 'border-4 border-[#E2E8F0] bg-[#F8FAFC]';
   const textMuted = dark ? 'text-slate-400' : 'text-[#64748B]';
   const textFaint = dark ? 'text-slate-500' : 'text-[#94A3B8]';
-  const textName = dark ? 'text-white' : 'text-[#1E3A5F]';
+  const textName = dark ? 'text-white' : 'text-[#0B2A5B]';
 
   const feedback = (error || success) && (
     <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs border mb-3 ${error ? alertError : alertSuccess}`}>
@@ -219,7 +219,7 @@ export function ProfilePictureUpload({
                 onClick={() => fileRef.current?.click()}
                 className={dark
                   ? 'inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border border-white/[0.10] text-slate-300 hover:bg-white/[0.05] transition-colors disabled:opacity-50'
-                  : 'inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-[#EFF6FF] hover:bg-[#DBEAFE] border border-[#BFDBFE] text-[#3C91E6] transition-colors disabled:opacity-50'}
+                  : 'inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-[#EFF6FF] hover:bg-[#DBEAFE] border border-[#BFDBFE] text-[#1D5BD6] transition-colors disabled:opacity-50'}
               >
                 {uploading
                   ? <><div className="w-3.5 h-3.5 border-2 border-current/30 border-t-current rounded-full animate-spin" />Uploading…</>
@@ -267,7 +267,7 @@ export function ProfilePictureUpload({
       <div
         className={dark
           ? 'border-2 border-dashed rounded-2xl flex flex-col items-center justify-center gap-3 p-6 cursor-pointer transition-all border-white/[0.10] hover:border-white/[0.20] hover:bg-white/[0.02]'
-          : 'border-2 border-dashed rounded-2xl flex flex-col items-center justify-center gap-3 p-6 cursor-pointer transition-all border-[#CBD5E1] hover:border-[#3C91E6]/60 hover:bg-[#F8FAFC]'}
+          : 'border-2 border-dashed rounded-2xl flex flex-col items-center justify-center gap-3 p-6 cursor-pointer transition-all border-[#CBD5E1] hover:border-[#1D5BD6]/60 hover:bg-[#F8FAFC]'}
         onDragOver={e => e.preventDefault()}
         onDrop={onDrop}
         onClick={() => !uploading && fileRef.current?.click()}

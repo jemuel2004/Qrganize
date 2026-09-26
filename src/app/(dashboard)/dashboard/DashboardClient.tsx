@@ -1,22 +1,23 @@
 'use client';
 
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useVisibilityAwareInterval } from '@/client/hooks/useVisibilityAwareInterval';
 import { LOADING_DELAY, useMinLoading } from '@/client/hooks/useMinLoading';
 import { DashboardSkeleton } from '@/client/components/ui/skeletons';
 import { PageLoadTransition } from '@/client/components/ui/PageLoadTransition';
+import Modal from '@/client/components/ui/Modal';
 import Link from 'next/link';
 import {
   RefreshCw,
   AlertTriangle,
   ChevronRight,
-  Clock,
   DoorOpen,
   Users,
   ClipboardList,
   CalendarRange,
   CheckCircle2,
-  Activity,
+  GraduationCap,
 } from 'lucide-react';
 
 /* ─── Types ──────────────────────────────────────────────────── */
@@ -88,38 +89,8 @@ interface ActionRow {
 }
 
 const WORKLOAD_ISSUE_PREVIEW = 4;
-const ACTIVITY_PREVIEW = 5;
 
 /* ─── Helpers ────────────────────────────────────────────────── */
-function parseScanDate(timeStr: string, dateStr: string): Date | null {
-  if (timeStr && timeStr.includes('T')) {
-    const iso = new Date(timeStr);
-    if (!Number.isNaN(iso.getTime())) return iso;
-  }
-  const [datePart] = (dateStr || '').split('T');
-  const [timePart] = (timeStr || '').split('.');
-  if (!datePart || !timePart) return null;
-  const combined = new Date(timePart.includes('T') ? timePart : `${datePart}T${timePart}`);
-  return Number.isNaN(combined.getTime()) ? null : combined;
-}
-
-function fmtScanTime(timeStr: string, dateStr: string): string {
-  const dt = parseScanDate(timeStr, dateStr);
-  if (!dt) return timeStr || '—';
-  const today = new Date();
-  const sameDay =
-    dt.getFullYear() === today.getFullYear() &&
-    dt.getMonth() === today.getMonth() &&
-    dt.getDate() === today.getDate();
-  if (sameDay) {
-    return dt.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit', hour12: true });
-  }
-  return dt.toLocaleString('en-PH', {
-    month: 'short', day: 'numeric',
-    hour: 'numeric', minute: '2-digit', hour12: true,
-  });
-}
-
 function fmtQty(n: number): string {
   const v = Number(n) || 0;
   if (Math.abs(v - Math.round(v)) < 0.001) return String(Math.round(v));
@@ -178,7 +149,7 @@ const MetricCard = memo(function MetricCard({
   valueSuffix?: string;
 }) {
   const accentCls = {
-    blue:  'text-[#3C91E6] bg-[#EFF6FF]',
+    blue:  'text-[#1D5BD6] bg-[#EFF6FF]',
     amber: 'text-[#D97706] bg-[#FFFBEB]',
     green: 'text-[#059669] bg-[#ECFDF5]',
     slate: 'text-[#475569] bg-[#F1F5F9]',
@@ -187,15 +158,15 @@ const MetricCard = memo(function MetricCard({
   return (
     <Link
       href={href}
-      className={`block min-w-0 ${CARD_SURFACE} qr-hover-card transition-colors duration-150 hover:border-[#3C91E6]/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3C91E6]/35`}
+      className={`block min-w-0 ${CARD_SURFACE} qr-hover-card transition-colors duration-150 hover:border-[#1D5BD6]/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D5BD6]/35`}
     >
       <div className="px-4 sm:px-5 py-4 flex flex-col gap-3 min-h-[132px]">
         <div className="flex items-start justify-between gap-3">
           <p className="text-[14px] sm:text-[15px] font-semibold text-[color:var(--foreground-secondary)] leading-snug">
             {label}
           </p>
-          <span className={`inline-flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 ${accentCls}`}>
-            <Icon className="w-[18px] h-[18px]" aria-hidden />
+          <span className={`inline-flex items-center justify-center w-11 h-11 rounded-lg flex-shrink-0 ${accentCls}`}>
+            <Icon className="w-6 h-6" aria-hidden />
           </span>
         </div>
         <p className="text-[28px] sm:text-[32px] font-semibold tabular-nums leading-none tracking-tight text-[color:var(--foreground)]">
@@ -253,7 +224,7 @@ function FooterLink({ href, children }: { href: string; children: React.ReactNod
   return (
     <Link
       href={href}
-      className="inline-flex items-center gap-1 min-h-10 text-[14px] font-semibold text-[#3C91E6] hover:text-[#2563EB] hover:underline underline-offset-2"
+      className="inline-flex items-center gap-1 min-h-10 text-[14px] font-semibold text-[#1D5BD6] hover:text-[#164BB5] hover:underline underline-offset-2"
     >
       {children}
       <ChevronRight className="w-4 h-4" />
@@ -292,7 +263,7 @@ function UtilizationRing({ percent }: { percent: number }) {
           cy="50"
           r={r}
           fill="none"
-          stroke="#3C91E6"
+          stroke="#1D5BD6"
           strokeWidth="8"
           strokeLinecap="round"
           strokeDasharray={c}
@@ -308,20 +279,6 @@ function UtilizationRing({ percent }: { percent: number }) {
         </span>
       </div>
     </div>
-  );
-}
-
-function ScanStatusChip({ status }: { status: string }) {
-  const map: Record<string, string> = {
-    Valid:   'bg-[#ECFDF5] text-[#15803D]',
-    Late:    'bg-[#FFFBEB] text-[#B45309]',
-    Overuse: 'bg-[#FEF2F2] text-[#B91C1C]',
-    Invalid: 'bg-[#F1F5F9] text-[#64748B]',
-  };
-  return (
-    <span className={`text-[12px] font-semibold px-2 py-0.5 rounded-md whitespace-nowrap ${map[status] ?? map.Invalid}`}>
-      {status}
-    </span>
   );
 }
 
@@ -372,11 +329,11 @@ const DashboardHeader = memo(function DashboardHeader({
       <button
         type="button"
         onClick={onRefresh}
-        className="inline-flex items-center gap-2 h-10 px-3.5 text-[14px] font-medium text-[color:var(--foreground-secondary)] bg-[var(--surface-elevated)] border border-[color:var(--border)] rounded-lg hover:border-[#3C91E6] hover:text-[#2563EB] transition-colors flex-shrink-0 cursor-pointer"
+        className="inline-flex items-center gap-2 h-10 px-3.5 text-[14px] font-medium text-[color:var(--foreground-secondary)] bg-[var(--surface-elevated)] border border-[color:var(--border)] rounded-lg hover:border-[#1D5BD6] hover:text-[#164BB5] transition-colors flex-shrink-0 cursor-pointer"
         title="Refresh"
         aria-label="Refresh dashboard"
       >
-        <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+        <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
         Refresh
       </button>
     </div>
@@ -385,9 +342,11 @@ const DashboardHeader = memo(function DashboardHeader({
 
 /* ─── Main ───────────────────────────────────────────────────── */
 export default function DashboardClient() {
+  const router = useRouter();
   const [data, setData] = useState<DashboardData | null>(null);
   const [monitoring, setMonitoring] = useState<MonitoringData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [programPickerOpen, setProgramPickerOpen] = useState(false);
 
   const load = useCallback(async (signal?: AbortSignal, silent = false) => {
     if (!silent) setLoading(true);
@@ -518,9 +477,32 @@ export default function DashboardClient() {
     return rows;
   }, [monitoring]);
 
+  const unassignedByProgram = useMemo(() => {
+    const map = new Map<number, { program_id: number; program_code: string; program_name: string; count: number }>();
+    for (const block of monitoring?.incomplete_blocks ?? []) {
+      if (!block.unassigned_count) continue;
+      const existing = map.get(block.program_id);
+      if (existing) {
+        existing.count += block.unassigned_count;
+      } else {
+        map.set(block.program_id, {
+          program_id: block.program_id,
+          program_code: block.program_code?.trim() || 'Program',
+          program_name: block.program_name?.trim() || '',
+          count: block.unassigned_count,
+        });
+      }
+    }
+    return [...map.values()].sort((a, b) => b.count - a.count);
+  }, [monitoring]);
+
+  function goToProgramUnassigned(programId: number) {
+    setProgramPickerOpen(false);
+    router.push(`/master-schedule?program_id=${programId}&status=Unassigned`);
+  }
+
   const displayName = displayNameFromUsername(data?.user?.username);
   const showSkeleton = useMinLoading(loading && !data, LOADING_DELAY);
-  const activity = data?.recent_scans.slice(0, ACTIVITY_PREVIEW) ?? [];
 
   return (
     <div className="flex flex-col px-4 sm:px-6 py-6 gap-5 min-w-0 w-full max-w-7xl mx-auto">
@@ -597,7 +579,7 @@ export default function DashboardClient() {
                         <li key={row.key}>
                           <Link
                             href={row.href}
-                            className="flex items-start gap-3 px-4 sm:px-5 py-3.5 hover:bg-[color:var(--surface)] transition-colors duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#3C91E6]/35"
+                            className="flex items-start gap-3 px-4 sm:px-5 py-3.5 hover:bg-[color:var(--surface)] transition-colors duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#1D5BD6]/35"
                           >
                             <span
                               className={`mt-0.5 inline-flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 ${
@@ -640,11 +622,14 @@ export default function DashboardClient() {
                     <ul className="divide-y divide-[color:var(--border-subtle)]">
                       {unassignedCount > 0 ? (
                         <li>
-                          <Link
-                            href="/program/blocks"
-                            className="flex items-center gap-3 px-4 sm:px-5 py-3.5 hover:bg-[color:var(--surface)] transition-colors cursor-pointer"
+                          <button
+                            type="button"
+                            onClick={() => setProgramPickerOpen(true)}
+                            className="w-full flex items-center gap-3 px-4 sm:px-5 py-3.5 hover:bg-[color:var(--surface)] transition-colors cursor-pointer text-left"
                           >
-                            <CalendarRange className="w-4 h-4 text-[#3C91E6] flex-shrink-0" aria-hidden />
+                            <span className="inline-flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 bg-[#EFF6FF] text-[#1D5BD6]">
+                              <CalendarRange className="w-4 h-4" aria-hidden />
+                            </span>
                             <span className="flex-1 min-w-0">
                               <span className="block text-[15px] font-semibold text-[color:var(--foreground)]">
                                 Unassigned subjects
@@ -657,7 +642,7 @@ export default function DashboardClient() {
                               {unassignedCount}
                             </span>
                             <ChevronRight className="w-4 h-4 text-[color:var(--foreground-disabled)]" aria-hidden />
-                          </Link>
+                          </button>
                         </li>
                       ) : null}
                       {incompleteBlocks.slice(0, 4).map(block => {
@@ -669,7 +654,9 @@ export default function DashboardClient() {
                               href={`/program/blocks/${block.block_id}`}
                               className="flex items-center gap-3 px-4 sm:px-5 py-3.5 hover:bg-[color:var(--surface)] transition-colors cursor-pointer"
                             >
-                              <AlertTriangle className="w-4 h-4 text-[#B45309] flex-shrink-0" aria-hidden />
+                              <span className="inline-flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 bg-[#FFFBEB] text-[#B45309]">
+                                <AlertTriangle className="w-4 h-4" aria-hidden />
+                              </span>
                               <span className="flex-1 min-w-0">
                                 <span className="block text-[15px] font-semibold text-[color:var(--foreground)] truncate">
                                   {programCode} — Block {block.block_name}
@@ -683,44 +670,6 @@ export default function DashboardClient() {
                           </li>
                         );
                       })}
-                    </ul>
-                  )}
-                </SectionShell>
-
-                <SectionShell
-                  title="Recent System Activity"
-                  footer={
-                    activity.length > 0
-                      ? <FooterLink href="/room-utilization">View scan history</FooterLink>
-                      : undefined
-                  }
-                >
-                  {activity.length === 0 ? (
-                    <EmptyState message="No QR activity recorded today." />
-                  ) : (
-                    <ul className="divide-y divide-[color:var(--border-subtle)]">
-                      {activity.map(scan => (
-                        <li key={scan.id} className="px-4 sm:px-5 py-3 flex items-start gap-3">
-                          <span className="mt-0.5 inline-flex items-center justify-center w-8 h-8 rounded-lg bg-[#EFF6FF] text-[#3C91E6] flex-shrink-0">
-                            <Activity className="w-4 h-4" aria-hidden />
-                          </span>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-start justify-between gap-2">
-                              <p className="text-[14px] sm:text-[15px] font-semibold text-[color:var(--foreground)] truncate">
-                                QR scan · {scan.room_name}
-                              </p>
-                              <ScanStatusChip status={scan.status} />
-                            </div>
-                            <p className="text-[13px] text-[color:var(--foreground-muted)] mt-0.5 truncate">
-                              {scan.faculty_name || 'Unknown'}
-                            </p>
-                            <p className="text-[12px] text-[color:var(--foreground-muted)] mt-1 flex items-center gap-1.5">
-                              <Clock className="w-3.5 h-3.5 flex-shrink-0" aria-hidden />
-                              {fmtScanTime(scan.scan_time, scan.scan_date)}
-                            </p>
-                          </div>
-                        </li>
-                      ))}
                     </ul>
                   )}
                 </SectionShell>
@@ -839,13 +788,59 @@ export default function DashboardClient() {
             <button
               type="button"
               onClick={() => load(undefined)}
-              className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-[#3C91E6] hover:text-[#2563EB] cursor-pointer"
+              className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-[#1D5BD6] hover:text-[#164BB5] cursor-pointer"
             >
               <RefreshCw className="w-4 h-4" /> Refresh
             </button>
           </div>
         )}
       </PageLoadTransition>
+
+      <Modal
+        open={programPickerOpen}
+        onClose={() => setProgramPickerOpen(false)}
+        title="Unassigned Subjects"
+        size="sm"
+      >
+        <p className="text-[14px] text-slate-400 mb-4">
+          Select a program to view its unassigned subjects, organized by block.
+        </p>
+        {unassignedByProgram.length === 0 ? (
+          <p className="text-[14px] text-slate-400 py-6 text-center">
+            No unassigned subjects right now.
+          </p>
+        ) : (
+          <ul className="divide-y divide-white/10 -mx-4 sm:-mx-8">
+            {unassignedByProgram.map(row => (
+              <li key={row.program_id}>
+                <button
+                  type="button"
+                  onClick={() => goToProgramUnassigned(row.program_id)}
+                  className="w-full flex items-center gap-3 px-4 sm:px-8 py-3.5 hover:bg-white/[0.06] transition-colors text-left cursor-pointer"
+                >
+                  <span className="inline-flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 bg-white/[0.07] text-[#7EB2F0]">
+                    <GraduationCap className="w-4 h-4" aria-hidden />
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-[15px] font-semibold text-white truncate">
+                      {row.program_code}
+                    </span>
+                    {row.program_name ? (
+                      <span className="block text-[13px] text-slate-400 mt-0.5 truncate">
+                        {row.program_name}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="text-[15px] font-bold tabular-nums text-[#7EB2F0]">
+                    {row.count}
+                  </span>
+                  <ChevronRight className="w-4 h-4 text-slate-500" aria-hidden />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Modal>
     </div>
   );
 }

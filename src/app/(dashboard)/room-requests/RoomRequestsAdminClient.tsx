@@ -1,597 +1,354 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+/**
+ * Room Requests — "Who requested to use a room, and was it approved?"
+ *
+ *  • Pending / Approved / Rejected — pick which requests to list (history)
+ *  • Lecture Rooms | Laboratory Rooms — side-by-side scrolling lists:
+ *    Faculty · Status · More
+ *  • More → request details (instructor, room, date, time, purpose,
+ *    requested at) with Approve / Reject — loading, then a ✓ / ✕ animation
+ *    (the instructor is notified by the server)
+ */
+
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useToast } from '@/client/context/ToastContext';
-import { PageLoadTransition } from '@/client/components/ui/PageLoadTransition';
+import Modal from '@/client/components/ui/Modal';
+import BackButton from '@/client/components/ui/BackButton';
+import WatermarkTitle from '@/client/components/ui/WatermarkTitle';
 import { ListSkeleton } from '@/client/components/ui/skeletons';
-import { LOADING_DELAY, useMinLoading } from '@/client/hooks/useMinLoading';
-import {
-  DoorOpen, Check, X, RefreshCw, CheckCircle, XCircle, Clock,
-  ArrowRight, User, BookOpen, Building2, MessageSquare, CalendarDays,
-  QrCode, Timer, Zap, AlertTriangle,
-} from 'lucide-react';
+import { PageLoadTransition } from '@/client/components/ui/PageLoadTransition';
+import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/client/hooks/useMinLoading';
+import { useVisibilityAwareInterval } from '@/client/hooks/useVisibilityAwareInterval';
+import { ArrowRight, BookOpen, Check, Clock, Monitor, X, XCircle } from 'lucide-react';
+import { RefreshButton } from '../room-utilization/shared';
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
+
 interface RoomRequest {
   id: number;
   faculty_name: string;
   subject_code: string | null;
-  subject_name: string | null;
   block_name: string | null;
   year_level: string | null;
   program_code: string | null;
   original_room_name: string | null;
   requested_room_name: string | null;
-  reason: string;
+  requested_room_type: string | null;
+  reason: string | null;
   status: string;
   admin_notes: string | null;
-  auto_notes: string | null;
-  confirmation_deadline: string | null;
   approved_at: string | null;
   rejected_at: string | null;
   expired_at: string | null;
-  confirmed_at: string | null;
   created_at: string;
+  use_session: { day: string; start_time: string; end_time: string } | null;
 }
 
-type Filter = 'All' | 'Pending Confirmation' | 'In-Use' | 'Expired' | 'Rejected' | 'Approved';
+type Group = 'Pending' | 'Approved' | 'Rejected';
 
-/* ─── Helpers ────────────────────────────────────────────────────────────── */
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString('en-US', {
-    month: 'long', day: 'numeric', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  });
+/* Status → group. Approving a request puts it straight "In-Use". */
+function groupOf(status: string): Group {
+  if (status === 'Pending' || status === 'Pending Confirmation') return 'Pending';
+  if (status === 'Approved' || status === 'In-Use') return 'Approved';
+  return 'Rejected'; // Rejected, Expired
 }
 
-/* ─── Countdown hook ─────────────────────────────────────────────────────── */
-function useCountdown(deadline: string | null) {
-  const [label, setLabel]   = useState('');
-  const [urgent, setUrgent] = useState(false);
-  const ref = useRef<ReturnType<typeof setInterval> | null>(null);
+const EASE = [0.45, 0, 0.55, 1] as const;
+const WHITE = { color: '#FFFFFF' } as const;
 
-  useEffect(() => {
-    if (!deadline) return;
-    const tick = () => {
-      const diff = new Date(deadline).getTime() - Date.now();
-      if (diff <= 0) {
-        setLabel('Window closed');
-        setUrgent(true);
-        if (ref.current) clearInterval(ref.current);
-        return;
-      }
-      const m = Math.floor(diff / 60000);
-      const s = Math.floor((diff % 60000) / 1000);
-      setLabel(`${m}:${s.toString().padStart(2, '0')} remaining`);
-      setUrgent(diff < 5 * 60_000);
-    };
-    tick();
-    ref.current = setInterval(tick, 1000);
-    return () => { if (ref.current) clearInterval(ref.current); };
-  }, [deadline]);
-
-  return { label, urgent };
-}
-
-/* ─── Status config ──────────────────────────────────────────────────────── */
-const STATUS_CFG: Record<string, {
-  badge: string; dot: string; icon: React.ReactNode;
-}> = {
-  'Pending Confirmation': {
-    badge: 'bg-blue-50 text-[#3C91E6] border border-blue-200',
-    dot:   'bg-[#3C91E6]',
-    icon:  <QrCode className="w-3.5 h-3.5" />,
-  },
-  'In-Use': {
-    badge: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
-    dot:   'bg-emerald-500',
-    icon:  <Zap className="w-3.5 h-3.5" />,
-  },
-  Expired: {
-    badge: 'bg-[#F1F5F9] text-[#64748B] border border-[#E2E8F0]',
-    dot:   'bg-[#94A3B8]',
-    icon:  <Timer className="w-3.5 h-3.5" />,
-  },
-  Approved: {
-    badge: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
-    dot:   'bg-emerald-500',
-    icon:  <CheckCircle className="w-3.5 h-3.5" />,
-  },
-  Rejected: {
-    badge: 'bg-red-50 text-red-600 border border-red-200',
-    dot:   'bg-red-500',
-    icon:  <XCircle className="w-3.5 h-3.5" />,
-  },
-  Pending: {
-    badge: 'bg-amber-50 text-amber-700 border border-amber-200',
-    dot:   'bg-amber-400',
-    icon:  <Clock className="w-3.5 h-3.5" />,
-  },
+const GROUP_TONE: Record<Group, { bar: string; soft: string; text: string; border: string }> = {
+  Pending: { bar: '#F59E0B', soft: '#FFFBEB', text: '#B45309', border: '#FDE68A' },
+  Approved: { bar: '#10B981', soft: '#ECFDF5', text: '#047857', border: '#A7F3D0' },
+  Rejected: { bar: '#EF4444', soft: '#FEF2F2', text: '#B91C1C', border: '#FECACA' },
 };
 
-function StatusBadge({ status }: { status: string }) {
-  const cfg = STATUS_CFG[status] ?? {
-    badge: 'bg-[#F1F5F9] text-[#64748B] border border-[#E2E8F0]',
-    dot: 'bg-[#94A3B8]',
-    icon: <Clock className="w-3.5 h-3.5" />,
-  };
+const isLab = (t: string | null) => t === 'Laboratory' || t === 'Computer Lab';
+
+function fmt12(hm: string | null | undefined) {
+  if (!hm) return '—';
+  const [h, m] = hm.split(':').map(Number);
+  return `${h % 12 || 12}:${String(m || 0).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
+}
+const fmtDate = (iso: string) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+const fmtDateTime = (iso: string) => new Date(iso).toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+function StatusPill({ status }: { status: string }) {
+  const g = groupOf(status);
+  const t = GROUP_TONE[g];
+  const label = status === 'In-Use' ? 'Approved' : status === 'Pending Confirmation' ? 'Pending' : status;
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${cfg.badge}`}>
-      {cfg.icon} {status}
+    <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-0.5 rounded-full border whitespace-nowrap"
+      style={{ backgroundColor: t.soft, color: t.text, borderColor: t.border }}>
+      <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: t.bar }} /> {label}
     </span>
   );
 }
 
-/* ─── Countdown badge ────────────────────────────────────────────────────── */
-function CountdownBadge({ deadline }: { deadline: string }) {
-  const { label, urgent } = useCountdown(deadline);
-  if (!label) return null;
-  return (
-    <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full
-      ${urgent
-        ? 'bg-red-50 text-red-600 border border-red-200 animate-pulse'
-        : 'bg-blue-50 text-[#3C91E6] border border-blue-200'
-      }`}>
-      <Timer className="w-3 h-3" /> {label}
-    </span>
-  );
-}
+/* ─── Page ───────────────────────────────────────────────────────────────── */
 
-/* ─── Summary card ───────────────────────────────────────────────────────── */
-interface SummaryCardProps {
-  label: string; count: number; active: boolean; onClick: () => void;
-  accentBg: string; accentText: string; accentBorder: string;
-  icon: React.ReactNode; description: string;
-}
-
-function SummaryCard({ label, count, active, onClick, accentBg, accentText, accentBorder, icon, description }: SummaryCardProps) {
-  return (
-    <button
-      onClick={onClick}
-      className={[
-        'flex flex-col items-start gap-3 p-5 rounded-2xl border text-left transition-all duration-200 w-full group',
-        active
-          ? `${accentBorder} bg-white shadow-md ring-1 ${accentBorder.replace('border-', 'ring-')}`
-          : 'border-[#E2E8F0] bg-white shadow-sm hover:shadow-md hover:border-[#CBD5E1]',
-      ].join(' ')}
-    >
-      {/* Icon badge */}
-      <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${active ? accentBg : 'bg-[#F8FAFC]'} transition-colors`}>
-        <span className={active ? accentText : 'text-[#94A3B8]'}>{icon}</span>
-      </div>
-
-      {/* Count */}
-      <div>
-        <p className={`text-4xl font-extrabold leading-none tabular-nums ${active ? accentText : 'text-[#1E3A5F]'}`}>
-          {count}
-        </p>
-        <p className="text-sm font-bold text-[#1E3A5F] mt-2 leading-tight">{label}</p>
-        <p className="text-xs text-[#94A3B8] mt-0.5">{description}</p>
-      </div>
-    </button>
-  );
-}
-
-/* ─── Request card ───────────────────────────────────────────────────────── */
-function RequestCard({
-  req, onAction, actionId, notes, onNoteChange,
-}: {
-  req: RoomRequest;
-  onAction: (id: number, status: 'Approved' | 'Rejected') => void;
-  actionId: number | null;
-  notes: Record<number, string>;
-  onNoteChange: (id: number, val: string) => void;
-}) {
-  const isPendingConf = req.status === 'Pending Confirmation';
-  const isInUse       = req.status === 'In-Use';
-  const isExpired     = req.status === 'Expired';
-
-  const accentColor =
-    isPendingConf              ? 'bg-[#3C91E6]' :
-    isInUse                    ? 'bg-emerald-500' :
-    isExpired                  ? 'bg-[#CBD5E1]' :
-    req.status === 'Approved'  ? 'bg-emerald-500' :
-    req.status === 'Rejected'  ? 'bg-red-400' :
-    'bg-amber-400';
-
-  return (
-    <div className="bg-white rounded-2xl border border-[#E2E8F0] shadow-sm overflow-hidden">
-      {/* Color accent top bar */}
-      <div className={`h-1 w-full ${accentColor}`} />
-
-      <div className="p-6">
-        {/* Row 1 — faculty + badge + date */}
-        <div className="flex flex-wrap items-start justify-between gap-3 mb-5">
-          <div className="flex items-center gap-3 flex-wrap">
-            {/* Avatar */}
-            <div className="w-10 h-10 rounded-full bg-[#EFF6FF] border border-[#BFDBFE] flex items-center justify-center flex-shrink-0">
-              <User className="w-4.5 h-4.5 text-[#3C91E6]" />
-            </div>
-            <div>
-              <p className="text-base font-bold text-[#1E3A5F] leading-tight">{req.faculty_name}</p>
-              <p className="text-xs font-medium text-[#94A3B8]">Instructor</p>
-            </div>
-            <StatusBadge status={req.status} />
-            {isPendingConf && req.confirmation_deadline && (
-              <CountdownBadge deadline={req.confirmation_deadline} />
-            )}
-          </div>
-          <div className="flex items-center gap-1.5 text-xs font-medium text-[#94A3B8]">
-            <CalendarDays className="w-3.5 h-3.5" />
-            {formatDate(req.created_at)}
-          </div>
-        </div>
-
-        {/* Row 2 — subject */}
-        {req.subject_code && (
-          <div className="flex items-start gap-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl px-4 py-3 mb-3">
-            <BookOpen className="w-4 h-4 text-[#64748B] flex-shrink-0 mt-0.5" />
-            <p className="text-sm text-[#475569]">
-              <span className="font-bold text-[#1E3A5F]">{req.subject_code}</span>
-              {req.subject_name  && <span className="text-[#475569]"> — {req.subject_name}</span>}
-              {req.block_name    && <span className="text-[#64748B]"> &nbsp;·&nbsp; Block <strong className="text-[#1E3A5F]">{req.block_name}</strong></span>}
-              {req.program_code  && <span className="text-[#94A3B8]"> &nbsp;·&nbsp; {req.program_code}</span>}
-            </p>
-          </div>
-        )}
-
-        {/* Row 3 — room arrow */}
-        <div className="flex items-center gap-3 mb-3 flex-wrap">
-          <div className="flex items-center gap-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl px-4 py-3 min-w-[180px] flex-1">
-            <Building2 className="w-4 h-4 text-[#94A3B8] flex-shrink-0" />
-            <div>
-              <p className="text-[10px] text-[#94A3B8] uppercase tracking-widest font-semibold">Current Room</p>
-              <p className="text-sm font-bold text-[#1E3A5F] mt-0.5">
-                {req.original_room_name || <span className="text-[#CBD5E1] font-medium italic">Not assigned</span>}
-              </p>
-            </div>
-          </div>
-
-          <ArrowRight className="w-5 h-5 text-[#3C91E6] flex-shrink-0" />
-
-          <div className="flex items-center gap-3 bg-[#EFF6FF] border border-[#BFDBFE] rounded-xl px-4 py-3 min-w-[180px] flex-1">
-            <Building2 className="w-4 h-4 text-[#3C91E6] flex-shrink-0" />
-            <div>
-              <p className="text-[10px] text-[#3C91E6] uppercase tracking-widest font-semibold">Requested Room</p>
-              <p className="text-sm font-bold text-[#1E3A5F] mt-0.5">
-                {req.requested_room_name ?? 'N/A'}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Row 4 — reason */}
-        <div className="flex items-start gap-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl px-4 py-3 mb-3">
-          <MessageSquare className="w-4 h-4 text-[#64748B] flex-shrink-0 mt-0.5" />
-          <div>
-            <p className="text-[10px] text-[#94A3B8] uppercase tracking-widest font-semibold mb-1">Reason</p>
-            <p className="text-sm text-[#475569] leading-relaxed">&quot;{req.reason}&quot;</p>
-          </div>
-        </div>
-
-        {/* Status info — In-Use */}
-        {isInUse && (
-          <div className="flex items-start gap-3 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 mb-3">
-            <Zap className="w-4 h-4 text-emerald-600 flex-shrink-0 mt-0.5" />
-            <p className="text-sm font-medium text-emerald-700">
-              Room is occupied{req.requested_room_name ? <> — schedule updated to <strong>{req.requested_room_name}</strong></> : null}. QR scan is not required.
-            </p>
-          </div>
-        )}
-
-        {/* Status info — Expired */}
-        {isExpired && (
-          <div className="flex items-start gap-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl px-4 py-3 mb-3">
-            <Timer className="w-4 h-4 text-[#94A3B8] flex-shrink-0 mt-0.5" />
-            <p className="text-sm text-[#64748B]">
-              {req.auto_notes ?? 'QR scan window expired — room returned to available.'}
-            </p>
-          </div>
-        )}
-
-        {/* Status info — Pending Confirmation */}
-        {isPendingConf && (
-          <div className="flex items-start gap-3 bg-[#EFF6FF] border border-[#BFDBFE] rounded-xl px-4 py-3 mb-3">
-            <QrCode className="w-4 h-4 text-[#3C91E6] flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="text-sm font-semibold text-[#1E3A5F]">Waiting for QR scan confirmation</p>
-              <p className="text-xs text-[#64748B] mt-0.5">
-                The instructor must scan the QR code at <strong>{req.requested_room_name}</strong> within the countdown window.
-                You may override this by approving or rejecting below.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* Admin note (resolved) */}
-        {!isPendingConf && req.status !== 'Pending' && req.admin_notes && (
-          <div className="flex items-start gap-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl px-4 py-3 mb-3">
-            <CheckCircle className="w-4 h-4 text-[#64748B] flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="text-[10px] text-[#94A3B8] uppercase tracking-widest font-semibold mb-1">Admin Note</p>
-              <p className="text-sm text-[#475569] leading-relaxed">{req.admin_notes}</p>
-            </div>
-          </div>
-        )}
-
-        {/* Auto notes */}
-        {req.auto_notes && !isExpired && (
-          <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-3">
-            <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
-            <p className="text-xs text-amber-700">{req.auto_notes}</p>
-          </div>
-        )}
-
-        {/* Action area */}
-        {(isPendingConf || req.status === 'Pending') && (
-          <div className="mt-4 pt-5 border-t border-[#E2E8F0]">
-            <p className="text-sm font-bold text-[#1E3A5F] mb-0.5">Admin Note</p>
-            <p className="text-xs text-[#64748B] mb-3">
-              {isPendingConf
-                ? 'Override the auto-flow — approve to apply room immediately, or reject to cancel.'
-                : 'Optional — this note will be visible to the instructor.'}
-            </p>
-            <div className={`rounded-xl transition-all duration-200 mb-4 ${
-              notes[req.id]
-                ? 'bg-slate-50 focus-within:shadow-[0_2px_10px_rgba(0,0,0,0.06)]'
-                : 'bg-[#F8FAFC] hover:bg-slate-50/80 focus-within:bg-white focus-within:shadow-[0_2px_10px_rgba(0,0,0,0.06)]'
-            }`}>
-              <textarea
-                value={notes[req.id] || ''}
-                onChange={e => onNoteChange(req.id, e.target.value)}
-                placeholder="Write a note explaining your decision (optional)..."
-                rows={3}
-                className="w-full bg-transparent border-0 outline-none text-sm text-[#1E3A5F] placeholder:text-[#CBD5E1] font-medium resize-none px-4 py-3"
-              />
-            </div>
-
-            <div className="flex flex-col sm:flex-row gap-3">
-              <button
-                onClick={() => onAction(req.id, 'Approved')}
-                disabled={actionId === req.id}
-                className="flex-1 flex items-center justify-center gap-2
-                  bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800
-                  disabled:opacity-50 disabled:cursor-not-allowed
-                  text-white py-3 px-5 rounded-xl text-sm font-bold
-                  transition-all shadow-sm"
-              >
-                <Check className="w-4 h-4" />
-                {actionId === req.id ? 'Processing…' : isPendingConf ? 'Force Approve' : 'Approve Request'}
-              </button>
-              <button
-                onClick={() => onAction(req.id, 'Rejected')}
-                disabled={actionId === req.id}
-                className="flex-1 flex items-center justify-center gap-2
-                  bg-white border border-red-300 text-red-600
-                  hover:bg-red-50 hover:border-red-400 active:bg-red-100
-                  disabled:opacity-50 disabled:cursor-not-allowed
-                  py-3 px-5 rounded-xl text-sm font-bold
-                  transition-all"
-              >
-                <X className="w-4 h-4" />
-                {actionId === req.id ? 'Processing…' : 'Reject'}
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ─── Main component ─────────────────────────────────────────────────────── */
 export default function RoomRequestsAdminClient() {
   const toast = useToast();
+  const reduceMotion = useReducedMotion();
+
   const [requests, setRequests] = useState<RoomRequest[]>([]);
-  const [loading,  setLoading]  = useState(true);
-  const [actionId, setActionId] = useState<number | null>(null);
-  const [notes,    setNotes]    = useState<Record<number, string>>({});
-  const [filter,   setFilter]   = useState<Filter>('Pending Confirmation');
-  const [error,    setError]    = useState('');
+  const [loading, setLoading] = useState(true);
+  const [group, setGroup] = useState<Group>('Pending');
+  const [open, setOpen] = useState<RoomRequest | null>(null);
+  const [note, setNote] = useState('');
+  const [acting, setActing] = useState<'Approved' | 'Rejected' | null>(null);
+  const [done, setDone] = useState<'Approved' | 'Rejected' | null>(null);
 
-  async function load() {
+  const load = useCallback(() => {
     setLoading(true);
-    setError('');
-    try {
-      const res = await fetch('/api/admin/room-requests');
-      if (res.ok) setRequests((await res.json()).requests || []);
-      else setError('Failed to load requests. Please try refreshing.');
-    } catch {
-      setError('Connection error. Please check your network and try again.');
-    } finally {
-      setLoading(false);
-    }
-  }
+    fetch('/api/admin/room-requests')
+      .then(r => (r.ok ? r.json() : Promise.reject()))
+      .then(d => setRequests(d.requests ?? []))
+      .catch(() => toast.error('Could not load room requests.'))
+      .finally(() => setLoading(false));
+  }, [toast]);
+  useEffect(() => { load(); }, [load]);
+  useVisibilityAwareInterval(load, 30_000);
 
-  useEffect(() => { load(); }, []);
+  const showSkeleton = useMinLoading(loading && requests.length === 0, PAGE_SKELETON_MIN_MS);
 
-  async function handleAction(id: number, status: 'Approved' | 'Rejected') {
-    setActionId(id);
+  const counts = useMemo(() => {
+    const c: Record<Group, number> = { Pending: 0, Approved: 0, Rejected: 0 };
+    for (const r of requests) c[groupOf(r.status)] += 1;
+    return c;
+  }, [requests]);
+  const inGroup = useMemo(() => requests.filter(r => groupOf(r.status) === group), [requests, group]);
+
+  async function act(status: 'Approved' | 'Rejected') {
+    if (!open || acting) return;
+    setActing(status);
+    const started = performance.now();
     try {
-      const res = await fetch(`/api/admin/room-requests/${id}`, {
+      const res = await fetch(`/api/admin/room-requests/${open.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, admin_notes: notes[id] || null }),
+        body: JSON.stringify({ status, admin_notes: note.trim() || null }),
       });
-      if (!res.ok) {
-        const d = await res.json();
-        toast.error(d.error || 'Action failed. Please try again.');
-        return;
-      }
-      toast.success(status === 'Approved' ? 'Room request approved.' : 'Room request rejected.');
-      setNotes(prev => { const n = { ...prev }; delete n[id]; return n; });
-      load();
+      const data = await res.json().catch(() => ({}));
+      // Keep the loading visible long enough to register
+      await new Promise(r => window.setTimeout(r, Math.max(0, 700 - (performance.now() - started))));
+      if (!res.ok) { toast.error(data.error || 'Could not update the request.'); return; }
+      setDone(status);
+      window.setTimeout(() => {
+        setDone(null);
+        setOpen(null);
+        toast.success(status === 'Approved' ? 'Request approved — the instructor was notified.' : 'Request rejected — the instructor was notified.');
+        load();
+      }, 1300);
+    } catch {
+      toast.error('Connection error. Please try again.');
     } finally {
-      setActionId(null);
+      setActing(null);
     }
   }
 
-  const counts = {
-    All:                    requests.length,
-    'Pending Confirmation': requests.filter(r => r.status === 'Pending Confirmation').length,
-    'In-Use':               requests.filter(r => r.status === 'In-Use').length,
-    Expired:                requests.filter(r => r.status === 'Expired').length,
-    Rejected:               requests.filter(r => r.status === 'Rejected').length,
-    Approved:               requests.filter(r => r.status === 'Approved').length,
+  const openDetails = (r: RoomRequest) => { setNote(''); setOpen(r); };
+
+  /* One list per room type */
+  const renderPanel = (lab: boolean) => {
+    const list = inGroup.filter(r => isLab(r.requested_room_type) === lab);
+    const title = lab ? 'Laboratory Rooms' : 'Lecture Rooms';
+    const tone = lab ? { bar: '#F59E0B', tile: 'bg-amber-50 text-amber-600' } : { bar: '#1D5BD6', tile: 'bg-[#EFF6FF] text-[#1D5BD6]' };
+    return (
+      <section className="relative bg-white rounded-2xl border border-[#E3E9F3] shadow-[0_1px_3px_rgba(11,42,91,0.06)] overflow-hidden min-w-0 flex flex-col">
+        <span className="absolute inset-x-0 top-0 h-1" style={{ backgroundColor: tone.bar }} aria-hidden="true" />
+        <div className="flex items-center gap-3 px-5 pt-5 pb-4 border-b border-[#EEF2F8]">
+          <span className={`w-9 h-9 rounded-lg flex items-center justify-center ${tone.tile}`}>
+            {lab ? <Monitor className="w-[18px] h-[18px]" /> : <BookOpen className="w-[18px] h-[18px]" />}
+          </span>
+          <h2 className="flex-1 text-[15px] font-bold text-[#0B2A5B]">{title}</h2>
+          <span className="text-xs font-bold tabular-nums px-2.5 py-0.5 rounded-full bg-[#F1F5F9] text-[#475569]">{list.length}</span>
+        </div>
+
+        <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-x-4 px-5 py-2.5 bg-[#F8FAFC] border-b border-[#EEF2F8] text-[12px] font-semibold text-[#475569]">
+          <span>Faculty</span><span>Status</span><span className="w-[84px]" />
+        </div>
+
+        {/* Scrolls inside the panel */}
+        <div className="max-h-[440px] overflow-y-auto overscroll-contain">
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.ul
+              key={group}
+              initial={reduceMotion ? false : { opacity: 0 }}
+              animate={{ opacity: 1, transition: { duration: 0.3, ease: EASE } }}
+              exit={{ opacity: 0, transition: { duration: 0.2 } }}
+              className="divide-y divide-[#F1F5F9]"
+            >
+              {list.length === 0 ? (
+                <li className="px-5 py-12 text-center text-sm text-[#94A3B8]">No {group.toLowerCase()} requests.</li>
+              ) : list.map((r, i) => (
+                <motion.li
+                  key={r.id}
+                  initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0, transition: { duration: 0.4, ease: EASE, delay: reduceMotion ? 0 : Math.min(i, 10) * 0.045 } }}
+                  className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-4 px-5 py-3 hover:bg-[#F8FBFF] transition-colors"
+                >
+                  <div className="min-w-0">
+                    <p className="font-semibold text-sm text-[#0B2A5B] truncate">{r.faculty_name}</p>
+                    <p className="text-xs text-[#64748B] truncate">
+                      {r.requested_room_name ?? '—'} · {fmtDate(r.created_at)}
+                    </p>
+                  </div>
+                  <StatusPill status={r.status} />
+                  <motion.button
+                    type="button"
+                    onClick={() => openDetails(r)}
+                    whileTap={reduceMotion ? undefined : { scale: 0.96 }}
+                    className="group w-[84px] inline-flex items-center justify-center gap-1 h-8 rounded-lg border border-[#D6E0EF] text-[13px] font-semibold text-[#0B2A5B] hover:border-[#9DB8E8] hover:text-[#1D5BD6] hover:bg-[#F8FBFF] transition-colors"
+                  >
+                    More <ArrowRight className="w-3.5 h-3.5 transition-transform duration-200 group-hover:translate-x-0.5" />
+                  </motion.button>
+                </motion.li>
+              ))}
+            </motion.ul>
+          </AnimatePresence>
+        </div>
+      </section>
+    );
   };
 
-  const filtered = filter === 'All' ? requests :
-    filter === 'Rejected' ? requests.filter(r => r.status === 'Rejected') :
-    requests.filter(r => r.status === filter);
-
-  const filterLabel = filter === 'All' ? 'All Requests' : `${filter} Requests`;
-  const showSkeleton = useMinLoading(loading && requests.length === 0, LOADING_DELAY);
-
   return (
-    <div className="min-h-full bg-[#F8FAFC]">
-      <div className="max-w-5xl mx-auto px-6 md:px-8 py-8">
-
-        {/* ── Header ── */}
-        <div className="flex items-center justify-between gap-4 mb-8">
-          <div>
-            <h1 className="text-2xl font-bold text-[#1E3A5F] tracking-tight">Room Change Requests</h1>
-            <p className="text-sm text-[#64748B] mt-0.5">Monitor auto-confirmed requests and override when needed</p>
-          </div>
-          <button
-            onClick={load}
-            disabled={loading}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold
-              bg-white border border-[#E2E8F0] text-[#1E3A5F] shadow-sm
-              hover:bg-[#F8FAFC] hover:border-[#CBD5E1] disabled:opacity-50 disabled:cursor-not-allowed
-              transition-all duration-150 flex-shrink-0"
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-[#3C91E6]' : 'text-[#64748B]'}`} />
-            Refresh
-          </button>
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto w-full min-w-0 space-y-5">
+      <div>
+        <BackButton />
+        <div className="mt-4 sm:mt-7 mb-4">
+          <WatermarkTitle>Room Requests</WatermarkTitle>
         </div>
-
-        {/* ── Error banner ── */}
-        {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 px-5 py-4 rounded-xl text-sm font-semibold mb-6 flex items-center gap-3">
-            <XCircle className="w-4 h-4 flex-shrink-0 text-red-500" /> {error}
-          </div>
-        )}
-
-        {/* ── Summary cards ── */}
-        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
-          <SummaryCard
-            label="Pending QR"
-            count={counts['Pending Confirmation']}
-            active={filter === 'Pending Confirmation'}
-            onClick={() => setFilter('Pending Confirmation')}
-            accentBg="bg-[#EFF6FF]"
-            accentText="text-[#3C91E6]"
-            accentBorder="border-[#93C5FD]"
-            icon={<QrCode className="w-5 h-5" />}
-            description="Awaiting QR scan"
-          />
-          <SummaryCard
-            label="In-Use"
-            count={counts['In-Use']}
-            active={filter === 'In-Use'}
-            onClick={() => setFilter('In-Use')}
-            accentBg="bg-emerald-50"
-            accentText="text-emerald-600"
-            accentBorder="border-emerald-300"
-            icon={<Zap className="w-5 h-5" />}
-            description="QR confirmed, active"
-          />
-          <SummaryCard
-            label="Expired"
-            count={counts.Expired}
-            active={filter === 'Expired'}
-            onClick={() => setFilter('Expired')}
-            accentBg="bg-[#F1F5F9]"
-            accentText="text-[#64748B]"
-            accentBorder="border-[#CBD5E1]"
-            icon={<Timer className="w-5 h-5" />}
-            description="QR window missed"
-          />
-          <SummaryCard
-            label="Rejected"
-            count={counts.Rejected}
-            active={filter === 'Rejected'}
-            onClick={() => setFilter('Rejected')}
-            accentBg="bg-red-50"
-            accentText="text-red-500"
-            accentBorder="border-red-300"
-            icon={<XCircle className="w-5 h-5" />}
-            description="Rejected requests"
-          />
-          <SummaryCard
-            label="Approved"
-            count={counts.Approved}
-            active={filter === 'Approved'}
-            onClick={() => setFilter('Approved')}
-            accentBg="bg-emerald-50"
-            accentText="text-emerald-600"
-            accentBorder="border-emerald-300"
-            icon={<CheckCircle className="w-5 h-5" />}
-            description="Admin-approved"
-          />
-          <SummaryCard
-            label="All Requests"
-            count={counts.All}
-            active={filter === 'All'}
-            onClick={() => setFilter('All')}
-            accentBg="bg-[#EFF6FF]"
-            accentText="text-[#3C91E6]"
-            accentBorder="border-[#93C5FD]"
-            icon={<DoorOpen className="w-5 h-5" />}
-            description="Total requests"
-          />
-        </div>
-
-        {/* ── Section heading ── */}
-        <div className="flex items-center gap-3 mb-4">
-          <h2 className="text-base font-bold text-[#1E3A5F]">{filterLabel}</h2>
-          <span className="text-xs font-semibold text-[#94A3B8] bg-[#F1F5F9] px-2.5 py-0.5 rounded-full">
-            {filtered.length} {filtered.length === 1 ? 'result' : 'results'}
-          </span>
-        </div>
-
-        {/* ── Content ── */}
-        <PageLoadTransition
-          showSkeleton={showSkeleton}
-          skeleton={<ListSkeleton rows={6} />}
-        >
-        {filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-24 text-center bg-white rounded-2xl border border-[#E2E8F0] shadow-sm">
-            <div className="w-16 h-16 rounded-2xl bg-[#F1F5F9] flex items-center justify-center mb-4">
-              <DoorOpen className="w-8 h-8 text-[#CBD5E1]" />
-            </div>
-            <p className="text-base font-bold text-[#1E3A5F] mb-1">
-              No {filter !== 'All' ? filter.toLowerCase() + ' ' : ''}room change requests
-            </p>
-            <p className="text-sm text-[#94A3B8] max-w-sm leading-relaxed">
-              {filter === 'Pending Confirmation'
-                ? 'No requests are currently waiting for QR scan confirmation.'
-                : filter === 'In-Use'
-                ? 'No rooms are currently confirmed via room requests.'
-                : filter === 'Expired'
-                ? 'No requests have expired without QR confirmation.'
-                : filter === 'Rejected'
-                ? 'No requests have been rejected.'
-                : 'No room change requests have been submitted yet.'}
-            </p>
-          </div>
-
-        ) : (
-          <div className="space-y-4">
-            {filtered.map(req => (
-              <RequestCard
-                key={req.id}
-                req={req}
-                onAction={handleAction}
-                actionId={actionId}
-                notes={notes}
-                onNoteChange={(id, val) => setNotes(prev => ({ ...prev, [id]: val }))}
-              />
-            ))}
-          </div>
-        )}
-        </PageLoadTransition>
       </div>
+
+      {/* Pending · Approved · Rejected  +  Refresh */}
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+        <div className="grid grid-cols-3 gap-3 flex-1" role="tablist" aria-label="Request status">
+          {(['Pending', 'Approved', 'Rejected'] as Group[]).map(g => {
+            const on = g === group;
+            const t = GROUP_TONE[g];
+            const Icon = g === 'Pending' ? Clock : g === 'Approved' ? Check : XCircle;
+            return (
+              <motion.button
+                key={g}
+                type="button"
+                role="tab"
+                aria-selected={on}
+                onClick={() => setGroup(g)}
+                whileHover={reduceMotion || on ? undefined : { y: -2 }}
+                whileTap={reduceMotion ? undefined : { scale: 0.98 }}
+                className="qr-stat-tint relative overflow-hidden text-left rounded-2xl border px-4 py-3 flex items-center gap-3 transition-[border-color,box-shadow] duration-300"
+                style={{
+                  background: `linear-gradient(135deg, ${t.soft} 0%, #FFFFFF 72%)`,
+                  borderColor: on ? t.bar : `${t.bar}40`,
+                  boxShadow: on ? `0 0 0 3px ${t.soft}` : '0 2px 8px -4px rgba(11,42,91,0.12)',
+                }}
+              >
+                {on && <motion.span layoutId="rr-tab-bar" className="absolute inset-x-0 top-0 h-[3px]" style={{ backgroundColor: t.bar }} transition={{ duration: 0.4, ease: EASE }} />}
+                <span className="w-9 h-9 rounded-xl flex items-center justify-center bg-white shadow-[0_2px_6px_-2px_rgba(11,42,91,0.15)]" style={{ color: t.bar }}>
+                  <Icon className="w-[18px] h-[18px]" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-[13px] font-semibold text-[#475569]">{g}</span>
+                  <span className="block text-xl font-bold text-[#0B2A5B] leading-tight tabular-nums">{counts[g]}</span>
+                </span>
+              </motion.button>
+            );
+          })}
+        </div>
+        <RefreshButton onRefresh={load} loading={loading} />
+      </div>
+
+      <PageLoadTransition showSkeleton={showSkeleton} skeleton={<ListSkeleton rows={8} />}>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+          {renderPanel(false)}
+          {renderPanel(true)}
+        </div>
+      </PageLoadTransition>
+
+      {/* ── Request details ─────────────────────────────────────────── */}
+      <Modal open={!!open} onClose={() => { if (!acting && !done) setOpen(null); }} title="Room Request" size="sm">
+        {done && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-2xl backdrop-blur-md save-success-overlay">
+            <div className="save-success-badge flex flex-col items-center gap-3 px-8 py-7 rounded-2xl bg-white border border-[#E2E8F0] shadow-2xl">
+              <svg width="72" height="72" viewBox="0 0 52 52" aria-hidden="true">
+                <circle className="save-success-circle" cx="26" cy="26" r="24" fill="none" stroke={done === 'Approved' ? '#22C55E' : '#EF4444'} strokeWidth="3" />
+                {done === 'Approved'
+                  ? <path className="save-success-check" fill="none" stroke="#22C55E" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" d="M14.5 27 22 34.5 38 17" />
+                  : <>
+                      <path className="save-success-check" fill="none" stroke="#EF4444" strokeWidth="3.5" strokeLinecap="round" d="M18 18 34 34" />
+                      <path className="save-success-check" fill="none" stroke="#EF4444" strokeWidth="3.5" strokeLinecap="round" d="M34 18 18 34" style={{ animationDelay: '0.45s' }} />
+                    </>}
+              </svg>
+              <p className="text-base font-semibold text-[#0B2A5B]">{done === 'Approved' ? 'Request approved!' : 'Request rejected'}</p>
+            </div>
+          </div>
+        )}
+
+        {open && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-lg font-bold text-[#0B2A5B] truncate">{open.faculty_name}</p>
+              <StatusPill status={open.status} />
+            </div>
+
+            <dl className="rounded-xl border border-[#E3E9F3] divide-y divide-[#F1F5F9] text-sm">
+              {([
+                ['Room', `${open.requested_room_name ?? '—'}${open.original_room_name && open.original_room_name !== open.requested_room_name ? `  (from ${open.original_room_name})` : ''}`],
+                ['Date', `${open.use_session?.day ? `${open.use_session.day}, ` : ''}${fmtDate(open.created_at)}`],
+                ['Time', open.use_session ? `${fmt12(open.use_session.start_time)} – ${fmt12(open.use_session.end_time)}` : '—'],
+                ['Class', open.subject_code ? `${open.subject_code} · ${[open.program_code, `${String(open.year_level ?? '').match(/\d+/)?.[0] ?? ''}${open.block_name ?? ''}`].filter(Boolean).join(' ')}` : '—'],
+                ['Purpose', open.reason || '—'],
+                ['Requested', fmtDateTime(open.created_at)],
+                ...(open.admin_notes ? [['Note', open.admin_notes] as const] : []),
+              ] as const).map(([k, v]) => (
+                <div key={k} className="grid grid-cols-[92px_minmax(0,1fr)] gap-3 px-4 py-2.5">
+                  <dt className="text-[#64748B] font-medium">{k}</dt>
+                  <dd className="text-[#0B2A5B] font-semibold break-words">{v}</dd>
+                </div>
+              ))}
+            </dl>
+
+            {groupOf(open.status) === 'Pending' && (
+              <>
+                <input
+                  value={note}
+                  onChange={e => setNote(e.target.value)}
+                  placeholder="Note to instructor (optional)"
+                  maxLength={300}
+                  className="w-full h-11 px-3.5 rounded-xl border border-[#D6E0EF] bg-[#F4F7FC] text-sm text-[#0B2A5B] placeholder:text-[#94A3B8] outline-none"
+                />
+                <div className="grid grid-cols-2 gap-3">
+                  <motion.button
+                    type="button"
+                    onClick={() => act('Rejected')}
+                    disabled={!!acting}
+                    whileTap={reduceMotion || acting ? undefined : { scale: 0.97 }}
+                    className="h-11 inline-flex items-center justify-center gap-2 rounded-xl border border-red-200 bg-white text-sm font-semibold text-red-600 hover:bg-red-50 transition-colors disabled:opacity-60"
+                  >
+                    {acting === 'Rejected'
+                      ? <><span className="w-4 h-4 border-2 border-red-200 border-t-red-600 rounded-full animate-spin" /> Rejecting…</>
+                      : <><X className="w-4 h-4" /> Reject</>}
+                  </motion.button>
+                  <motion.button
+                    type="button"
+                    onClick={() => act('Approved')}
+                    disabled={!!acting}
+                    whileTap={reduceMotion || acting ? undefined : { scale: 0.97 }}
+                    className="h-11 inline-flex items-center justify-center gap-2 rounded-xl bg-[#1D5BD6] hover:bg-[#164BB5] text-sm font-semibold transition-colors disabled:opacity-60"
+                    style={WHITE}
+                  >
+                    {acting === 'Approved'
+                      ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Approving…</>
+                      : <><Check className="w-4 h-4" style={WHITE} /> Approve</>}
+                  </motion.button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

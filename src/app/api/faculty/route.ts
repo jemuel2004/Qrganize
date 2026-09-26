@@ -13,20 +13,24 @@ import {
   ensureEmailRegistry,
   assertUsernameAllowed,
 } from '@/server/emailIdentity';
+import { PRIORITY_SUBJECTS_SUBQUERY, setPrioritySubjects, type PrioritySubject } from '@/server/facultyPrioritySubjects';
+import { resolveProgramScope, canAccessProgram } from '@/server/programScope';
 
 
 // ─────────────────────────────────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
   try {
-    const authGet = await getAuthUser(req) as { role?: string } | null;
-    if (!authGet || !['admin', 'department_chair'].includes(authGet.role ?? '')) {
+    const authGet = await getAuthUser(req) as { role?: string; program_id?: number | null } | null;
+    if (!authGet || !['admin', 'department_chair', 'program_chair'].includes(authGet.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     await ensureFacultyProfileColumns();
 
     const { searchParams } = new URL(req.url);
-    const programId        = searchParams.get('program_id');
+    const scope = await resolveProgramScope(authGet, { requestedProgramId: searchParams.get('program_id') });
+    if (!scope.ok) return scope.response;
+    const programId         = scope.programId != null ? String(scope.programId) : null;
     const employmentStatus = searchParams.get('employment_status');
 
     let sql = `
@@ -36,12 +40,14 @@ export async function GET(req: NextRequest) {
         f.designation_units, f.load_type, f.contact_number,
         f.is_active, f.created_at,
         f.years_in_service, f.educational_qualification, f.major, f.eligibility,
+        f.specialization,
         p.code AS program_code,
         p.name AS program_name,
         CASE WHEN f.employment_status = 'Permanent'
           THEN ${REGULAR_LOAD_MAX_UNITS} - f.designation_units
           ELSE ${CONTRACTUAL_REGULAR_HOURS_LIMIT}
-        END AS remaining_regular_load
+        END AS remaining_regular_load,
+        ${PRIORITY_SUBJECTS_SUBQUERY} AS priority_subjects
       FROM faculty f
       LEFT JOIN programs p ON p.id = f.program_id
       WHERE f.is_active IS NOT FALSE
@@ -73,8 +79,10 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     // ── Auth ─────────────────────────────────────────────────────────────────
-    const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    // Faculty creation is admin-only — Department Chair and Program Chair can
+    // view the Faculty page but not add/edit/delete records there.
+    const auth = await getAuthUser(req) as { role?: string; program_id?: number | null } | null;
+    if (!auth || auth.role !== 'admin') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -94,7 +102,8 @@ export async function POST(req: NextRequest) {
       first_name, last_name, middle_name,
       program_id, position, designation_type, designation_units, load_type,
       username, email, password,
-      years_in_service, educational_qualification, major, eligibility,
+      years_in_service, educational_qualification, major, eligibility, specialization,
+      priority_subjects,
     } = body as Record<string, unknown>;
 
     // ── Required field validation ─────────────────────────────────────────────
@@ -108,6 +117,12 @@ export async function POST(req: NextRequest) {
     const program = await resolveRequiredProgramId(program_id);
     if (!program.ok)
       return NextResponse.json({ error: program.error.error, field: program.error.field }, { status: 400 });
+    if (!(await canAccessProgram(auth, program.id))) {
+      return NextResponse.json(
+        { error: 'You can only add faculty to your assigned program.', field: 'program_id' },
+        { status: 403 }
+      );
+    }
     if (!String(username ?? '').trim())
       return NextResponse.json({ error: 'Username is required.', field: 'username' }, { status: 400 });
     if (!String(email ?? '').trim())
@@ -154,6 +169,7 @@ export async function POST(req: NextRequest) {
     const edQual   = educational_qualification ? String(educational_qualification).trim().slice(0, 255) || null : null;
     const majorVal = major       ? String(major).trim().slice(0, 255)       || null : null;
     const eligVal  = eligibility ? String(eligibility).trim().slice(0, 255) || null : null;
+    const specVal  = specialization ? String(specialization).trim().slice(0, 255) || null : null;
 
     // ── Duplicate checks (before hashing password) ────────────────────────────
     const dupUser = await query(
@@ -175,14 +191,14 @@ export async function POST(req: NextRequest) {
         INSERT INTO faculty
           (first_name, last_name, middle_name, name,
            program_id, position, designation_type, designation_units, load_type,
-           years_in_service, educational_qualification, major, eligibility)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+           years_in_service, educational_qualification, major, eligibility, specialization)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         RETURNING id
       `, [
         fnStr, lnStr, midStr, fullName,
         program.id, posStr, desType, desUnits,
         String(load_type || 'Regular').trim(),
-        yisRaw, edQual, majorVal, eligVal,
+        yisRaw, edQual, majorVal, eligVal, specVal,
       ]);
 
       const facultyId = fRow.rows[0].id;
@@ -212,14 +228,17 @@ export async function POST(req: NextRequest) {
         [emailStr, accountId]
       );
 
+      await setPrioritySubjects(client, facultyId, priority_subjects as PrioritySubject[] | undefined);
+
       // Return combined record
       const combined = await client.query(`
         SELECT
           f.id, f.first_name, f.last_name, f.middle_name, f.name, f.employee_id,
           f.program_id, f.position, f.employment_status,
           f.designation_type, f.designation_units, f.load_type,
-          f.years_in_service, f.educational_qualification, f.major, f.eligibility,
-          ia.username, ia.email
+          f.years_in_service, f.educational_qualification, f.major, f.eligibility, f.specialization,
+          ia.username, ia.email,
+          ${PRIORITY_SUBJECTS_SUBQUERY} AS priority_subjects
         FROM faculty f
         JOIN instructor_accounts ia ON ia.faculty_id = f.id
         WHERE f.id = $1

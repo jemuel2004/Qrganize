@@ -1,8 +1,10 @@
-'use client';
+﻿'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { useToast } from '@/client/context/ToastContext';
 import Modal from '@/client/components/ui/Modal';
+import BackButton from '@/client/components/ui/BackButton';
+import TrashDropAnimation from '@/client/components/ui/TrashDropAnimation';
 import { PageLoadTransition } from '@/client/components/ui/PageLoadTransition';
 import { Skeleton, TableSkeleton } from '@/client/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/client/hooks/useMinLoading';
@@ -80,7 +82,7 @@ function TextInput({
       onChange={e => onChange(e.target.value)}
       placeholder={placeholder}
       disabled={disabled}
-      className="w-full bg-[#0b0f1a] border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-[#3C91E6] focus:border-[#3C91E6] disabled:opacity-50"
+      className="w-full bg-[#0b0f1a] border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-[#1D5BD6] focus:border-[#1D5BD6] disabled:opacity-50"
     />
   );
 }
@@ -125,6 +127,9 @@ export default function DeptChairAccountsClient() {
   const [submitting, setSubmitting] = useState(false);
   const [togglingId, setTogglingId] = useState<number | null>(null);
   const [formError, setFormError] = useState('');
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [showSaveSkeleton, setShowSaveSkeleton] = useState(false);
+  const [deleteSuccess, setDeleteSuccess] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -203,8 +208,17 @@ export default function DeptChairAccountsClient() {
         setFormError(msg); return;
       }
       const d = await res.json();
-      toast.success(`Account "${d.account.username}" created.`);
-      closeModal(); load();
+      setSubmitting(false);
+      setSaveSuccess(true);
+      setShowSaveSkeleton(true);
+      load();
+      setTimeout(() => {
+        setSaveSuccess(false);
+        setShowSaveSkeleton(false);
+        closeModal();
+        toast.success(`Account "${d.account.username}" created.`);
+      }, 1300);
+      return;
     } catch { setFormError('Connection error. Please try again.'); }
     finally { setSubmitting(false); }
   }
@@ -234,8 +248,17 @@ export default function DeptChairAccountsClient() {
         try { msg = ((await res.json()) as { error?: string })?.error ?? msg; } catch { /* html */ }
         setFormError(msg); return;
       }
-      toast.success('Account updated.');
-      closeModal(); load();
+      setSubmitting(false);
+      setSaveSuccess(true);
+      setShowSaveSkeleton(true);
+      load();
+      setTimeout(() => {
+        setSaveSuccess(false);
+        setShowSaveSkeleton(false);
+        closeModal();
+        toast.success('Account updated.');
+      }, 1300);
+      return;
     } catch { setFormError('Connection error. Please try again.'); }
     finally { setSubmitting(false); }
   }
@@ -272,9 +295,18 @@ export default function DeptChairAccountsClient() {
         try { msg = ((await res.json()) as { error?: string })?.error ?? msg; } catch { /* html */ }
         setFormError(msg); return;
       }
-      toast.success(`Account "${selected.username}" deleted.`);
-      closeModal();
+      const deletedUsername = selected.username;
+      setSubmitting(false);
+      setDeleteSuccess(true);
+      setShowSaveSkeleton(true);
       load();
+      setTimeout(() => {
+        setDeleteSuccess(false);
+        setShowSaveSkeleton(false);
+        closeModal();
+        toast.success(`Account "${deletedUsername}" deleted.`);
+      }, 1300);
+      return;
     } catch {
       setFormError('Connection error. Please check your network and try again.');
     } finally {
@@ -312,7 +344,7 @@ export default function DeptChairAccountsClient() {
   const showSkeleton = useMinLoading(loading && accounts.length === 0, LOADING_DELAY);
 
   const pageSkeleton = (
-    <div className="space-y-6" role="status" aria-live="polite" aria-label="Loading department chair accounts">
+    <div className="space-y-6" role="status" aria-live="polite" aria-label="Loading Program Chair Accounts">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="space-y-2 min-w-0">
           <Skeleton className="h-8 w-64 max-w-full rounded-md bg-white/10" />
@@ -335,25 +367,23 @@ export default function DeptChairAccountsClient() {
     <div className="min-h-screen bg-[#0b0f1a] text-white">
       <div className="max-w-7xl mx-auto px-6 py-8 w-full min-w-0">
         <PageLoadTransition
-          showSkeleton={showSkeleton}
+          showSkeleton={showSkeleton || showSaveSkeleton}
           skeleton={pageSkeleton}
           className="space-y-6"
         >
 
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-2xl font-bold text-white mb-1">Department Chair Accounts</h1>
-            <p className="text-slate-400 text-sm">
-              Manage department chair login accounts, reset passwords, and control access.
-            </p>
+            <BackButton variant="dark" />
+            <h1 className="text-2xl font-bold text-white mb-1">Program Chair Accounts</h1>
           </div>
           <button
             type="button"
             onClick={openCreate}
-            className="flex items-center gap-2 bg-[#3C91E6] hover:bg-[#2E7DD1] text-white px-5 py-2.5 rounded-xl font-semibold text-sm transition-colors shadow-lg shadow-[#3C91E6]/20"
+            className="flex items-center gap-2 bg-[#1D5BD6] hover:bg-[#2E7DD1] text-white px-5 py-2.5 rounded-xl font-semibold text-sm transition-colors shadow-lg shadow-[#1D5BD6]/20"
           >
             <Plus className="w-4 h-4" />
-            Add Department Chair Account
+            Add Program Chair Account
           </button>
         </div>
 
@@ -381,7 +411,7 @@ export default function DeptChairAccountsClient() {
             )}
           </div>
           <p className="text-xs text-slate-400 mt-3">
-            {`${filtered.length} department chair account${filtered.length !== 1 ? 's' : ''} found`}
+            {`${filtered.length} program chair account${filtered.length !== 1 ? 's' : ''} found`}
           </p>
         </div>
 
@@ -392,11 +422,11 @@ export default function DeptChairAccountsClient() {
               <div className="w-14 h-14 rounded-2xl bg-white/5 flex items-center justify-center">
                 <Shield className="w-7 h-7 text-slate-600" />
               </div>
-              <p className="text-slate-400 font-medium">No department chair accounts found</p>
+              <p className="text-slate-400 font-medium">No Program Chair Accounts found</p>
               <p className="text-slate-600 text-sm">
                 {search || filterStatus
                   ? 'Try adjusting your search or filters.'
-                  : 'Click "Add Department Chair Account" to create one.'}
+                  : 'Click "Add Program Chair Account" to create one.'}
               </p>
             </div>
           ) : (
@@ -419,7 +449,7 @@ export default function DeptChairAccountsClient() {
                       <tr key={acc.id} className={`transition-colors hover:bg-white/[0.03] ${!acc.is_active ? 'opacity-60' : ''}`}>
                         <td className="px-5 py-4">
                           <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-full bg-[#3C91E6]/20 border border-[#3C91E6]/30 flex items-center justify-center flex-shrink-0 text-[#3C91E6] font-bold text-sm">
+                            <div className="w-10 h-10 rounded-full bg-[#1D5BD6]/20 border border-[#1D5BD6]/30 flex items-center justify-center flex-shrink-0 text-[#1D5BD6] font-bold text-sm">
                               {acc.username.slice(0, 2).toUpperCase()}
                             </div>
                             <div className="min-w-0">
@@ -450,7 +480,7 @@ export default function DeptChairAccountsClient() {
                         <td className="px-5 py-4">
                           <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
                             <button type="button" onClick={() => openEdit(acc)} title="Edit account"
-                              className="p-2 rounded-lg text-slate-400 hover:text-[#3C91E6] hover:bg-[#3C91E6]/10 transition-colors min-h-10 min-w-10 inline-flex items-center justify-center">
+                              className="p-2 rounded-lg text-slate-400 hover:text-[#1D5BD6] hover:bg-[#1D5BD6]/10 transition-colors min-h-10 min-w-10 inline-flex items-center justify-center">
                               <Pencil className="w-4 h-4" />
                             </button>
                             <button type="button" onClick={() => openPassword(acc)} title="Reset password"
@@ -486,10 +516,32 @@ export default function DeptChairAccountsClient() {
       {(modal === 'create' || modal === 'edit') && (
         <Modal
           open
-          title={modal === 'create' ? 'Create Department Chair Account' : `Edit — ${selected?.username}`}
+          title={modal === 'create' ? 'Create Program Chair Account' : `Edit — ${selected?.username}`}
           onClose={closeModal}
           size="md"
         >
+          {saveSuccess && (
+            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-2xl backdrop-blur-md save-success-overlay">
+              <div className="save-success-badge flex flex-col items-center gap-3 px-8 py-7 rounded-2xl bg-[#111827] border border-white/10 shadow-2xl">
+                <svg width="72" height="72" viewBox="0 0 52 52">
+                  <circle
+                    className="save-success-circle"
+                    cx="26" cy="26" r="24"
+                    fill="none" stroke="#22C55E" strokeWidth="3"
+                  />
+                  <path
+                    className="save-success-check"
+                    fill="none" stroke="#22C55E" strokeWidth="3.5"
+                    strokeLinecap="round" strokeLinejoin="round"
+                    d="M14.5 27 22 34.5 38 17"
+                  />
+                </svg>
+                <p className="text-base font-semibold text-white">
+                  {modal === 'create' ? 'Account created!' : 'Account updated!'}
+                </p>
+              </div>
+            </div>
+          )}
           {formError && (
             <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/30 text-red-400 px-4 py-3 rounded-xl text-sm mb-4">
               <AlertTriangle className="w-4 h-4 flex-shrink-0" />
@@ -518,7 +570,7 @@ export default function DeptChairAccountsClient() {
               <select
                 value={form.program_id}
                 onChange={e => setForm(f => ({ ...f, program_id: e.target.value }))}
-                className="w-full bg-[#0b0f1a] border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#3C91E6] focus:border-[#3C91E6]"
+                className="w-full bg-[#0b0f1a] border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#1D5BD6] focus:border-[#1D5BD6]"
               >
                 <option value="">Select Program</option>
                 {programs.map(p => (
@@ -554,7 +606,7 @@ export default function DeptChairAccountsClient() {
                 type="button"
                 onClick={modal === 'create' ? handleCreate : handleEdit}
                 disabled={submitting || (modal === 'create' && !canSubmitCreate) || (modal === 'edit' && (!form.username.trim() || !form.email.trim() || !form.program_id))}
-                className="flex-1 flex items-center justify-center gap-2 bg-[#3C91E6] hover:bg-[#2E7DD1] disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors"
+                className="flex-1 flex items-center justify-center gap-2 bg-[#1D5BD6] hover:bg-[#2E7DD1] disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors"
               >
                 {submitting
                   ? <><BtnSpinner />{modal === 'create' ? 'Creating…' : 'Saving…'}</>
@@ -569,7 +621,7 @@ export default function DeptChairAccountsClient() {
 
       {modal === 'password' && selected && (
         <Modal open title={`Reset Password — ${selected.username}`} onClose={closeModal} size="md">
-          <p className="text-sm text-slate-400 mb-4">Set a new password for this Department Chair account.</p>
+          <p className="text-sm text-slate-400 mb-4">Set a new password for this Program Chair account.</p>
           {formError && (
             <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/30 text-red-400 px-4 py-3 rounded-xl text-sm mb-4">
               <AlertTriangle className="w-4 h-4 flex-shrink-0" />
@@ -597,6 +649,14 @@ export default function DeptChairAccountsClient() {
 
       {modal === 'delete' && selected && (
         <Modal open title="Delete Account" onClose={closeModal} size="md">
+          {deleteSuccess && (
+            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-2xl backdrop-blur-md save-success-overlay">
+              <div className="save-success-badge flex flex-col items-center gap-3 px-8 py-7 rounded-2xl bg-[#111827] border border-white/10 shadow-2xl">
+                <TrashDropAnimation className="bg-red-500/15 border-red-500/30" color="#F87171" />
+                <p className="text-base font-semibold text-white">Account deleted!</p>
+              </div>
+            </div>
+          )}
           {formError && (
             <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/30 text-red-400 px-4 py-3 rounded-xl text-sm mb-4">
               <AlertTriangle className="w-4 h-4 flex-shrink-0" />

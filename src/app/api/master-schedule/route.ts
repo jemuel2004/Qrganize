@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
 
     let effectiveProgramId: string | number | null = programId;
 
-    if (auth.role === 'department_chair') {
+    if (auth.role === 'program_chair') {
       const scope = await resolveProgramScope(auth, {
         requestedProgramId: programId || undefined,
         requireProgram: !blockId,
@@ -49,6 +49,35 @@ export async function GET(req: NextRequest) {
           );
         }
       }
+    }
+
+    // Self-heal: some older/legacy block_subjects rows can end up with zero
+    // master_schedule rows (e.g. a past non-transactional insert that failed
+    // partway through). This query starts FROM master_schedule, so those rows
+    // are otherwise invisible to every filter, including status=Unassigned —
+    // they'd never appear here even though they're clearly unassigned. Backfill
+    // the missing row, scoped to the same filters, before the main SELECT runs.
+    {
+      const backfillParams: unknown[] = [];
+      let bIdx = 1;
+      let backfillWhere = `WHERE b.is_active = true AND c.is_active = true`;
+      if (effectiveProgramId) { backfillWhere += ` AND p.id            = $${bIdx++}`; backfillParams.push(effectiveProgramId); }
+      if (blockId)            { backfillWhere += ` AND b.id            = $${bIdx++}`; backfillParams.push(blockId); }
+      if (yearLevel)          { backfillWhere += ` AND b.year_level    = $${bIdx++}`; backfillParams.push(yearLevel); }
+      if (semester)           { backfillWhere += ` AND b.semester      = $${bIdx++}`; backfillParams.push(semester); }
+      if (academicYear)       { backfillWhere += ` AND b.academic_year = $${bIdx++}`; backfillParams.push(academicYear); }
+
+      await query(
+        `INSERT INTO master_schedule (block_subject_id, status, academic_year, semester)
+         SELECT bs.id, 'Unassigned', b.academic_year, b.semester
+         FROM block_subjects bs
+         JOIN curriculums c ON bs.curriculum_id = c.id
+         JOIN blocks      b ON bs.block_id      = b.id
+         JOIN programs    p ON b.program_id     = p.id
+         ${backfillWhere}
+           AND NOT EXISTS (SELECT 1 FROM master_schedule ms2 WHERE ms2.block_subject_id = bs.id)`,
+        backfillParams,
+      );
     }
 
     // Inner query: deduplicate via DISTINCT ON so each block_subject contributes exactly

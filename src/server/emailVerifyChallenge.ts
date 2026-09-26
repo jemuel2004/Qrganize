@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import {
   clearAuthCookie,
   clearOtpCookie,
@@ -14,7 +14,7 @@ export type EmailVerifyChallengePayload = {
   purpose: 'email_verify';
   accountKind: 'user' | 'instructor';
   accountId: number;
-  role: 'department_chair' | 'instructor';
+  role: 'program_chair' | 'instructor';
   username: string;
   email: string;
   av: number;
@@ -55,7 +55,7 @@ export async function readEmailVerifyChallenge(
   const payload = await verifyToken(raw);
   if (!payload || payload.purpose !== 'email_verify') return null;
   const role = String(payload.role ?? '');
-  if (role !== 'department_chair' && role !== 'instructor') return null;
+  if (role !== 'program_chair' && role !== 'instructor') return null;
   const accountKind = payload.accountKind === 'instructor' ? 'instructor' : 'user';
   const accountId = Number(payload.accountId);
   if (!accountId) return null;

@@ -272,7 +272,7 @@ export default function ImageCropDialog({
   const dark = theme === 'dark';
   const panel = dark
     ? 'bg-[#111827] border-white/10 text-white'
-    : 'bg-white border-[#E2E8F0] text-[#1E3A5F]';
+    : 'bg-white border-[#E2E8F0] text-[#0B2A5B]';
   const muted = dark ? 'text-slate-400' : 'text-[#64748B]';
   const controlBg = dark ? 'bg-white/5 border-white/10' : 'bg-[#F8FAFC] border-[#E2E8F0]';
   const square = shape === 'square';
@@ -309,7 +309,7 @@ export default function ImageCropDialog({
             <div
               ref={frameRef}
               className={`relative w-[min(100%,320px)] aspect-square overflow-hidden touch-none select-none cursor-grab active:cursor-grabbing bg-black ${
-                square ? 'rounded-lg' : 'rounded-full ring-2 ring-[#3C91E6]/40'
+                square ? 'rounded-lg' : 'rounded-full ring-2 ring-[#1D5BD6]/40'
               }`}
               onPointerDown={onPointerDown}
               onPointerMove={onPointerMove}
@@ -365,7 +365,7 @@ export default function ImageCropDialog({
                 step={0.01}
                 value={zoom}
                 onChange={e => applyZoom(Number(e.target.value))}
-                className="flex-1 min-w-0 accent-[#3C91E6]"
+                className="flex-1 min-w-0 accent-[#1D5BD6]"
                 aria-label="Zoom"
               />
               <button
@@ -404,7 +404,7 @@ export default function ImageCropDialog({
               type="button"
               disabled={saving || !imgSize.w}
               onClick={() => void handleSave()}
-              className="min-h-11 px-4 py-2.5 rounded-xl text-sm font-semibold bg-[#3C91E6] hover:bg-[#2563EB] disabled:opacity-50 text-white"
+              className="min-h-11 px-4 py-2.5 rounded-xl text-sm font-semibold bg-[#1D5BD6] hover:bg-[#164BB5] disabled:opacity-50 text-white"
             >
               {saving ? 'Saving…' : saveLabel}
             </button>

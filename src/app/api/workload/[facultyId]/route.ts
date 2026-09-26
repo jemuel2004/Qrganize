@@ -6,6 +6,8 @@ import {
   computeRegularLoadStatus,
   permanentRegularLoadLimit,
 } from '@/lib/regularLoad';
+import { canAccessProgram } from '@/server/programScope';
+import { ensurePraiseSplitColumn } from '@/server/praiseSplit';
 
 /* Module-level flags — DDL and one-time data migrations run once per cold start,
  * not on every request. Avoids unnecessary write overhead on every GET. */
@@ -30,6 +32,7 @@ async function ensureSchema() {
     )
   `).catch(() => {});
   await query(`ALTER TABLE faculty ALTER COLUMN designation_type TYPE TEXT`).catch(() => {});
+  await ensurePraiseSplitColumn();
   schemaReady = true;
 }
 
@@ -49,7 +52,7 @@ async function ensureMigration() {
 export async function GET(req: NextRequest, { params }: { params: Promise<{ facultyId: string }> }) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -64,6 +67,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ facu
     const facultyResult = await query('SELECT * FROM faculty WHERE id=$1', [facultyId]);
     if (facultyResult.rows.length === 0) return NextResponse.json({ error: 'Faculty not found' }, { status: 404 });
     const faculty = facultyResult.rows[0];
+    if (!(await canAccessProgram(auth, faculty.program_id))) {
+      return NextResponse.json({ error: 'Faculty not found' }, { status: 404 });
+    }
 
     // Compute regularLoadLimit from the normalized deductions table (semester-specific)
     const deductionResult = await query(
@@ -113,6 +119,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ facu
          WHERE o2.faculty_id = il.faculty_id AND o2.master_schedule_id = il.master_schedule_id) AS split_overload_units,
         (SELECT COALESCE(SUM(o2.hours), 0) FROM overloads o2
          WHERE o2.faculty_id = il.faculty_id AND o2.master_schedule_id = il.master_schedule_id) AS split_overload_hours,
+        -- Split portion is Praise Load (only the Lec or Lab), not Overload
+        EXISTS(SELECT 1 FROM overloads o3
+               WHERE o3.faculty_id = il.faculty_id AND o3.master_schedule_id = il.master_schedule_id
+                 AND o3.is_praise = true) AS split_is_praise,
         EXISTS(SELECT 1 FROM schedule_sessions ss_l WHERE ss_l.master_schedule_id = ms.id AND ss_l.type = 'lec') AS lec_scheduled,
         EXISTS(SELECT 1 FROM schedule_sessions ss_b WHERE ss_b.master_schedule_id = ms.id AND ss_b.type = 'lab') AS lab_scheduled,
         (SELECT ss_lt.start_time FROM schedule_sessions ss_lt
@@ -202,7 +212,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ facu
       SELECT COALESCE(SUM(units), 0) AS total_overload_units,
              COALESCE(SUM(hours), 0) AS total_overload_hours
       FROM overloads
-      WHERE faculty_id = $1
+      WHERE faculty_id = $1 AND is_praise = false
     `;
     const overloadParams: unknown[] = [facultyId];
     let oi = 2;
@@ -214,14 +224,24 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ facu
     const totalOverloadHours = parseFloat(overloadTotalsResult.rows[0].total_overload_hours) || 0;
 
     const praiseLoads = loadsResult.rows.filter(r => r.load_category === 'Praise');
+    // Split Praise portions (only the Lec or Lab moved to Praise; the row stays Regular)
+    const praiseSplitRows = loadsResult.rows.filter(r => r.load_category === 'Regular' && r.split_is_praise);
+    const splitPraiseUnits = praiseSplitRows.reduce((s, r) => s + (parseFloat(r.split_overload_units) || 0), 0);
+    const splitPraiseHours = praiseSplitRows.reduce((s, r) => {
+      if (parseFloat(r.split_overload_hours) > 0) return s + parseFloat(r.split_overload_hours);
+      // Permanent rows store work units; convert the moved component back to contact hours
+      const comp = r.overload_component;
+      return s + (comp === 'lab' ? (parseFloat(r.laboratory_hours) || 0) : comp === 'lec' ? (parseFloat(r.lecture_hours) || 0) : 0);
+    }, 0);
+
     const totalPraiseUnits = praiseLoads.reduce((sum, r) => {
       const lh = parseFloat(r.lecture_hours) || 0;
       const labh = parseFloat(r.laboratory_hours) || 0;
       return sum + lh * 1.0 + labh * 0.75;
-    }, 0);
+    }, 0) + splitPraiseUnits;
     const totalPraiseHours = praiseLoads.reduce((sum, r) => {
       return sum + (parseFloat(r.curriculum_total_hours) || parseFloat(r.hours) || 0);
-    }, 0);
+    }, 0) + splitPraiseHours;
 
     const currentLoad = faculty.employment_status === 'Permanent' ? totalRegularUnits : totalRegularHours;
     const remainingLoad = regularLoadLimit - currentLoad;

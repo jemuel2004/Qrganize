@@ -10,7 +10,7 @@ export async function PATCH(
 ) {
   try {
     const authUser = await getAuthUser(req) as { role?: string } | null;
-    if (!authUser || (authUser.role !== 'admin' && authUser.role !== 'department_chair')) {
+    if (!authUser || (authUser.role !== 'admin' && authUser.role !== 'program_chair')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

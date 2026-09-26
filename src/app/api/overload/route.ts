@@ -2,13 +2,15 @@
 import { query } from '@/server/db';
 import { getAuthUser } from '@/server/auth';
 import { getChairAssignedProgramId } from '@/server/programScope';
+import { ensurePraiseSplitColumn } from '@/server/praiseSplit';
 
 export async function GET(req: NextRequest) {
   try {
     const auth = await getAuthUser(req) as { role?: string; id?: number } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    await ensurePraiseSplitColumn();
 
     const { searchParams } = new URL(req.url);
     const facultyId      = searchParams.get('faculty_id')      || '';
@@ -16,7 +18,7 @@ export async function GET(req: NextRequest) {
     const academicYear   = searchParams.get('academic_year')   || '';
     let programId        = searchParams.get('program_id')      || '';
 
-    if (auth.role === 'department_chair') {
+    if (auth.role === 'program_chair') {
       const chairProgramId = auth.id ? await getChairAssignedProgramId(Number(auth.id)) : null;
       if (chairProgramId == null) {
         return NextResponse.json({
@@ -83,6 +85,7 @@ export async function GET(req: NextRequest) {
         ON il.faculty_id = o.faculty_id
        AND il.master_schedule_id = o.master_schedule_id
       WHERE f.is_active = true
+        AND o.is_praise = false
     `;
 
     const params: unknown[] = [];

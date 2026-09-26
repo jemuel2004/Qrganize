@@ -6,6 +6,7 @@ import {
   RefreshCw, X, CheckCircle, AlertTriangle, Loader2, RotateCcw,
 } from 'lucide-react';
 import { CardSkeleton } from '@/client/components/ui/skeletons';
+import BackButton from '@/client/components/ui/BackButton';
 import { PageLoadTransition } from '@/client/components/ui/PageLoadTransition';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/client/hooks/useMinLoading';
 import { useToast } from '@/client/context/ToastContext';
@@ -201,10 +202,8 @@ export default function QRGeneratorPage() {
         {/* ── Header ── */}
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-2xl font-bold text-[#1E3A5F] tracking-tight">QR Code Generator</h1>
-            <p className="text-sm text-[#64748B] mt-0.5">
-              Download or print QR codes for each room — place them at room entrances for scanning
-            </p>
+            <BackButton />
+            <h1 className="text-2xl font-bold text-[#0B2A5B] tracking-tight">QR Code Generator</h1>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
             <button
@@ -213,12 +212,12 @@ export default function QRGeneratorPage() {
               title="Refresh"
               className="inline-flex items-center justify-center w-10 h-10 rounded-xl border border-[#E2E8F0] bg-white text-[#64748B] shadow-sm hover:bg-[#F8FAFC] hover:border-[#CBD5E1] disabled:opacity-50 transition-all"
             >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-[#3C91E6]' : ''}`} />
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-[#1D5BD6]' : ''}`} />
             </button>
             <button
               onClick={() => printAll(filtered)}
               disabled={filtered.length === 0}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#3C91E6] hover:bg-[#2563EB] disabled:opacity-40 text-white text-sm font-semibold shadow-sm transition-colors"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#1D5BD6] hover:bg-[#164BB5] disabled:opacity-40 text-white text-sm font-semibold shadow-sm transition-colors"
             >
               <Printer className="w-4 h-4" />
               Print All ({filtered.length})
@@ -243,14 +242,14 @@ export default function QRGeneratorPage() {
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 placeholder="Room name or building"
-                className="w-full bg-white border border-[#CBD5E1] rounded-xl pl-9 pr-9 py-2.5 text-sm text-[#1E3A5F] placeholder:text-[#94A3B8] hover:border-[#94A3B8] focus:outline-none focus:ring-2 focus:ring-[#3C91E6]/25 focus:border-[#3C91E6]"
+                className="w-full bg-white border border-[#CBD5E1] rounded-xl pl-9 pr-9 py-2.5 text-sm text-[#0B2A5B] placeholder:text-[#94A3B8] hover:border-[#94A3B8] focus:outline-none focus:ring-2 focus:ring-[#1D5BD6]/25 focus:border-[#1D5BD6]"
               />
               {search && (
                 <button
                   type="button"
                   onClick={() => setSearch('')}
                   aria-label="Clear search"
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded-md text-[#64748B] hover:text-[#1E3A5F] hover:bg-[#F1F5F9]"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded-md text-[#64748B] hover:text-[#0B2A5B] hover:bg-[#F1F5F9]"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -266,8 +265,8 @@ export default function QRGeneratorPage() {
                 onClick={() => setTypeFilter(t)}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                   typeFilter === t
-                    ? 'bg-[#3C91E6] text-white shadow-sm'
-                    : 'text-[#64748B] hover:bg-[#F8FAFC] hover:text-[#1E3A5F]'
+                    ? 'bg-[#1D5BD6] text-white shadow-sm'
+                    : 'text-[#64748B] hover:bg-[#F8FAFC] hover:text-[#0B2A5B]'
                 }`}
               >
                 {t}
@@ -293,7 +292,7 @@ export default function QRGeneratorPage() {
             <p className="text-sm text-red-700 flex-1">{loadError}</p>
             <button
               onClick={load}
-              className="text-xs text-[#3C91E6] hover:underline flex items-center gap-1 font-medium"
+              className="text-xs text-[#1D5BD6] hover:underline flex items-center gap-1 font-medium"
             >
               <RefreshCw className="w-3 h-3" /> Retry
             </button>
@@ -316,7 +315,7 @@ export default function QRGeneratorPage() {
             <div className="w-16 h-16 rounded-2xl bg-[#F1F5F9] flex items-center justify-center mb-4">
               <QrCode className="w-8 h-8 text-[#CBD5E1]" />
             </div>
-            <p className="text-base font-bold text-[#1E3A5F] mb-1">No rooms found</p>
+            <p className="text-base font-bold text-[#0B2A5B] mb-1">No rooms found</p>
             <p className="text-sm text-[#94A3B8]">
               {rooms.length === 0
                 ? 'No active rooms in the system.'
@@ -353,7 +352,7 @@ export default function QRGeneratorPage() {
                 </button>
 
                 <div className="px-3.5 pb-3.5">
-                  <p className="text-sm font-bold text-[#1E3A5F] truncate leading-tight">{room.room_name}</p>
+                  <p className="text-sm font-bold text-[#0B2A5B] truncate leading-tight">{room.room_name}</p>
                   <p className="text-xs text-[#475569] mt-1 truncate">
                     {[room.room_type, room.building].filter(Boolean).join(' · ')}
                   </p>
@@ -363,7 +362,7 @@ export default function QRGeneratorPage() {
                       className={`flex items-center justify-center gap-1 py-2 rounded-xl text-[11px] font-semibold transition-all ${
                         downloaded === room.id
                           ? 'bg-emerald-50 text-emerald-600 border border-emerald-200'
-                          : 'bg-[#EFF6FF] text-[#3C91E6] border border-[#BFDBFE] hover:bg-[#DBEAFE] hover:border-[#93C5FD]'
+                          : 'bg-[#EFF6FF] text-[#1D5BD6] border border-[#BFDBFE] hover:bg-[#DBEAFE] hover:border-[#93C5FD]'
                       }`}
                     >
                       {downloaded === room.id
@@ -372,7 +371,7 @@ export default function QRGeneratorPage() {
                     </button>
                     <button
                       onClick={() => printOne(room)}
-                      className="flex items-center justify-center gap-1 py-2 bg-[#F8FAFC] border border-[#E2E8F0] text-[#475569] rounded-xl text-[11px] font-semibold hover:bg-[#F1F5F9] hover:border-[#CBD5E1] hover:text-[#1E3A5F] transition-colors"
+                      className="flex items-center justify-center gap-1 py-2 bg-[#F8FAFC] border border-[#E2E8F0] text-[#475569] rounded-xl text-[11px] font-semibold hover:bg-[#F1F5F9] hover:border-[#CBD5E1] hover:text-[#0B2A5B] transition-colors"
                     >
                       <Printer className="w-3 h-3" /> Print
                     </button>
@@ -401,7 +400,7 @@ export default function QRGeneratorPage() {
           >
             {/* Modal header */}
             <div className="flex items-center justify-between mb-5">
-              <h2 className="text-base font-bold text-[#1E3A5F]">QR Preview</h2>
+              <h2 className="text-base font-bold text-[#0B2A5B]">QR Preview</h2>
               <button
                 onClick={() => setPreview(null)}
                 className="p-1.5 hover:bg-[#F1F5F9] rounded-xl transition-colors"
@@ -419,7 +418,7 @@ export default function QRGeneratorPage() {
               />
             </div>
 
-            <p className="text-lg font-bold text-[#1E3A5F]">{preview.room_name}</p>
+            <p className="text-lg font-bold text-[#0B2A5B]">{preview.room_name}</p>
             <p className="text-sm text-[#475569] mt-1">
               {[preview.room_type, preview.building].filter(Boolean).join(' · ')}
             </p>
@@ -441,7 +440,7 @@ export default function QRGeneratorPage() {
             <div className="grid grid-cols-2 gap-3 mb-2.5">
               <button
                 onClick={() => handleDownload(preview)}
-                className="flex items-center justify-center gap-2 py-2.5 bg-[#3C91E6] hover:bg-[#2563EB] text-white rounded-xl text-sm font-semibold transition-colors"
+                className="flex items-center justify-center gap-2 py-2.5 bg-[#1D5BD6] hover:bg-[#164BB5] text-white rounded-xl text-sm font-semibold transition-colors"
               >
                 <Download className="w-4 h-4" /> Download
               </button>
@@ -484,7 +483,7 @@ export default function QRGeneratorPage() {
                 <AlertTriangle className="w-5 h-5 text-amber-500" />
               </div>
               <div>
-                <h2 className="text-base font-bold text-[#1E3A5F]">Regenerate QR Code?</h2>
+                <h2 className="text-base font-bold text-[#0B2A5B]">Regenerate QR Code?</h2>
                 <p className="text-sm text-[#64748B] mt-0.5">{confirmRegen.room_name}</p>
               </div>
             </div>

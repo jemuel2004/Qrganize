@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
@@ -23,6 +23,7 @@ import {
   type NavItem,
   type NavSection,
 } from '@/client/components/layout/adminNav';
+import type { SchedulingPendingCounts } from '@/client/hooks/useSchedulingPendingCounts';
 import {
   dropdownItemVariants,
   dropdownVariants,
@@ -35,6 +36,7 @@ import {
 
 interface SidebarProps {
   onNavigate?: () => void;
+  pendingCounts?: SchedulingPendingCounts;
 }
 
 const SECTION_ICON: Record<string, LucideIcon> = {
@@ -50,7 +52,20 @@ const navItemBase =
   'group relative inline-flex items-center gap-2 h-10 px-3.5 text-[15px] font-medium rounded-md cursor-pointer';
 /* Dark keeps Tailwind hover (brand-blue text). Light overrides via .qr-nav-chrome-idle in globals.css */
 const navIdle = 'qr-nav-chrome-idle text-white/90';
-const navActive = 'qr-nav-chrome-chip text-[#3074B8]';
+const navActive = 'qr-nav-chrome-chip text-[#12408F]';
+
+/** Small count badge for nav items that still need attention. Hidden entirely at 0. */
+function NavBadge({ count, className = '' }: { count: number; className?: string }) {
+  if (!count || count <= 0) return null;
+  return (
+    <span
+      className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none flex-shrink-0 ${className}`}
+      aria-label={`${count} item${count !== 1 ? 's' : ''} need attention`}
+    >
+      {count > 99 ? '99+' : count}
+    </span>
+  );
+}
 
 function NavLink({
   href,
@@ -60,6 +75,7 @@ function NavLink({
   onPrefetch,
   className = '',
   reduceMotion,
+  badgeCount = 0,
 }: {
   href: string;
   label: string;
@@ -68,6 +84,7 @@ function NavLink({
   onPrefetch: (href: string) => void;
   className?: string;
   reduceMotion: boolean;
+  badgeCount?: number;
 }) {
   return (
     <motion.div
@@ -81,12 +98,13 @@ function NavLink({
         onMouseEnter={() => onPrefetch(href)}
         onFocus={() => onPrefetch(href)}
         className={[
-          'block text-[14px] leading-6 min-h-10 px-3 py-2 rounded-md transition-colors duration-150 cursor-pointer',
-          active ? 'text-[#2563EB] font-medium bg-[#E8F1FB]' : 'text-[#475569] hover:text-[#3C91E6] hover:bg-[#F8FAFC]',
+          'flex items-center justify-between gap-2 text-[14px] leading-6 min-h-10 px-3 py-2 rounded-md transition-colors duration-150 cursor-pointer',
+          active ? 'text-[#164BB5] font-medium bg-[#E8F1FB]' : 'text-[#475569] hover:text-[#1D5BD6] hover:bg-[#F8FAFC]',
           className,
         ].join(' ')}
       >
-        {label}
+        <span className="truncate">{label}</span>
+        <NavBadge count={badgeCount} />
       </Link>
     </motion.div>
   );
@@ -108,7 +126,7 @@ function ActiveIndicators({
     <>
       <motion.span
         layoutId="admin-nav-pill"
-        className="absolute inset-y-0 left-1.5 right-1.5 my-auto h-10 rounded-md bg-white shadow-[0_0_18px_rgba(60,145,230,0.28)] pointer-events-none"
+        className="absolute inset-y-0 left-1.5 right-1.5 my-auto h-10 rounded-md bg-white shadow-[0_0_18px_rgba(29,91,214,0.28)] pointer-events-none"
         transition={transition}
         aria-hidden
       />
@@ -150,7 +168,7 @@ function DesktopNavChip({
           : {
               ...navItemHover,
               backgroundColor: 'rgba(255,255,255,0.16)',
-              boxShadow: '0 0 18px rgba(60,145,230,0.35)',
+              boxShadow: '0 0 18px rgba(29,91,214,0.35)',
             }
       }
       whileTap={reduceMotion || lit ? undefined : navItemTap}
@@ -174,16 +192,21 @@ function DesktopMenu({
   onNavigate,
   onPrefetch,
   reduceMotion,
+  pendingCounts,
 }: {
   section: NavSection;
   pathname: string;
   onNavigate?: () => void;
   onPrefetch: (href: string) => void;
   reduceMotion: boolean;
+  pendingCounts?: SchedulingPendingCounts;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const sectionActive = isSectionActive(pathname, section);
+  const sectionBadgeTotal = pendingCounts
+    ? section.items.reduce((sum, item) => sum + (item.badgeKey ? pendingCounts[item.badgeKey] : 0), 0)
+    : 0;
 
   useEffect(() => {
     function onMouse(e: MouseEvent) {
@@ -219,6 +242,7 @@ function DesktopMenu({
             }`}
           />
           {section.label}
+          <NavBadge count={sectionBadgeTotal} />
           <motion.span
             animate={{ rotate: open ? 180 : 0 }}
             transition={reduceMotion ? instantTransition : { duration: NAV_DURATION, ease: NAV_EASE }}
@@ -226,7 +250,7 @@ function DesktopMenu({
           >
             <ChevronDown
               className={`qr-nav-chrome-chevron w-3.5 h-3.5 ${
-                sectionActive || open ? 'text-[#3074B8]' : 'text-white/70 group-hover:text-[#3C91E6]'
+                sectionActive || open ? 'text-[#12408F]' : 'text-white/70 group-hover:text-[#1D5BD6]'
               }`}
             />
           </motion.span>
@@ -246,6 +270,7 @@ function DesktopMenu({
             {section.items.map(item => (
               <DesktopMenuItem
                 key={item.href}
+                pendingCounts={pendingCounts}
                 item={item}
                 pathname={pathname}
                 onNavigate={() => {
@@ -269,12 +294,14 @@ function DesktopMenuItem({
   onNavigate,
   onPrefetch,
   reduceMotion,
+  pendingCounts,
 }: {
   item: NavItem;
   pathname: string;
   onNavigate?: () => void;
   onPrefetch: (href: string) => void;
   reduceMotion: boolean;
+  pendingCounts?: SchedulingPendingCounts;
 }) {
   if (item.children?.length) {
     return (
@@ -305,6 +332,7 @@ function DesktopMenuItem({
       onNavigate={onNavigate}
       onPrefetch={onPrefetch}
       reduceMotion={reduceMotion}
+      badgeCount={item.badgeKey && pendingCounts ? pendingCounts[item.badgeKey] : 0}
     />
   );
 }
@@ -314,11 +342,13 @@ function MobileSection({
   pathname,
   onNavigate,
   onPrefetch,
+  pendingCounts,
 }: {
   section: NavSection;
   pathname: string;
   onNavigate?: () => void;
   onPrefetch: (href: string) => void;
+  pendingCounts?: SchedulingPendingCounts;
 }) {
   const [open, setOpen] = useState(isSectionActive(pathname, section));
 
@@ -332,8 +362,8 @@ function MobileSection({
         className={[
           'flex items-center gap-2 min-h-11 px-4 text-[14px] transition-colors duration-150 cursor-pointer',
           isPathActive(pathname, item.href)
-            ? 'text-[#2563EB] font-medium bg-[#E8F1FB]'
-            : 'text-[#475569] hover:text-[#3C91E6] hover:bg-[#F8FAFC]',
+            ? 'text-[#164BB5] font-medium bg-[#E8F1FB]'
+            : 'text-[#475569] hover:text-[#1D5BD6] hover:bg-[#F8FAFC]',
         ].join(' ')}
       >
         <Home className="w-4 h-4" />
@@ -343,6 +373,9 @@ function MobileSection({
   }
 
   const SectionIcon = SECTION_ICON[section.id] ?? Settings;
+  const sectionBadgeTotal = pendingCounts
+    ? section.items.reduce((sum, item) => sum + (item.badgeKey ? pendingCounts[item.badgeKey] : 0), 0)
+    : 0;
 
   return (
     <div className="border-t border-[#E4E4E7]">
@@ -350,11 +383,12 @@ function MobileSection({
         type="button"
         onClick={() => setOpen(v => !v)}
         aria-expanded={open}
-        className="flex items-center justify-between w-full min-h-11 px-4 text-[14px] font-medium text-[#475569] hover:text-[#3C91E6] transition-colors duration-150 cursor-pointer"
+        className="flex items-center justify-between w-full min-h-11 px-4 text-[14px] font-medium text-[#475569] hover:text-[#1D5BD6] transition-colors duration-150 cursor-pointer"
       >
         <span className="inline-flex items-center gap-2">
           <SectionIcon className="w-4 h-4" />
           {section.label}
+          <NavBadge count={sectionBadgeTotal} />
         </span>
         <ChevronDown className={`w-4 h-4 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -376,7 +410,7 @@ function MobileSection({
                         'flex items-center min-h-11 px-6 text-[14px] transition-colors duration-150 cursor-pointer',
                         isChildPathActive(pathname, child)
                           ? 'text-[#18181B] font-medium bg-[#F4F4F5]'
-                          : 'text-[#3F3F46] hover:text-[#3C91E6] hover:bg-[#F8FAFC]',
+                          : 'text-[#3F3F46] hover:text-[#1D5BD6] hover:bg-[#F8FAFC]',
                       ].join(' ')}
                     >
                       {child.label}
@@ -392,13 +426,14 @@ function MobileSection({
                 onClick={() => onNavigate?.()}
                 onMouseEnter={() => onPrefetch(item.href)}
                 className={[
-                  'flex items-center min-h-11 px-6 text-[15px] transition-colors duration-150 cursor-pointer',
+                  'flex items-center justify-between gap-2 min-h-11 px-6 text-[15px] transition-colors duration-150 cursor-pointer',
                   isItemActive(pathname, item)
                     ? 'text-[#18181B] font-medium bg-[#F4F4F5]'
-                    : 'text-[#3F3F46] hover:text-[#3C91E6] hover:bg-[#F8FAFC]',
+                    : 'text-[#3F3F46] hover:text-[#1D5BD6] hover:bg-[#F8FAFC]',
                 ].join(' ')}
               >
-                {item.label}
+                <span className="truncate">{item.label}</span>
+                <NavBadge count={item.badgeKey && pendingCounts ? pendingCounts[item.badgeKey] : 0} />
               </Link>
             );
           })}
@@ -408,7 +443,7 @@ function MobileSection({
   );
 }
 
-export default function Sidebar({ onNavigate }: SidebarProps) {
+export default function Sidebar({ onNavigate, pendingCounts }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const reduceMotion = useReducedMotion();
@@ -442,7 +477,7 @@ export default function Sidebar({ onNavigate }: SidebarProps) {
   return (
     <>
       <LayoutGroup id="admin-top-nav">
-        <nav className="hidden lg:flex items-stretch min-w-0 gap-2" aria-label="Main">
+        <nav className="hidden lg:flex items-stretch justify-center min-w-0 gap-4" aria-label="Main">
           {mainSection?.items[0] && (
             <Link
               href={mainSection.items[0].href}
@@ -492,6 +527,7 @@ export default function Sidebar({ onNavigate }: SidebarProps) {
                 onNavigate={onNavigate}
                 onPrefetch={prefetchIfPriority}
                 reduceMotion={!!reduceMotion}
+                pendingCounts={pendingCounts}
               />
             );
           })}
@@ -503,8 +539,10 @@ export default function Sidebar({ onNavigate }: SidebarProps) {
 
 export function AdminMobileNav({
   onNavigate,
+  pendingCounts,
 }: {
   onNavigate?: () => void;
+  pendingCounts?: SchedulingPendingCounts;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -534,6 +572,7 @@ export function AdminMobileNav({
           pathname={pathname}
           onNavigate={onNavigate}
           onPrefetch={prefetchIfPriority}
+          pendingCounts={pendingCounts}
         />
       ))}
     </nav>
@@ -541,5 +580,5 @@ export function AdminMobileNav({
 }
 
 export function adminHomeHref(role: string): string {
-  return role === 'department_chair' ? '/dept-chair' : '/dashboard';
+  return role === 'program_chair' ? '/dept-chair' : '/dashboard';
 }

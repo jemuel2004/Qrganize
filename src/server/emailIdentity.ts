@@ -1,4 +1,4 @@
-import { query, transaction } from '@/server/db';
+﻿import { query, transaction } from '@/server/db';
 
 export type EmailAccountKind = 'user' | 'instructor';
 
@@ -34,8 +34,10 @@ export function isEmailOwnershipVerified(params: {
   role: string;
   google_verified?: boolean | null;
 }): boolean {
-  if (params.role === 'admin') return true;
-  if (params.role === 'department_chair' || params.role === 'instructor') {
+  /* Department Chair is admin-like (near-full access, admin-style home page,
+     no Google-verify UI reachable) — treated the same as admin here. */
+  if (params.role === 'admin' || params.role === 'department_chair') return true;
+  if (params.role === 'program_chair' || params.role === 'instructor') {
     return params.google_verified === true;
   }
   return false;

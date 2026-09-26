@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/server/db';
 import { getAuthUser } from '@/server/auth';
 import {
@@ -44,7 +44,7 @@ async function ensureAnalyticsTables() {
 export async function GET(req: NextRequest) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -195,7 +195,7 @@ export async function GET(req: NextRequest) {
       ORDER BY hour
     `).catch(() => ({ rows: [] }));
 
-    /* ── 6b. Peak heatmap — day × hour grid ─────────────────────── */
+    /* ── 6b. Peak heatmap — day Ã— hour grid ─────────────────────── */
     const heatmapResult = await query(`
       SELECT
         EXTRACT(DOW FROM scan_time)::int AS day_of_week,

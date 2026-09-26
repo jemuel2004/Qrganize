@@ -2,8 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import dynamic from 'next/dynamic';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useToast } from '@/client/context/ToastContext';
 import Modal from '@/client/components/ui/Modal';
+import BackButton from '@/client/components/ui/BackButton';
+import WatermarkTitle from '@/client/components/ui/WatermarkTitle';
+import TrashDropAnimation from '@/client/components/ui/TrashDropAnimation';
 import {
   Plus, Pencil, Trash2, Upload, FileSpreadsheet,
   X, CheckCircle, AlertTriangle, Info, Download, Layers, Printer,
@@ -195,6 +199,8 @@ export default function CurriculumPage() {
   const toast = useToast();
   const [curriculums, setCurriculums] = useState<Curriculum[]>([]);
   const [programs, setPrograms]       = useState<Program[]>([]);
+  const [userRole, setUserRole] = useState<'admin' | 'department_chair' | 'program_chair'>('admin');
+  const [chairProgramId, setChairProgramId] = useState<number | null>(null);
   const [filters, setFilters]         = useState({
     program_id: '',
     curriculum_version: DEFAULT_CURRICULUM_VERSION as CurriculumVersion,
@@ -207,6 +213,11 @@ export default function CurriculumPage() {
   const [modalOpen, setModalOpen]     = useState(false);
   const [formError, setFormError]     = useState('');
   const [loading, setLoading]         = useState(false);
+  /* Delete dialog: confirm → trash-drop animation (1.3s, same as other pages) → toast */
+  const [deleteTarget,  setDeleteTarget]  = useState<{ id: number; code: string; name: string } | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteSuccess, setDeleteSuccess] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
   const [listLoading, setListLoading] = useState(false);
   const [booting, setBooting] = useState(true);
 
@@ -215,7 +226,7 @@ export default function CurriculumPage() {
   const [importStep, setImportStep]       = useState<'upload' | 'preview' | 'done'>('upload');
   const [previewRows, setPreviewRows]     = useState<PreviewRow[]>([]);
   const [importLoading, setImportLoading] = useState(false);
-  const [importResult, setImportResult]   = useState<ImportResult | null>(null);
+  const [importSaveSuccess, setImportSaveSuccess] = useState(false);
   const [importDiagnostic, setImportDiagnostic] = useState<ImportDiagnostic | null>(null);
   const [importMappings, setImportMappings] = useState<ColumnMapping[]>([]);
   const [importProgramDetection, setImportProgramDetection] = useState<ProgramDetection | null>(null);
@@ -231,11 +242,21 @@ export default function CurriculumPage() {
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    fetch('/api/programs')
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d) setPrograms(d.programs || []); })
-      .catch(() => {})
-      .finally(() => setBooting(false));
+    Promise.all([
+      fetch('/api/programs').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('/api/account/me').then(r => r.ok ? r.json() : null).catch(() => null),
+    ]).then(([progData, meData]) => {
+      if (progData) setPrograms(progData.programs || []);
+      const role = meData?.user?.role as string | undefined;
+      if (role === 'program_chair') {
+        setUserRole('program_chair');
+        const pid = meData.user?.program_id != null ? Number(meData.user.program_id) : null;
+        setChairProgramId(pid);
+        if (pid != null) setFilters(f => ({ ...f, program_id: String(pid) }));
+      } else if (role === 'department_chair') {
+        setUserRole('department_chair');
+      }
+    }).finally(() => setBooting(false));
     const stored = parseCurriculumVersion(localStorage.getItem(CURRICULUM_VERSION_STORAGE_KEY));
     if (stored) setFilters(f => ({ ...f, curriculum_version: stored }));
     return () => { abortRef.current?.abort(); };
@@ -286,6 +307,7 @@ export default function CurriculumPage() {
     });
     setEditId(null);
     setFormError('');
+    setSaveSuccess(false);
     setModalOpen(true);
   }
 
@@ -298,7 +320,7 @@ export default function CurriculumPage() {
       units: String(c.units), prerequisites: c.prerequisites || '', grade: c.grade || '',
       subject_category: categoryFromSubjectType(inferSubjectType(c.lecture_hours, c.laboratory_hours)),
     });
-    setEditId(c.id); setFormError(''); setModalOpen(true);
+    setEditId(c.id); setFormError(''); setSaveSuccess(false); setModalOpen(true);
   }
 
   function handleSubjectTypeChange(type: SubjectType) {
@@ -336,20 +358,47 @@ export default function CurriculumPage() {
         try { msg = ((await res.json()) as { error?: string })?.error ?? msg; } catch { /* html */ }
         setFormError(msg); toast.error(msg); return;
       }
-      const data = await res.json();
-      setModalOpen(false);
-      toast.success(editId ? 'Subject updated successfully.' : 'Subject added successfully.');
+      await res.json();
+      setLoading(false);
+      setSaveSuccess(true);
       fetchCurriculums(filters.program_id, filters.year_level, filters.semester, filters.curriculum_version);
+      setTimeout(() => {
+        setSaveSuccess(false);
+        setModalOpen(false);
+        toast.success(editId ? 'Subject updated successfully.' : 'Subject added successfully.');
+      }, 1300);
+      return;
     } catch { setFormError('Connection error'); toast.error('Connection error. Please try again.'); }
     finally { setLoading(false); }
   }
 
-  async function handleDelete(id: number) {
-    if (!confirm('Delete this subject?')) return;
-    const res = await fetch(`/api/curriculum/${id}`, { method: 'DELETE' });
-    if (!res.ok) { const d = await res.json(); toast.error(d.error || 'Failed to delete.'); return; }
-    toast.delete('Subject deleted successfully.');
-    fetchCurriculums(filters.program_id, filters.year_level, filters.semester, filters.curriculum_version);
+  function handleDelete(c: { id: number; subject_code: string; subject_name: string }) {
+    setDeleteSuccess(false);
+    setDeleteTarget({ id: c.id, code: c.subject_code, name: c.subject_name });
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget || deleteLoading) return;
+    setDeleteLoading(true);
+    try {
+      const res = await fetch(`/api/curriculum/${deleteTarget.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.error || 'Failed to delete.');
+        return;
+      }
+      setDeleteSuccess(true);
+      fetchCurriculums(filters.program_id, filters.year_level, filters.semester, filters.curriculum_version);
+      setTimeout(() => {
+        setDeleteTarget(null);
+        setDeleteSuccess(false);
+        toast.delete('Subject deleted successfully.');
+      }, 1300);
+    } catch {
+      toast.error('Connection error. Please try again.');
+    } finally {
+      setDeleteLoading(false);
+    }
   }
 
   async function handleDownload() {
@@ -420,11 +469,11 @@ export default function CurriculumPage() {
   function resetImportState() {
     setImportStep('upload');
     setPreviewRows([]);
-    setImportResult(null);
     setImportDiagnostic(null);
     setImportMappings([]);
     setImportProgramDetection(null);
     setImportProgramMismatch(false);
+    setImportSaveSuccess(false);
     parsedImportRowsRef.current = [];
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
@@ -578,19 +627,24 @@ export default function CurriculumPage() {
     const validRows = previewRows.filter(r => r.valid);
     if (validRows.length === 0) { toast.error('No valid rows to import.'); return; }
     setImportLoading(true);
+    setImportStep('done');
+    const minDelay = new Promise(resolve => setTimeout(resolve, 3000));
     try {
-      const res = await fetch('/api/curriculum/import', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          curriculum_version: filters.curriculum_version,
-          apply_updates: true,
-          rows: validRows.map(r => ({ program_id: r.program_id, year_level: r.year_level, semester: r.semester, subject_code: r.subject_code, subject_name: r.subject_name, lecture_hours: r.lecture_hours, laboratory_hours: r.laboratory_hours, units: r.credit_units, prerequisites: r.prerequisites, grade: r.grade, subject_category: r.subject_category })),
+      const [res] = await Promise.all([
+        fetch('/api/curriculum/import', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            curriculum_version: filters.curriculum_version,
+            apply_updates: true,
+            rows: validRows.map(r => ({ program_id: r.program_id, year_level: r.year_level, semester: r.semester, subject_code: r.subject_code, subject_name: r.subject_name, lecture_hours: r.lecture_hours, laboratory_hours: r.laboratory_hours, units: r.credit_units, prerequisites: r.prerequisites, grade: r.grade, subject_category: r.subject_category })),
+          }),
         }),
-      });
+        minDelay,
+      ]);
       if (!res.ok) {
         let msg = 'Import failed.';
         try { msg = ((await res.json()) as { error?: string })?.error ?? msg; } catch { /* html */ }
-        toast.error(msg); return;
+        toast.error(msg); closeImport(); return;
       }
       const data = await res.json();
       const result: ImportResult = {
@@ -601,7 +655,6 @@ export default function CurriculumPage() {
         duplicated: data.duplicated ?? 0,
         errors: data.errors ?? [],
       };
-      setImportResult(result); setImportStep('done');
       const parts: string[] = [];
       if (result.imported    > 0) parts.push(`${result.imported} new`);
       if (result.updated     > 0) parts.push(`${result.updated} updated`);
@@ -609,11 +662,20 @@ export default function CurriculumPage() {
       if (result.duplicated  > 0) parts.push(`${result.duplicated} already existed`);
       if (result.errors.length)   parts.push(`${result.errors.length} error${result.errors.length !== 1 ? 's' : ''}`);
       const summary = parts.length ? parts.join(', ') : '0 subjects added';
-      if (result.total > 0) toast.success(`Curriculum imported successfully — ${summary}.`);
-      else if (result.duplicated > 0) toast.info(`Import complete — all ${result.duplicated} subjects already exist and are active.`);
-      else toast.error(`Import finished with no subjects added — ${summary}.`);
       fetchCurriculums(filters.program_id, filters.year_level, filters.semester, filters.curriculum_version);
-    } catch { toast.error('Connection error during import. Please try again.'); }
+      if (result.total > 0) {
+        setImportLoading(false);
+        setImportSaveSuccess(true);
+        setTimeout(() => {
+          closeImport();
+          toast.success(`Curriculum imported successfully — ${summary}.`);
+        }, 1300);
+        return;
+      }
+      if (result.duplicated > 0) toast.info(`Import complete — all ${result.duplicated} subjects already exist and are active.`);
+      else toast.error(`Import finished with no subjects added — ${summary}.`);
+      closeImport();
+    } catch { toast.error('Connection error during import. Please try again.'); closeImport(); }
     finally { setImportLoading(false); }
   }
 
@@ -649,9 +711,14 @@ export default function CurriculumPage() {
   const selectedProg = programs.find(p => String(p.id) === filters.program_id);
   const showPageSkeleton = useMinLoading(booting, LOADING_DELAY);
   const showTableSkeleton = useMinLoading(
-    !showPageSkeleton && listLoading && !!filters.program_id && curriculums.length === 0,
+    !showPageSkeleton && listLoading && !!filters.program_id,
     PAGE_SKELETON_MIN_MS,
   );
+  const reduceMotion = useReducedMotion();
+  const resultsKey = `${filters.program_id}|${filters.curriculum_version}|${filters.year_level}|${filters.semester}`;
+  const resultsTransition = reduceMotion
+    ? { duration: 0 }
+    : { duration: 0.42, ease: [0.16, 1, 0.3, 1] as const };
 
   /* ── Render ─────────────────────────────────────────────────────────── */
 
@@ -667,9 +734,9 @@ export default function CurriculumPage() {
   const btnBase =
     'inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-70';
   const btnSecondary =
-    `${btnBase} bg-white border border-[#E5E7EB] text-[#374151] hover:border-[#3C91E6] hover:text-[#2563EB] hover:bg-[#F9FAFB] active:bg-[#EFF6FF]`;
+    `${btnBase} bg-white border border-[#E5E7EB] text-[#374151] hover:border-[#1D5BD6] hover:text-[#164BB5] hover:bg-[#F9FAFB] active:bg-[#EFF6FF]`;
   const btnPrimary =
-    `${btnBase} bg-[#2563EB] !text-white hover:bg-[#1D4ED8] active:bg-[#1E40AF] shadow-sm`;
+    `${btnBase} bg-[#164BB5] !text-white hover:bg-[#1D4ED8] active:bg-[#1E40AF] shadow-sm`;
 
   const pageSkeleton = (
     <div className="space-y-6" role="status" aria-live="polite" aria-label="Loading curriculum setup">
@@ -727,10 +794,9 @@ export default function CurriculumPage() {
       <PageLoadTransition showSkeleton={showPageSkeleton} skeleton={pageSkeleton}>
 
       {/* Page Header */}
-      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+      <div className="flex items-center justify-between mb-2 flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-[#1E3A5F]">Curriculum Setup</h1>
-          <p className="text-sm mt-0.5 text-[#64748B]">Manage subjects per program, year level, and semester</p>
+          <BackButton />
         </div>
         <div className="flex gap-2 flex-wrap">
           <button
@@ -775,6 +841,9 @@ export default function CurriculumPage() {
           </button>
         </div>
       </div>
+     <div className="sm:mt-7 mb-10">
+  <WatermarkTitle>Curriculum Setup</WatermarkTitle>
+</div>
 
       {/* Filters */}
       <FilterBar className="!px-5 !py-4 !mb-6">
@@ -787,9 +856,13 @@ export default function CurriculumPage() {
               value={filters.program_id}
               onChange={v => setFilters(f => ({ ...f, program_id: v, year_level: '', semester: '' }))}
               label="Program"
+              disabled={userRole === 'program_chair'}
             >
               <option value="">— Select Program —</option>
-              {programs.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
+              {(userRole === 'program_chair'
+                ? programs.filter(p => p.id === chairProgramId)
+                : programs
+              ).map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
             </FilterSelect>
           </div>
 
@@ -886,25 +959,51 @@ export default function CurriculumPage() {
         showSkeleton={showTableSkeleton}
         skeleton={<TableSkeleton rows={8} cols={7} />}
       >
+      <AnimatePresence mode="wait" initial={false}>
       {!filters.program_id ? (
-        <div className="bg-white border border-[#E2E8F0] rounded-2xl py-14 text-center shadow-sm">
+        <motion.div
+          key="no-program"
+          initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={reduceMotion ? undefined : { opacity: 0, y: -8 }}
+          transition={resultsTransition}
+          className="bg-white border border-[#E2E8F0] rounded-2xl py-14 text-center shadow-sm"
+        >
           <p className="text-sm text-[#64748B]">No curriculum records found.</p>
-        </div>
+        </motion.div>
       ) : groups.length === 0 ? (
-        <div className="bg-white border border-[#E2E8F0] rounded-2xl py-14 text-center shadow-sm">
+        <motion.div
+          key={`${resultsKey}|${filters.search}|empty`}
+          initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={reduceMotion ? undefined : { opacity: 0, y: -8 }}
+          transition={resultsTransition}
+          className="bg-white border border-[#E2E8F0] rounded-2xl py-14 text-center shadow-sm"
+        >
           <p className="text-sm text-[#64748B]">
             {filters.search ? <>No subjects match &ldquo;{filters.search}&rdquo;.</> : 'No subjects found.'}
           </p>
-        </div>
+        </motion.div>
       ) : (
-        <div className="space-y-6">
-          {groups.map(group => {
+        <motion.div
+          key={resultsKey}
+          initial={reduceMotion ? false : { opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={reduceMotion ? undefined : { opacity: 0, y: -10 }}
+          transition={resultsTransition}
+          className="space-y-6"
+        >
+          {groups.map((group, groupIdx) => {
             const totalLec   = group.subjects.reduce((s, c) => s + Number(c.lecture_hours), 0);
             const totalLab   = group.subjects.reduce((s, c) => s + Number(c.laboratory_hours), 0);
             const totalUnits = group.subjects.reduce((s, c) => s + parseFloat(String(c.units)), 0);
             return (
-              <div key={group.key} className="bg-white rounded-xl border border-[#E2E8F0] overflow-hidden">
-                <div className="bg-[#3C91E6] px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <div
+                key={group.key}
+                className="bg-white rounded-xl border border-[#E2E8F0] overflow-hidden qr-content-fade-in-item"
+                style={{ '--qr-fade-delay': `${Math.min(groupIdx, 6) * 80}ms` } as React.CSSProperties}
+              >
+                <div className="bg-[#1D5BD6] px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                   <div className="min-w-0">
                     <div className="font-bold text-base text-white leading-tight break-words">{group.program} — {group.programName}</div>
                     <div className="text-sm mt-0.5 font-medium text-white/85">{group.yearLevel} &nbsp;·&nbsp; {group.semester}</div>
@@ -936,15 +1035,15 @@ export default function CurriculumPage() {
                         <tr key={c.id} className="hover:bg-[#F8FAFC] transition-colors">
                           <td className="px-4 py-3 text-center text-xs text-[#94A3B8]">{i + 1}</td>
                           <td className="px-4 py-3 text-center whitespace-nowrap align-middle min-w-[7.5rem]">
-                            <span className="inline-block font-mono font-semibold px-2.5 py-1 rounded text-xs border bg-[#EFF6FF] border-[#BFDBFE] text-[#3C91E6] whitespace-nowrap">
+                            <span className="inline-block font-mono font-semibold px-2.5 py-1 rounded text-xs border bg-[#EFF6FF] border-[#BFDBFE] text-[#1D5BD6] whitespace-nowrap">
                               {c.subject_code}
                             </span>
                           </td>
-                          <td className="px-4 py-3 font-medium text-[#1E3A5F]">{c.subject_name}</td>
+                          <td className="px-4 py-3 font-medium text-[#0B2A5B]">{c.subject_name}</td>
                           <td className="px-4 py-3 text-center">
                             <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
                               categoryFromHours(c.lecture_hours, c.laboratory_hours) === 'Major'
-                                ? 'bg-[#EFF6FF] text-[#3C91E6] border border-[#BFDBFE]'
+                                ? 'bg-[#EFF6FF] text-[#1D5BD6] border border-[#BFDBFE]'
                                 : 'bg-[#F1F5F9] text-[#64748B] border border-[#E2E8F0]'
                             }`}>
                               {categoryFromHours(c.lecture_hours, c.laboratory_hours)}
@@ -952,7 +1051,7 @@ export default function CurriculumPage() {
                           </td>
                           <td className="px-4 py-3 text-center text-[#64748B]">{Number(c.lecture_hours)}</td>
                           <td className="px-4 py-3 text-center text-[#64748B]">{Number(c.laboratory_hours)}</td>
-                          <td className="px-4 py-3 text-center font-bold text-[#3C91E6]">{parseFloat(String(c.units)).toFixed(2)}</td>
+                          <td className="px-4 py-3 text-center font-bold text-[#1D5BD6]">{parseFloat(String(c.units)).toFixed(2)}</td>
                           <td className="px-4 py-3 text-sm">
                             {c.prerequisites
                               ? <span className="font-mono text-xs bg-[#F1F5F9] border border-[#E2E8F0] px-2 py-0.5 rounded text-[#64748B]">{c.prerequisites}</span>
@@ -963,10 +1062,10 @@ export default function CurriculumPage() {
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex items-center justify-center gap-1">
-                              <button type="button" onClick={() => openEdit(c)} className="p-1.5 rounded-lg transition hover:bg-[#EFF6FF] text-[#3C91E6]" title="Edit">
+                              <button type="button" onClick={() => openEdit(c)} className="p-1.5 rounded-lg transition hover:bg-[#EFF6FF] text-[#1D5BD6]" title="Edit">
                                 <Pencil className="w-3.5 h-3.5" />
                               </button>
-                              <button type="button" onClick={() => handleDelete(c.id)} className="p-1.5 rounded-lg transition hover:bg-red-50 text-[#EF4444]" title="Delete">
+                              <button type="button" onClick={() => handleDelete(c)} className="p-1.5 rounded-lg transition hover:bg-red-50 text-[#EF4444]" title="Delete">
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
                             </div>
@@ -979,9 +1078,9 @@ export default function CurriculumPage() {
                         <td colSpan={4} className="px-4 py-3 text-right">
                           <span className="text-xs font-bold uppercase tracking-widest text-[#4B5563]">TOTAL</span>
                         </td>
-                        <td className="px-4 py-3 text-center font-bold text-[#1E3A5F]">{totalLec}</td>
-                        <td className="px-4 py-3 text-center font-bold text-[#1E3A5F]">{totalLab}</td>
-                        <td className="px-4 py-3 text-center font-bold text-base text-[#3C91E6]">{totalUnits.toFixed(2)}</td>
+                        <td className="px-4 py-3 text-center font-bold text-[#0B2A5B]">{totalLec}</td>
+                        <td className="px-4 py-3 text-center font-bold text-[#0B2A5B]">{totalLab}</td>
+                        <td className="px-4 py-3 text-center font-bold text-base text-[#1D5BD6]">{totalUnits.toFixed(2)}</td>
                         <td colSpan={3} className="px-4 py-3" />
                       </tr>
                     </tfoot>
@@ -997,11 +1096,11 @@ export default function CurriculumPage() {
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <span className="text-xs text-[#94A3B8]">Showing:</span>
                   {filters.year_level
-                    ? <span className="text-xs font-semibold px-2 py-0.5 rounded-full border text-[#3C91E6] border-[#BFDBFE] bg-[#EFF6FF]">{filters.year_level}</span>
+                    ? <span className="text-xs font-semibold px-2 py-0.5 rounded-full border text-[#1D5BD6] border-[#BFDBFE] bg-[#EFF6FF]">{filters.year_level}</span>
                     : <span className="text-xs font-semibold px-2 py-0.5 rounded-full border text-[#64748B] border-[#E2E8F0] bg-[#F8FAFC]">All Year Levels</span>}
                   <span className="text-xs text-[#94A3B8]">·</span>
                   {filters.semester
-                    ? <span className="text-xs font-semibold px-2 py-0.5 rounded-full border text-[#3C91E6] border-[#BFDBFE] bg-[#EFF6FF]">{filters.semester}</span>
+                    ? <span className="text-xs font-semibold px-2 py-0.5 rounded-full border text-[#1D5BD6] border-[#BFDBFE] bg-[#EFF6FF]">{filters.semester}</span>
                     : <span className="text-xs font-semibold px-2 py-0.5 rounded-full border text-[#64748B] border-[#E2E8F0] bg-[#F8FAFC]">All Semesters</span>}
                 </div>
               )}
@@ -1011,8 +1110,9 @@ export default function CurriculumPage() {
               {groups.length > 1 ? ` across ${groups.length} sections` : ''}
             </span>
           </div>
-        </div>
+        </motion.div>
       )}
+      </AnimatePresence>
       </PageLoadTransition>
       </PageLoadTransition>
 
@@ -1027,7 +1127,29 @@ export default function CurriculumPage() {
       )}
 
       {/* ── Add / Edit Modal ──────────────────────────────────────────────── */}
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editId ? 'Edit Subject' : 'Add Subject'}>
+      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editId ? 'Edit Subject' : 'Add Subject'} headerAccent>
+        {saveSuccess && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-2xl backdrop-blur-md save-success-overlay">
+            <div className="save-success-badge flex flex-col items-center gap-3 px-8 py-7 rounded-2xl bg-[#111827] border border-white/10 shadow-2xl">
+              <svg width="72" height="72" viewBox="0 0 52 52">
+                <circle
+                  className="save-success-circle"
+                  cx="26" cy="26" r="24"
+                  fill="none" stroke="#22C55E" strokeWidth="3"
+                />
+                <path
+                  className="save-success-check"
+                  fill="none" stroke="#22C55E" strokeWidth="3.5"
+                  strokeLinecap="round" strokeLinejoin="round"
+                  d="M14.5 27 22 34.5 38 17"
+                />
+              </svg>
+              <p className="text-base font-semibold text-white">
+                {editId ? 'Subject updated!' : 'Subject added!'}
+              </p>
+            </div>
+          </div>
+        )}
         <form onSubmit={handleSubmit} className="space-y-5">
           {formError && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm">{formError}</div>
@@ -1041,9 +1163,13 @@ export default function CurriculumPage() {
           <div>
             <label className="block text-sm font-semibold mb-1.5" style={{ color: '#64748B' }}>Program <span className="text-red-400">*</span></label>
             <select value={form.program_id} onChange={e => setForm(f => ({ ...f, program_id: e.target.value }))} required
-              className={fieldCls} style={{ color: '#1E3A5F' }}>
+              disabled={userRole === 'program_chair'}
+              className={fieldCls} style={{ color: '#0B2A5B' }}>
               <option value="">— Select Program —</option>
-              {programs.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
+              {(userRole === 'program_chair'
+                ? programs.filter(p => p.id === chairProgramId)
+                : programs
+              ).map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
             </select>
           </div>
 
@@ -1051,7 +1177,7 @@ export default function CurriculumPage() {
             <div>
               <label className="block text-sm font-semibold mb-1.5" style={{ color: '#64748B' }}>Year Level <span className="text-red-400">*</span></label>
               <select value={form.year_level} onChange={e => setForm(f => ({ ...f, year_level: e.target.value }))} required
-                className={fieldCls} style={{ color: '#1E3A5F' }}>
+                className={fieldCls} style={{ color: '#0B2A5B' }}>
                 <option value="">Select Year Level</option>
                 {YEAR_LEVELS.map(y => <option key={y} value={y}>{y}</option>)}
               </select>
@@ -1059,7 +1185,7 @@ export default function CurriculumPage() {
             <div>
               <label className="block text-sm font-semibold mb-1.5" style={{ color: '#64748B' }}>Semester <span className="text-red-400">*</span></label>
               <select value={form.semester} onChange={e => setForm(f => ({ ...f, semester: e.target.value }))} required
-                className={fieldCls} style={{ color: '#1E3A5F' }}>
+                className={fieldCls} style={{ color: '#0B2A5B' }}>
                 <option value="">Select Semester</option>
                 {SEMESTERS.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
@@ -1073,8 +1199,8 @@ export default function CurriculumPage() {
                 <button key={type} type="button" onClick={() => handleSubjectTypeChange(type)}
                   className={`py-3.5 px-2 rounded-xl border-2 text-sm font-semibold transition-all text-center leading-snug
                     ${form.subject_type === type
-                      ? 'border-[#3C91E6] bg-[#3C91E6] text-white'
-                      : 'border-[#E2E8F0] bg-white hover:border-[#3C91E6]/50 hover:bg-[#EFF6FF]'}`}
+                      ? 'border-[#1D5BD6] bg-[#1D5BD6] text-white'
+                      : 'border-[#E2E8F0] bg-white hover:border-[#1D5BD6]/50 hover:bg-[#EFF6FF]'}`}
                   style={form.subject_type !== type ? { color: '#64748B' } : {}}>
                   {type}
                   <div className={`text-xs font-normal mt-0.5 ${form.subject_type === type ? 'text-blue-100' : ''}`}
@@ -1101,7 +1227,7 @@ export default function CurriculumPage() {
                     aria-disabled="true"
                     className={`py-3.5 px-2 rounded-xl border-2 text-sm font-semibold text-center leading-snug cursor-default
                       ${active
-                        ? 'border-[#3C91E6] bg-[#3C91E6] text-white'
+                        ? 'border-[#1D5BD6] bg-[#1D5BD6] text-white'
                         : 'border-[#E2E8F0] bg-[#F8FAFC]'}`}
                     style={!active ? { color: '#94A3B8' } : {}}
                   >
@@ -1125,12 +1251,12 @@ export default function CurriculumPage() {
             <div>
               <label className="block text-sm font-semibold mb-1.5" style={{ color: '#64748B' }}>Course Code <span className="text-red-400">*</span></label>
               <input type="text" value={form.subject_code} onChange={e => setForm(f => ({ ...f, subject_code: e.target.value }))} required
-                placeholder="e.g., IT 111" className={fieldCls} style={{ color: '#1E3A5F' }} />
+                placeholder="e.g., IT 111" className={fieldCls} style={{ color: '#0B2A5B' }} />
             </div>
             <div>
               <label className="block text-sm font-semibold mb-1.5" style={{ color: '#64748B' }}>Subject Name <span className="text-red-400">*</span></label>
               <input type="text" value={form.subject_name} onChange={e => setForm(f => ({ ...f, subject_name: e.target.value }))} required
-                placeholder="e.g., Introduction to Computing" className={fieldCls} style={{ color: '#1E3A5F' }} />
+                placeholder="e.g., Introduction to Computing" className={fieldCls} style={{ color: '#0B2A5B' }} />
             </div>
           </div>
 
@@ -1139,7 +1265,7 @@ export default function CurriculumPage() {
               <label className="block text-sm font-semibold mb-1.5" style={{ color: '#64748B' }}>Lecture Hours <span className="text-red-400">*</span></label>
               <input type="number" min="0" step="0.5" value={form.lecture_hours} placeholder="e.g., 3"
                 onChange={e => setForm(f => ({ ...f, lecture_hours: e.target.value }))}
-                className={fieldCls} style={{ color: '#1E3A5F' }} />
+                className={fieldCls} style={{ color: '#0B2A5B' }} />
               <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>Laboratory Hours set to 0 automatically.</p>
             </div>
           )}
@@ -1148,7 +1274,7 @@ export default function CurriculumPage() {
               <label className="block text-sm font-semibold mb-1.5" style={{ color: '#64748B' }}>Laboratory Hours <span className="text-red-400">*</span></label>
               <input type="number" min="0" step="0.5" value={form.laboratory_hours} placeholder="e.g., 3"
                 onChange={e => setForm(f => ({ ...f, laboratory_hours: e.target.value }))}
-                className={fieldCls} style={{ color: '#1E3A5F' }} />
+                className={fieldCls} style={{ color: '#0B2A5B' }} />
               <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>Lecture Hours set to 0 automatically.</p>
             </div>
           )}
@@ -1158,13 +1284,13 @@ export default function CurriculumPage() {
                 <label className="block text-sm font-semibold mb-1.5" style={{ color: '#64748B' }}>Lecture Hours <span className="text-red-400">*</span></label>
                 <input type="number" min="0" step="0.5" value={form.lecture_hours} placeholder="e.g., 2"
                   onChange={e => setForm(f => ({ ...f, lecture_hours: e.target.value }))}
-                  className={fieldCls} style={{ color: '#1E3A5F' }} />
+                  className={fieldCls} style={{ color: '#0B2A5B' }} />
               </div>
               <div>
                 <label className="block text-sm font-semibold mb-1.5" style={{ color: '#64748B' }}>Laboratory Hours <span className="text-red-400">*</span></label>
                 <input type="number" min="0" step="0.5" value={form.laboratory_hours} placeholder="e.g., 3"
                   onChange={e => setForm(f => ({ ...f, laboratory_hours: e.target.value }))}
-                  className={fieldCls} style={{ color: '#1E3A5F' }} />
+                  className={fieldCls} style={{ color: '#0B2A5B' }} />
               </div>
             </div>
           )}
@@ -1173,7 +1299,7 @@ export default function CurriculumPage() {
             <label className="block text-sm font-semibold mb-1.5" style={{ color: '#64748B' }}>Credit Units <span className="text-red-400">*</span></label>
             <input type="number" min="0" step="0.5" value={form.units} placeholder="e.g., 3"
               onChange={e => setForm(f => ({ ...f, units: e.target.value }))}
-              className={fieldCls} style={{ color: '#1E3A5F' }} />
+              className={fieldCls} style={{ color: '#0B2A5B' }} />
             <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>Official credit units from the curriculum sheet.</p>
           </div>
 
@@ -1181,21 +1307,21 @@ export default function CurriculumPage() {
             <div>
               <label className="block text-sm font-semibold mb-1.5" style={{ color: '#64748B' }}>Pre-requisite(s)</label>
               <input type="text" value={form.prerequisites} onChange={e => setForm(f => ({ ...f, prerequisites: e.target.value }))}
-                placeholder="e.g., IT 111 or leave blank" className={fieldCls} style={{ color: '#1E3A5F' }} />
+                placeholder="e.g., IT 111 or leave blank" className={fieldCls} style={{ color: '#0B2A5B' }} />
               <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>Leave blank if none.</p>
             </div>
             <div>
               <label className="block text-sm font-semibold mb-1.5" style={{ color: '#64748B' }}>Grade</label>
               <input type="text" value={form.grade} onChange={e => setForm(f => ({ ...f, grade: e.target.value }))}
-                placeholder="e.g., 75 or leave blank" className={fieldCls} style={{ color: '#1E3A5F' }} />
+                placeholder="e.g., 75 or leave blank" className={fieldCls} style={{ color: '#0B2A5B' }} />
               <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>Minimum prerequisite grade. Leave blank if none.</p>
             </div>
           </div>
 
           {form.subject_type && (
             <div className="bg-[#EFF6FF] rounded-xl px-4 py-3.5 border border-[#BFDBFE]">
-              <div className="text-xs font-bold uppercase tracking-wide mb-0.5" style={{ color: '#3C91E6' }}>Total Contact Hours (auto-calculated)</div>
-              <div className="text-2xl font-bold" style={{ color: '#1E3A5F' }}>{(lec + lab).toFixed(2)} <span className="text-base font-normal" style={{ color: '#64748B' }}>hrs</span></div>
+              <div className="text-xs font-bold uppercase tracking-wide mb-0.5" style={{ color: '#1D5BD6' }}>Total Contact Hours (auto-calculated)</div>
+              <div className="text-2xl font-bold" style={{ color: '#0B2A5B' }}>{(lec + lab).toFixed(2)} <span className="text-base font-normal" style={{ color: '#64748B' }}>hrs</span></div>
               <div className="text-xs mt-0.5" style={{ color: '#64748B' }}>Lec {lec} + Lab {lab}</div>
             </div>
           )}
@@ -1206,11 +1332,63 @@ export default function CurriculumPage() {
               style={{ color: '#64748B' }}>Cancel</button>
             <button type="submit" disabled={loading}
               className="flex-1 text-white py-2.5 rounded-xl disabled:opacity-50 transition text-sm font-semibold hover:opacity-90"
-              style={{ backgroundColor: '#3C91E6' }}>
+              style={{ backgroundColor: '#1D5BD6' }}>
               {loading ? 'Saving…' : editId ? 'Update Subject' : 'Add Subject'}
             </button>
           </div>
         </form>
+      </Modal>
+
+      {/* ── Delete Subject Modal ───────────────────────────────────────────── */}
+      <Modal
+        open={!!deleteTarget}
+        onClose={() => { if (!deleteLoading && !deleteSuccess) setDeleteTarget(null); }}
+        title="Delete Subject"
+      >
+        {deleteSuccess && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-2xl backdrop-blur-md save-success-overlay">
+            <div className="save-success-badge flex flex-col items-center gap-3 px-8 py-7 rounded-2xl bg-white border border-[#E2E8F0] shadow-2xl">
+              <TrashDropAnimation className="bg-red-50 border-red-200" />
+              <p className="text-base font-semibold text-[#0B2A5B]">Subject deleted!</p>
+            </div>
+          </div>
+        )}
+        {deleteTarget && (
+          <div className="space-y-5">
+            <div className="flex flex-col items-center text-center gap-3 pt-1">
+              <div className="w-16 h-16 rounded-2xl bg-red-50 border border-red-200 flex items-center justify-center">
+                <Trash2 className="w-8 h-8 text-red-500" />
+              </div>
+              <div>
+                <p className="text-base font-bold text-[#0B2A5B]">Delete {deleteTarget.code}?</p>
+                <p className="text-sm text-[#64748B] mt-1">{deleteTarget.name}</p>
+                <p className="text-sm text-[#64748B] mt-2">This removes the subject from the curriculum. This action cannot be undone.</p>
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleteLoading || deleteSuccess}
+                className="flex-1 border border-[#E2E8F0] py-2.5 rounded-xl hover:bg-[#F8FAFC] transition text-sm font-medium text-[#64748B] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDelete}
+                disabled={deleteLoading || deleteSuccess}
+                className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 rounded-xl transition text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-60"
+                style={{ color: '#FFFFFF' }}
+              >
+                {deleteLoading
+                  ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Deleting…</>
+                  : <><Trash2 className="w-4 h-4" /> Delete Subject</>}
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       {/* ── Excel Import Modal ─────────────────────────────────────────────── */}
@@ -1228,7 +1406,7 @@ export default function CurriculumPage() {
             role="dialog"
             aria-modal="true"
             aria-labelledby="import-curriculum-title"
-            className={`bg-white border border-[#E2E8F0] rounded-3xl shadow-[0_28px_64px_-28px_rgba(30,58,95,0.35)] w-full max-w-5xl min-h-0 max-h-full overflow-hidden ${
+            className={`bg-white border border-[#E2E8F0] rounded-3xl shadow-[0_28px_64px_-28px_rgba(11,42,91,0.35)] w-full max-w-5xl min-h-0 max-h-full overflow-hidden ${
               importStep === 'preview'
                 ? 'grid h-full grid-rows-[auto_auto_minmax(0,1fr)_auto]'
                 : 'flex flex-col'
@@ -1237,19 +1415,19 @@ export default function CurriculumPage() {
           >
             <div className="flex items-start justify-between gap-4 px-6 py-5 flex-shrink-0 border-b border-[#EEF2F7] bg-[linear-gradient(180deg,#F8FBFF_0%,#FFFFFF_100%)]">
               <div className="flex items-start gap-3 min-w-0">
-                <div className="w-11 h-11 rounded-2xl bg-[#EFF6FF] text-[#3C91E6] ring-1 ring-[#BFDBFE] flex items-center justify-center shrink-0">
+                <div className="w-11 h-11 rounded-2xl bg-[#EFF6FF] text-[#1D5BD6] ring-1 ring-[#BFDBFE] flex items-center justify-center shrink-0">
                   <FileSpreadsheet className="w-5 h-5" />
                 </div>
                 <div className="min-w-0">
-                  <h2 id="import-curriculum-title" className="text-lg font-bold tracking-tight" style={{ color: '#1E3A5F' }}>Import curriculum</h2>
+                  <h2 id="import-curriculum-title" className="text-lg font-bold tracking-tight" style={{ color: '#0B2A5B' }}>Import curriculum</h2>
                   <p className="text-sm mt-0.5 truncate" style={{ color: '#64748B' }}>
                     {importStep === 'upload'  && (selectedProg ? `${selectedProg.code} — ${selectedProg.name}` : 'Program can be detected from course codes')}
                     {importStep === 'preview' && `${previewRows.length} subjects ready for review`}
-                    {importStep === 'done'    && 'Import finished'}
+                    {importStep === 'done'    && 'Importing…'}
                   </p>
                 </div>
               </div>
-              <button onClick={closeImport} className="p-2 rounded-xl text-[#94A3B8] hover:text-[#1E3A5F] hover:bg-[#F1F5F9] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3C91E6] focus-visible:ring-offset-2" aria-label="Close">
+              <button onClick={closeImport} className="p-2 rounded-xl text-[#94A3B8] hover:text-[#0B2A5B] hover:bg-[#F1F5F9] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D5BD6] focus-visible:ring-offset-2" aria-label="Close">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -1270,19 +1448,25 @@ export default function CurriculumPage() {
                       <div className="flex items-center gap-2.5 min-w-0">
                         <span className={`w-8 h-8 rounded-full text-xs font-bold flex items-center justify-center shrink-0 transition shadow-sm ${
                           done ? 'bg-[#10B981] text-white'
-                            : active ? 'bg-[#3C91E6] text-white ring-4 ring-[#DBEAFE]'
+                            : active ? 'bg-[#1D5BD6] text-white ring-4 ring-[#DBEAFE]'
                             : 'bg-[#F1F5F9] text-[#94A3B8]'
                         }`}>
                           {done ? <CheckCircle className="w-4 h-4" /> : i + 1}
                         </span>
                         <span className={`text-sm font-semibold hidden sm:block ${
-                          active ? 'text-[#1E3A5F]' : done ? 'text-[#047857]' : 'text-[#94A3B8]'
+                          active ? 'text-[#0B2A5B]' : done ? 'text-[#047857]' : 'text-[#94A3B8]'
                         }`}>
                           {step.label}
                         </span>
                       </div>
                       {i < all.length - 1 && (
-                        <div className={`h-0.5 flex-1 mx-3 rounded-full ${i < current ? 'bg-[#6EE7B7]' : 'bg-[#E2E8F0]'}`} />
+                        <div className="relative h-0.5 flex-1 mx-3 rounded-full overflow-hidden bg-[#E2E8F0]">
+                          {i < current && (
+                            <div className="absolute inset-0 rounded-full bg-[#6EE7B7] stepper-fill">
+                              {importLoading && <div className="stepper-shimmer" />}
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   );
@@ -1307,16 +1491,16 @@ export default function CurriculumPage() {
                       importParsing
                         ? 'border-[#E2E8F0] bg-[#F8FAFC] cursor-wait'
                         : dragOver
-                          ? 'border-[#3C91E6] bg-[#EFF6FF] scale-[1.01] shadow-sm'
-                          : 'border-[#E2E8F0] bg-[#F8FAFC] hover:border-[#3C91E6] hover:bg-[#EFF6FF]/70 cursor-pointer'
+                          ? 'border-[#1D5BD6] bg-[#EFF6FF] scale-[1.01] shadow-sm'
+                          : 'border-[#E2E8F0] bg-[#F8FAFC] hover:border-[#1D5BD6] hover:bg-[#EFF6FF]/70 cursor-pointer'
                     }`}
                   >
-                    <div className={`w-14 h-14 mx-auto mb-4 rounded-2xl flex items-center justify-center ${dragOver || importParsing ? 'bg-[#DBEAFE] text-[#3C91E6]' : 'bg-white text-[#94A3B8] shadow-sm ring-1 ring-[#E2E8F0]'}`}>
+                    <div className={`w-14 h-14 mx-auto mb-4 rounded-2xl flex items-center justify-center ${dragOver || importParsing ? 'bg-[#DBEAFE] text-[#1D5BD6]' : 'bg-white text-[#94A3B8] shadow-sm ring-1 ring-[#E2E8F0]'}`}>
                       {importParsing
-                        ? <div className="w-6 h-6 border-2 border-[#3C91E6] border-t-transparent rounded-full animate-spin" />
+                        ? <div className="w-6 h-6 border-2 border-[#1D5BD6] border-t-transparent rounded-full animate-spin" />
                         : <Upload className="w-6 h-6" />}
                     </div>
-                    <p className="text-base font-semibold" style={{ color: '#1E3A5F' }}>
+                    <p className="text-base font-semibold" style={{ color: '#0B2A5B' }}>
                       {importParsing ? 'Reading workbook…' : dragOver ? 'Drop file to upload' : 'Drop your Excel file here'}
                     </p>
                     <p className="text-sm text-[#64748B] mt-1">
@@ -1336,8 +1520,8 @@ export default function CurriculumPage() {
                       onClick={() => setFormatGuideOpen(o => !o)}
                       className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-[#F8FAFC] transition"
                     >
-                      <span className="flex items-center gap-2 text-sm font-semibold text-[#1E3A5F]">
-                        <Info className="w-4 h-4 text-[#3C91E6]" />
+                      <span className="flex items-center gap-2 text-sm font-semibold text-[#0B2A5B]">
+                        <Info className="w-4 h-4 text-[#1D5BD6]" />
                         What the file can look like
                       </span>
                       <ChevronDown className={`w-4 h-4 text-[#94A3B8] transition ${formatGuideOpen ? 'rotate-180' : ''}`} />
@@ -1349,7 +1533,7 @@ export default function CurriculumPage() {
                         </p>
                         <div className="overflow-x-auto rounded-xl border border-[#E2E8F0]">
                           <table className="text-[11px] w-full">
-                            <thead className="bg-[#1E3A5F] text-white/80">
+                            <thead className="bg-[#0B2A5B] text-white/80">
                               <tr>
                                 {['Year / Semester', 'Course Code', 'Title', 'Lec', 'Lab', 'Units'].map(h => (
                                   <th key={h} className="text-left font-semibold px-3 py-2 whitespace-nowrap">{h}</th>
@@ -1359,7 +1543,7 @@ export default function CurriculumPage() {
                             <tbody className="text-[#475569]">
                               <tr className="border-t border-[#F1F5F9]">
                                 <td className="px-3 py-1.5">FIRST YEAR — First Semester</td>
-                                <td className="px-3 py-1.5 font-semibold text-[#1E3A5F]">CS 111</td>
+                                <td className="px-3 py-1.5 font-semibold text-[#0B2A5B]">CS 111</td>
                                 <td className="px-3 py-1.5">Introduction to Computing</td>
                                 <td className="px-3 py-1.5">2</td>
                                 <td className="px-3 py-1.5">3</td>
@@ -1367,7 +1551,7 @@ export default function CurriculumPage() {
                               </tr>
                               <tr className="border-t border-[#F1F5F9] bg-[#F8FAFC]">
                                 <td className="px-3 py-1.5">FIRST YEAR — First Semester</td>
-                                <td className="px-3 py-1.5 font-semibold text-[#1E3A5F]">GE-US</td>
+                                <td className="px-3 py-1.5 font-semibold text-[#0B2A5B]">GE-US</td>
                                 <td className="px-3 py-1.5">Understanding the Self</td>
                                 <td className="px-3 py-1.5">3</td>
                                 <td className="px-3 py-1.5">0</td>
@@ -1410,7 +1594,7 @@ export default function CurriculumPage() {
                   <div className="rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] p-2">
                     <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
                     {[
-                      { n: previewRows.length, l: 'Detected', tone: 'text-[#1E3A5F] bg-white border-[#E2E8F0]' },
+                      { n: previewRows.length, l: 'Detected', tone: 'text-[#0B2A5B] bg-white border-[#E2E8F0]' },
                       { n: newCount, l: 'New', tone: 'text-[#047857] bg-[#ECFDF5] border-[#A7F3D0]' },
                       { n: existingCount, l: 'Existing', tone: 'text-[#475569] bg-white border-[#E2E8F0]' },
                       { n: changedCount, l: 'Changed', tone: 'text-[#B45309] bg-[#FFFBEB] border-[#FDE68A]' },
@@ -1429,12 +1613,12 @@ export default function CurriculumPage() {
                     <div className={`rounded-2xl px-4 py-3.5 border-l-4 ${
                       importProgramMismatch
                         ? 'bg-[#FEF2F2] border border-[#FECACA] border-l-[#EF4444]'
-                        : 'bg-white border border-[#E2E8F0] border-l-[#3C91E6]'
+                        : 'bg-white border border-[#E2E8F0] border-l-[#1D5BD6]'
                     }`}>
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
                           <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#94A3B8]">Detected program</div>
-                          <div className="text-sm font-bold mt-0.5" style={{ color: '#1E3A5F' }}>
+                          <div className="text-sm font-bold mt-0.5" style={{ color: '#0B2A5B' }}>
                             {importProgramDetection.program
                               ? `${importProgramDetection.program.code} — ${importProgramDetection.program.name}`
                               : 'Not enough evidence to map a program'}
@@ -1455,7 +1639,7 @@ export default function CurriculumPage() {
                           <button
                             type="button"
                             onClick={() => { void applyDetectedProgram(); }}
-                            className="px-3 py-1.5 rounded-xl text-xs font-semibold text-white bg-[#3C91E6] hover:bg-[#2563EB] transition"
+                            className="px-3 py-1.5 rounded-xl text-xs font-semibold text-white bg-[#1D5BD6] hover:bg-[#164BB5] transition"
                           >
                             Use {importProgramDetection.program.code}
                           </button>
@@ -1471,7 +1655,7 @@ export default function CurriculumPage() {
                         {importMappings.map(mapping => (
                           <div key={`${mapping.field}-${mapping.columnIndex}`} className="rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-2 text-xs hover:border-[#BFDBFE] hover:bg-[#EFF6FF] transition">
                             <div className="text-[#94A3B8]">{mapping.excelHeader || '(blank)'}</div>
-                            <div className="font-semibold text-[#1E3A5F]">{mapping.label}</div>
+                            <div className="font-semibold text-[#0B2A5B]">{mapping.label}</div>
                             <div className={mapping.strength === 'possible' ? 'text-[#B45309]' : 'text-[#047857]'}>
                               {mapping.confidence}% {mapping.strength === 'exact' ? 'exact' : mapping.strength === 'alias' ? 'alias' : 'review'}
                             </div>
@@ -1504,8 +1688,8 @@ export default function CurriculumPage() {
                     <div className="shrink-0 flex gap-2 overflow-x-auto overscroll-x-contain pb-0.5">
                       {previewGroups.map(g => (
                         <div key={g.key} className="inline-flex items-center gap-2 shrink-0 rounded-full border border-[#DBEAFE] bg-[#EFF6FF] px-3 py-1.5 text-xs text-[#334155]">
-                          <span className="font-semibold text-[#1E3A5F]">{g.yearLevel} · {g.semester}</span>
-                          <span className="min-w-[1.25rem] h-5 px-1.5 rounded-full bg-white text-[#3C91E6] font-bold tabular-nums text-center leading-5">{g.rows.length}</span>
+                          <span className="font-semibold text-[#0B2A5B]">{g.yearLevel} · {g.semester}</span>
+                          <span className="min-w-[1.25rem] h-5 px-1.5 rounded-full bg-white text-[#1D5BD6] font-bold tabular-nums text-center leading-5">{g.rows.length}</span>
                         </div>
                       ))}
                     </div>
@@ -1514,7 +1698,7 @@ export default function CurriculumPage() {
                   <div className="flex-1 min-h-0 flex flex-col rounded-2xl border border-[#E2E8F0] overflow-hidden bg-white">
                     <div className="flex-1 min-h-0 overflow-auto overscroll-contain">
                       <table className="w-full text-xs">
-                        <thead className="sticky top-0 z-10 bg-[#1E3A5F]">
+                        <thead className="sticky top-0 z-10 bg-[#0B2A5B]">
                           <tr>
                             {['Row', 'Status', 'Year', 'Semester', 'Course Code', 'Descriptive Title', 'Lec', 'Lab', 'Units', 'Prerequisites', 'Issues'].map(h => (
                               <th key={h} className="text-left px-3 py-2.5 font-semibold text-white/80 uppercase tracking-wide whitespace-nowrap">{h}</th>
@@ -1532,11 +1716,11 @@ export default function CurriculumPage() {
                               </td>
                               <td className="px-3 py-2.5 whitespace-nowrap text-[#64748B]">{row.year_level || <span className="text-red-500 italic">missing</span>}</td>
                               <td className="px-3 py-2.5 whitespace-nowrap text-[#64748B]">{row.semester || <span className="text-red-500 italic">missing</span>}</td>
-                              <td className="px-3 py-2.5 font-mono font-semibold whitespace-nowrap text-[#1E3A5F]">{row.subject_code}</td>
+                              <td className="px-3 py-2.5 font-mono font-semibold whitespace-nowrap text-[#0B2A5B]">{row.subject_code}</td>
                               <td className="px-3 py-2.5 max-w-[180px] truncate text-[#475569]" title={row.subject_name}>{row.subject_name}</td>
                               <td className="px-3 py-2.5 text-center text-[#64748B]">{row.lecture_hours}</td>
                               <td className="px-3 py-2.5 text-center text-[#64748B]">{row.laboratory_hours}</td>
-                              <td className="px-3 py-2.5 text-center font-semibold text-[#3C91E6]">{row.credit_units > 0 ? row.credit_units.toFixed(2) : <span className="italic text-[#CBD5E1]">—</span>}</td>
+                              <td className="px-3 py-2.5 text-center font-semibold text-[#1D5BD6]">{row.credit_units > 0 ? row.credit_units.toFixed(2) : <span className="italic text-[#CBD5E1]">—</span>}</td>
                               <td className="px-3 py-2.5 max-w-[110px] truncate text-[#64748B]" title={row.prerequisites}>{row.prerequisites || '—'}</td>
                               <td className="px-3 py-2.5 min-w-[200px]">
                                 {row.changes.length > 0 && (
@@ -1568,57 +1752,39 @@ export default function CurriculumPage() {
                 </div>
               )}
 
-              {/* ── Step 3: Done ── */}
-              {importStep === 'done' && importResult && (
-                <div className="flex flex-col items-center justify-center py-8 space-y-5">
-                  <div className={`w-16 h-16 rounded-2xl flex items-center justify-center ${importResult.total > 0 ? 'bg-[#ECFDF5] text-[#059669] ring-1 ring-[#A7F3D0]' : 'bg-[#FFFBEB] text-[#D97706] ring-1 ring-[#FDE68A]'}`}>
-                    <CheckCircle className="w-8 h-8" />
-                  </div>
-                  <div className="text-center">
-                    <h3 className="text-xl font-bold" style={{ color: '#1E3A5F' }}>
-                      {importResult.total > 0 ? 'Curriculum imported' : 'Import complete'}
-                    </h3>
-                    <p className="text-sm text-[#64748B] mt-1">
-                      {importResult.total > 0 ? 'The subject list has been refreshed.' : 'No new records were added.'}
-                    </p>
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 w-full">
-                    {[
-                      { n: importResult.imported, l: 'New', tone: 'text-[#047857] bg-[#ECFDF5] border-[#A7F3D0]' },
-                      { n: importResult.updated, l: 'Updated', tone: 'text-[#B45309] bg-[#FFFBEB] border-[#FDE68A]' },
-                      { n: importResult.reactivated, l: 'Restored', tone: 'text-[#2563EB] bg-[#EFF6FF] border-[#BFDBFE]' },
-                      { n: importResult.duplicated, l: 'Already there', tone: 'text-[#475569] bg-[#F8FAFC] border-[#E2E8F0]' },
-                      { n: importResult.errors.length, l: 'Errors', tone: importResult.errors.length > 0 ? 'text-[#B91C1C] bg-[#FEF2F2] border-[#FECACA]' : 'text-[#94A3B8] bg-[#F8FAFC] border-[#E2E8F0]' },
-                    ].map(card => (
-                      <div key={card.l} className={`rounded-2xl border px-2 py-3 text-center ${card.tone}`}>
-                        <div className="text-2xl font-bold tabular-nums">{card.n}</div>
-                        <div className="text-[11px] font-semibold mt-0.5 opacity-80">{card.l}</div>
+              {/* ── Step 3: Importing ── */}
+              {importStep === 'done' && (
+                <div className="flex flex-col items-center justify-center py-16 space-y-5">
+                  {importSaveSuccess ? (
+                    <>
+                      <div className="save-success-badge">
+                        <svg width="72" height="72" viewBox="0 0 52 52">
+                          <circle
+                            className="save-success-circle"
+                            cx="26" cy="26" r="24"
+                            fill="none" stroke="#22C55E" strokeWidth="3"
+                          />
+                          <path
+                            className="save-success-check"
+                            fill="none" stroke="#22C55E" strokeWidth="3.5"
+                            strokeLinecap="round" strokeLinejoin="round"
+                            d="M14.5 27 22 34.5 38 17"
+                          />
+                        </svg>
                       </div>
-                    ))}
-                  </div>
-                  {importResult.duplicated > 0 && importResult.total === 0 && importResult.errors.length === 0 && (
-                    <div className="bg-[#EFF6FF] border border-[#BFDBFE] rounded-2xl p-4 w-full max-w-lg text-sm text-center space-y-1" style={{ color: '#3C91E6' }}>
-                      <p className="font-semibold" style={{ color: '#1E3A5F' }}>All {importResult.duplicated} subject{importResult.duplicated !== 1 ? 's' : ''} already exist and are active.</p>
-                      <p className="text-xs" style={{ color: '#64748B' }}>Scroll down in the Curriculum Setup table — they are visible under the correct Program, Year Level, and Semester.</p>
-                    </div>
-                  )}
-                  {importResult.reactivated > 0 && (
-                    <div className="bg-[#ECFDF5] border border-[#A7F3D0] rounded-2xl p-4 w-full max-w-lg text-sm text-center text-[#047857]">
-                      <p className="font-semibold">{importResult.reactivated} previously deleted subject{importResult.reactivated !== 1 ? 's were' : ' was'} restored and made active again.</p>
-                    </div>
-                  )}
-                  {importResult.errors.length > 0 && (
-                    <div className="bg-[#FEF2F2] border border-[#FECACA] rounded-2xl p-4 w-full max-w-2xl">
-                      <p className="text-sm font-semibold text-[#B91C1C] mb-2">{importResult.errors.length} row(s) failed:</p>
-                      <ul className="space-y-1 text-xs text-[#B91C1C] max-h-32 overflow-y-auto">
-                        {importResult.errors.map((e, i) => <li key={i}>• {e}</li>)}
-                      </ul>
-                    </div>
-                  )}
-                  {importResult.total > 0 && (
-                    <p className="text-sm text-center text-[#64748B]">
-                      The subject list has been refreshed.
-                    </p>
+                      <div className="text-center">
+                        <h3 className="text-lg font-bold" style={{ color: '#0B2A5B' }}>Curriculum imported!</h3>
+                        <p className="text-sm text-[#64748B] mt-1">The subject list has been refreshed.</p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-14 h-14 rounded-full border-4 border-[#DBEAFE] border-t-[#1D5BD6] animate-spin" />
+                      <div className="text-center">
+                        <h3 className="text-lg font-bold" style={{ color: '#0B2A5B' }}>Importing curriculum…</h3>
+                        <p className="text-sm text-[#64748B] mt-1">Please wait while the subjects are saved.</p>
+                      </div>
+                    </>
                   )}
                 </div>
               )}
@@ -1632,7 +1798,7 @@ export default function CurriculumPage() {
                   <button
                     type="button"
                     onClick={closeImport}
-                    className="min-h-11 px-4 py-2 rounded-xl border border-[#E2E8F0] bg-white text-sm font-semibold text-[#475569] hover:border-[#3C91E6] hover:text-[#3C91E6] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3C91E6] focus-visible:ring-offset-2"
+                    className="min-h-11 px-4 py-2 rounded-xl border border-[#E2E8F0] bg-white text-sm font-semibold text-[#475569] hover:border-[#1D5BD6] hover:text-[#1D5BD6] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D5BD6] focus-visible:ring-offset-2"
                   >
                     Cancel
                   </button>
@@ -1643,7 +1809,7 @@ export default function CurriculumPage() {
                   <button
                     type="button"
                     onClick={() => { resetImportState(); }}
-                    className="min-h-11 w-full sm:w-auto px-4 py-2 rounded-xl border border-[#E2E8F0] bg-white text-sm font-semibold text-[#475569] hover:border-[#3C91E6] hover:text-[#3C91E6] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3C91E6] focus-visible:ring-offset-2">
+                    className="min-h-11 w-full sm:w-auto px-4 py-2 rounded-xl border border-[#E2E8F0] bg-white text-sm font-semibold text-[#475569] hover:border-[#1D5BD6] hover:text-[#1D5BD6] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D5BD6] focus-visible:ring-offset-2">
                     Back to upload
                   </button>
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 w-full sm:w-auto">
@@ -1652,7 +1818,7 @@ export default function CurriculumPage() {
                       type="button"
                       onClick={handleConfirmImport}
                       disabled={importLoading || validCount === 0 || importProgramMismatch}
-                      className="min-h-11 w-full sm:w-auto px-5 py-2.5 text-white rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition text-sm font-semibold flex items-center justify-center gap-2 bg-[#3C91E6] hover:bg-[#2563EB] shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3C91E6] focus-visible:ring-offset-2"
+                      className="min-h-11 w-full sm:w-auto px-5 py-2.5 text-white rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition text-sm font-semibold flex items-center justify-center gap-2 bg-[#1D5BD6] hover:bg-[#164BB5] shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D5BD6] focus-visible:ring-offset-2"
                     >
                       {importLoading
                         ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Saving…</>
@@ -1662,22 +1828,7 @@ export default function CurriculumPage() {
                 </>
               )}
               {importStep === 'done' && (
-                <div className="flex flex-col-reverse sm:flex-row gap-2 w-full sm:w-auto sm:ml-auto">
-                  <button
-                    type="button"
-                    onClick={openImport}
-                    className="min-h-11 w-full sm:w-auto px-4 py-2 rounded-xl border border-[#E2E8F0] bg-white text-sm font-semibold text-[#475569] hover:border-[#3C91E6] hover:text-[#3C91E6] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3C91E6] focus-visible:ring-offset-2"
-                  >
-                    Import another
-                  </button>
-                  <button
-                    type="button"
-                    onClick={closeImport}
-                    className="min-h-11 w-full sm:w-auto px-4 py-2 rounded-xl text-sm font-semibold text-white bg-[#3C91E6] hover:bg-[#2563EB] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3C91E6] focus-visible:ring-offset-2"
-                  >
-                    Close
-                  </button>
-                </div>
+                <p className="text-sm text-[#94A3B8] text-center w-full">This will close automatically once the import finishes.</p>
               )}
             </div>
           </div>

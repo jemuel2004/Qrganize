@@ -48,7 +48,9 @@ export function InstructorProfileProvider({ children }: { children: React.ReactN
           setPicUrl(cacheBustDisplayUrl(d.user.profile_picture ?? null));
         }
       })
-      .catch(e => { if (e?.name !== 'AbortError') console.error('[InstructorProfile]', e); });
+      // Network blips (server restarting, reload mid-request) are transient —
+      // warn instead of error so they don't trigger the dev error overlay.
+      .catch(e => { if (e?.name !== 'AbortError') console.warn('[InstructorProfile] could not load profile:', e instanceof Error ? e.message : e); });
     return () => controller.abort();
   }, []);
 

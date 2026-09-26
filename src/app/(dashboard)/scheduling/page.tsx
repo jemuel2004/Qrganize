@@ -1,5 +1,10 @@
+import { Suspense } from 'react';
 import SchedulingClient from './SchedulingClient';
 
 export default function SchedulingPage() {
-  return <SchedulingClient />;
+  return (
+    <Suspense fallback={null}>
+      <SchedulingClient />
+    </Suspense>
+  );
 }

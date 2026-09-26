@@ -1,5 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { query } from '@/server/db';
+﻿import { NextRequest, NextResponse } from 'next/server';
+import { query, transaction } from '@/server/db';
 import { getAuthUser } from '@/server/auth';
 import { ensureCurriculumFields } from '@/server/migrateCurriculum';
 import { normalizeYearLevel, normalizeSemester } from '@/server/normalizeCurriculum';
@@ -9,6 +9,7 @@ import {
   parseCurriculumVersion,
   type CurriculumVersion,
 } from '@/lib/curriculumVersion';
+import { resolveProgramScope, canAccessProgram } from '@/server/programScope';
 
 function versionFromQuery(req: NextRequest): CurriculumVersion {
   return parseCurriculumVersion(new URL(req.url).searchParams.get('curriculum_version'))
@@ -17,19 +18,21 @@ function versionFromQuery(req: NextRequest): CurriculumVersion {
 
 export async function GET(req: NextRequest) {
   try {
-    const auth = await getAuthUser(req) as { role?: string } | null;
+    const auth = await getAuthUser(req) as { role?: string; program_id?: number | null } | null;
     if (!auth) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     await ensureCurriculumFields();
     const { searchParams } = new URL(req.url);
-    const programId = searchParams.get('program_id')?.trim() ?? '';
+    const scope = await resolveProgramScope(auth, { requestedProgramId: searchParams.get('program_id') });
+    if (!scope.ok) return scope.response;
 
     // Program is always required — prevent full-table scans
-    if (!programId || isNaN(Number(programId))) {
+    if (scope.programId == null) {
       return NextResponse.json({ curriculums: [] });
     }
+    const programId = String(scope.programId);
 
     /*
      * Normalize year_level and semester so that "First Year" / "FIRST YEAR"
@@ -72,8 +75,8 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    const auth = await getAuthUser(req) as { role?: string; program_id?: number | null } | null;
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -87,6 +90,9 @@ export async function POST(req: NextRequest) {
     if (!program_id || !year_level || !semester || !subject_code || !subject_name) {
       return NextResponse.json({ error: 'All required fields must be filled' }, { status: 400 });
     }
+    if (!(await canAccessProgram(auth, Number(program_id)))) {
+      return NextResponse.json({ error: 'You can only manage curriculum for your assigned program.' }, { status: 403 });
+    }
     /* Category is derived from hours, never from client-supplied labels or codes. */
     const category = categoryFromHours(lecture_hours, laboratory_hours);
     if (lecture_hours < 0 || laboratory_hours < 0) {
@@ -99,26 +105,57 @@ export async function POST(req: NextRequest) {
     /* Normalize before inserting from the Add Subject form as well */
     const normYear = normalizeYearLevel(year_level) || year_level;
     const normSem  = normalizeSemester(semester)    || semester;
+    const normCode = String(subject_code).toUpperCase().trim();
+    const lecH = lecture_hours || 0;
+    const labH = laboratory_hours || 0;
+    const unitsVal = parseFloat(String(units)) || 0;
+    const prereqVal = prerequisites || '';
+    const gradeVal = grade || '';
 
-    const result = await query(`
-      INSERT INTO curriculums
-        (program_id, year_level, semester, subject_code, subject_name,
-         lecture_hours, laboratory_hours, units, prerequisites, grade, subject_category, curriculum_version)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-      RETURNING *
-    `, [
-      program_id, normYear, normSem,
-      String(subject_code).toUpperCase().trim(), subject_name,
-      lecture_hours || 0, laboratory_hours || 0,
-      parseFloat(String(units)) || 0,
-      prerequisites || '', grade || '',
-      category, version,
-    ]);
+    const curriculum = await transaction(async (client) => {
+      // A prior soft-deleted subject occupies the same unique key
+      // (program_id, year_level, semester, subject_code, curriculum_version) —
+      // reactivate it instead of hitting the unique constraint on INSERT.
+      const existing = await client.query(
+        `SELECT id, is_active FROM curriculums
+          WHERE program_id = $1 AND year_level = $2 AND semester = $3
+            AND subject_code = $4 AND curriculum_version = $5`,
+        [program_id, normYear, normSem, normCode, version],
+      );
 
-    return NextResponse.json({ curriculum: result.rows[0] }, { status: 201 });
+      if (existing.rows.length > 0) {
+        const row = existing.rows[0];
+        if (row.is_active === false) {
+          const updated = await client.query(`
+            UPDATE curriculums
+               SET is_active = true, subject_name = $1,
+                   lecture_hours = $2, laboratory_hours = $3, units = $4,
+                   prerequisites = $5, grade = $6, subject_category = $7, updated_at = NOW()
+             WHERE id = $8
+             RETURNING *
+          `, [subject_name, lecH, labH, unitsVal, prereqVal, gradeVal, category, row.id]);
+          return updated.rows[0];
+        }
+        throw new Error('DUPLICATE_ACTIVE_SUBJECT');
+      }
+
+      const inserted = await client.query(`
+        INSERT INTO curriculums
+          (program_id, year_level, semester, subject_code, subject_name,
+           lecture_hours, laboratory_hours, units, prerequisites, grade, subject_category, curriculum_version)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        RETURNING *
+      `, [
+        program_id, normYear, normSem, normCode, subject_name,
+        lecH, labH, unitsVal, prereqVal, gradeVal, category, version,
+      ]);
+      return inserted.rows[0];
+    });
+
+    return NextResponse.json({ curriculum }, { status: 201 });
   } catch (error) {
     const msg = error instanceof Error ? error.message : '';
-    if (msg.includes('unique') || msg.includes('duplicate'))
+    if (msg === 'DUPLICATE_ACTIVE_SUBJECT' || msg.includes('unique') || msg.includes('duplicate'))
       return NextResponse.json({ error: 'Subject code already exists for this program, year level, semester, and curriculum version.' }, { status: 409 });
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -62,20 +62,20 @@ function getInitials(name: string): string {
 function getRoleLabel(role: string): string {
   switch (role) {
     case 'admin':            return 'Administrator';
-    case 'department_chair': return 'Department Chair';
+    case 'program_chair': return 'Department Chair';
     case 'instructor':       return 'Instructor';
     default:                 return role;
   }
 }
 
 const AVATAR_BG: Record<string, string> = {
-  admin:            'bg-[#3C91E6]',
-  department_chair: 'bg-[#6366F1]',
+  admin:            'bg-[#1D5BD6]',
+  program_chair: 'bg-[#6366F1]',
   instructor:       'bg-[#10B981]',
 };
 const AVATAR_RING: Record<string, string> = {
-  admin:            'ring-[#3C91E6]/40',
-  department_chair: 'ring-[#6366F1]/40',
+  admin:            'ring-[#1D5BD6]/40',
+  program_chair: 'ring-[#6366F1]/40',
   instructor:       'ring-[#10B981]/40',
 };
 
@@ -88,7 +88,7 @@ function menuItems(role: string): MenuItem[] {
       { icon: KeyRound,   label: 'Change Password',  href: '/settings'  },
       { icon: ShieldCheck,label: 'Account Settings', href: '/settings', divider: true },
     );
-  } else if (role === 'department_chair') {
+  } else if (role === 'program_chair') {
     base.push(
       { icon: User,       label: 'My Profile',      href: '/dept-chair/account' },
       { icon: KeyRound,   label: 'Change Password',  href: '/dept-chair/account', divider: true },
@@ -246,7 +246,7 @@ export default function UserProfileDropdown({ theme = 'light', compact = false }
   const triggerTheme =
     theme === 'brand'
       ? open
-        ? 'bg-white text-[#1E3A5F] shadow-sm'
+        ? 'bg-white text-[#0B2A5B] shadow-sm'
         : 'bg-white/25 ring-1 ring-inset ring-white/45 text-white hover:bg-white/40'
       : theme === 'dark'
         ? `${open ? 'bg-white/20' : 'hover:bg-white/10'}`
@@ -254,9 +254,9 @@ export default function UserProfileDropdown({ theme = 'light', compact = false }
 
   const nameClass =
     theme === 'brand'
-      ? (open ? 'text-[#1E3A5F]' : 'text-white')
+      ? (open ? 'text-[#0B2A5B]' : 'text-white')
       : theme === 'light'
-        ? 'text-[#1E3A5F]'
+        ? 'text-[#0B2A5B]'
         : 'text-white';
   const roleClass  = theme === 'dark' ? 'text-slate-400'  : theme === 'brand' ? (open ? 'text-[#64748B]' : 'text-white/85') : 'text-[#64748B]';
   const chevronCls =
@@ -335,7 +335,7 @@ export default function UserProfileDropdown({ theme = 'light', compact = false }
                 }}
                 className="mx-auto mb-3 inline-flex rounded-full ring-2 ring-[#E2E8F0] ring-offset-2 ring-offset-white
                   cursor-pointer transition-transform duration-150 hover:scale-105 focus-visible:outline-none
-                  focus-visible:ring-2 focus-visible:ring-[#3C91E6] focus-visible:ring-offset-2"
+                  focus-visible:ring-2 focus-visible:ring-[#1D5BD6] focus-visible:ring-offset-2"
                 aria-label={`View ${displayName}'s profile picture`}
               >
                 <Avatar user={user} size={64} ring={false} />
@@ -345,8 +345,8 @@ export default function UserProfileDropdown({ theme = 'light', compact = false }
                 <p className="text-[12px] text-[#64748B] truncate mt-0.5 px-2">{user.email}</p>
               )}
               <span className={`inline-flex items-center gap-1 mt-2.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide
-                ${user.role === 'admin'            ? 'bg-[#DBEAFE] text-[#2563EB]' :
-                  user.role === 'department_chair' ? 'bg-[#EDE9FE] text-[#7C3AED]' :
+                ${user.role === 'admin'            ? 'bg-[#DBEAFE] text-[#164BB5]' :
+                  user.role === 'program_chair' ? 'bg-[#EDE9FE] text-[#7C3AED]' :
                                                      'bg-[#D1FAE5] text-[#059669]'}`}>
                 {roleLabel}
               </span>

@@ -49,6 +49,8 @@ export type PrintWorkloadLoad = {
   end_time: string | null;
   split_overload_units?: number;
   split_overload_hours?: number;
+  /** Split-off Lec/Lab portion is Praise Load (not Overload). */
+  split_is_praise?: boolean;
   overload_component?: string;
   lec_scheduled?: boolean;
   lab_scheduled?: boolean;
@@ -245,6 +247,8 @@ export function buildRegularLoadPrintHtml(input: BuildRegularLoadPrintInput): st
   const unmatchedPrint: PRow[] = [];
   let totalRegularWU = 0;
   let totalRegularHours = 0;
+  let praiseSubjectWU = 0;
+  let praiseSubjectHours = 0;
 
   if (documentKind === 'regular') {
     const regularLoads = loads.filter(l => l.load_category !== 'Overload');
@@ -318,8 +322,47 @@ export function buildRegularLoadPrintHtml(input: BuildRegularLoadPrintInput): st
         }
       }
     }
+  } else if (documentKind === 'praise') {
+    /* Praise subjects in their schedule slots: whole subjects, or only the
+       Lec/Lab portion when just one component was moved to Praise. */
+    for (const load of loads) {
+      const lec = parseFloat(String(load.lecture_hours)) || 0;
+      const lab = parseFloat(String(load.laboratory_hours)) || 0;
+      const hasBoth = lec > 0 && lab > 0;
+      const oc = (load.overload_component || 'full') as 'lec' | 'lab' | 'full';
+      const isPart = load.load_category !== 'Praise' && Boolean(load.split_is_praise);
+      const partVal = isP
+        ? (parseFloat(String(load.split_overload_units)) || 0)
+        : (parseFloat(String(load.split_overload_hours)) || 0);
+      for (const row of splitLoad(load, isP)) {
+        if (isPart && hasBoth && oc !== 'full' && row.type !== oc) continue;
+        let wu: number;
+        let hrs: number;
+        if (isPart) {
+          wu = partVal;
+          hrs = !isP ? partVal : (row.type === 'lab' ? lab : lec);
+        } else {
+          wu = hasBoth ? (row.type === 'lec' ? lec : lab * 0.75) : calcWorkloadUnits(lec, lab);
+          hrs = hasBoth ? (row.type === 'lec' ? lec : lab) : lec + lab;
+        }
+        if (isP ? wu < 0.001 : hrs < 0.001) continue;
+        praiseSubjectWU += isP ? wu : hrs;
+        praiseSubjectHours += hrs;
+        const startTime = row.type === 'lec' ? (load.lec_start_time ?? load.start_time) : (load.lab_start_time ?? load.start_time);
+        const endTime = row.type === 'lec' ? (load.lec_end_time ?? load.end_time) : (load.lab_end_time ?? load.end_time);
+        const dayPat = row.type === 'lec' ? (load.lec_day_pattern ?? load.day_pattern) : (load.lab_day_pattern ?? load.day_pattern);
+        const pr: PRow = { load, row: { ...row, wu, hours: hrs }, startTime, endTime };
+        const slotId = matchOfficialSlot(dayPat, startTime, endTime);
+        if (slotId) {
+          if (!placed[slotId]) placed[slotId] = [];
+          placed[slotId].push(pr);
+        } else {
+          unmatchedPrint.push(pr);
+        }
+      }
+    }
   }
-  // praise: table body filled later from praiseArr (Other section)
+  // praise: Other-section records (praiseArr) are appended in renderOfficialPrintTable
 
   /** TIME/DAY cell HTML — controlled wrap after en-dash so AM/PM never clips mid-token. */
   function timeTdHtml(label: string, extraStyle = ''): string {
@@ -393,7 +436,8 @@ export function buildRegularLoadPrintHtml(input: BuildRegularLoadPrintInput): st
     /* Praise entries live under Other; schedule slots stay as the full template above. */
     if (documentKind === 'praise') {
       html += secHdrHtml('Other');
-      if (praiseArr.length === 0) {
+      for (const pr of unmatchedPrint) html += loadRowHtml(pr);
+      if (praiseArr.length === 0 && unmatchedPrint.length === 0) {
         html += blankRowHtml('', '20px');
       } else {
         for (const p of praiseArr) {
@@ -425,12 +469,23 @@ export function buildRegularLoadPrintHtml(input: BuildRegularLoadPrintInput): st
     return html;
   }
 
-  const totalDeducted = isP ? wDeds.reduce((s, d) => s + Number(d.deducted_units), 0) : 0;
-  const praiseTotal = praiseArr.reduce(
-    (s, p) => s + (parseFloat(String(p.equivalent_units)) || 0),
-    0
-  );
-  const netTotal = totalRegularWU + totalDeducted + praiseTotal;
+  /* Deductions split by type — "Special Assignment" gets its own summary line
+   * (matching the paper form's separate "Add: Special Assignment" row); every
+   * other type (Designation/Extension/Research-Extension) rolls up into the
+   * combined "Designation" row. Both are real capacity deductions from
+   * instructor_load_deductions — NOT the unrelated Praise Load records,
+   * which stay in their own "praise" document and never reduce Regular Load
+   * capacity here. */
+  const specialAssignmentDeds = isP ? wDeds.filter(d => d.deduction_type === 'Special Assignment') : [];
+  const designationDeds = isP ? wDeds.filter(d => d.deduction_type !== 'Special Assignment') : [];
+  const designationUnitsTotal = designationDeds.reduce((s, d) => s + Number(d.deducted_units), 0);
+  const specialAssignmentUnitsTotal = specialAssignmentDeds.reduce((s, d) => s + Number(d.deducted_units), 0);
+  // Total No. of Units = actual teaching + Designation credit + Special
+  // Assignment credit — every visible row above added together, so the
+  // printed total always matches what's actually shown on the form.
+  const netTotal = isP
+    ? totalRegularWU + designationUnitsTotal + specialAssignmentUnitsTotal
+    : totalRegularHours;
   const distinctSubjects = new Set(loads.map(l => l.ms_id)).size;
   const semFull = semesterHeading(semester);
 
@@ -447,11 +502,12 @@ export function buildRegularLoadPrintHtml(input: BuildRegularLoadPrintInput): st
     return `<tr style="font-size:8pt${bold ? ';font-weight:bold' : ''}">${tds}</tr>`;
   }
 
-  const designationText =
-    (fac.designation_type || '').trim() &&
-    !/^(none|no designation)$/i.test((fac.designation_type || '').trim())
-      ? String(fac.designation_type)
-      : 'No Designation';
+  const designationText = designationDeds.length > 0
+    ? designationDeds.map(d => d.deduction_type).join(' + ')
+    : 'No Designation';
+  const designationUnitsStr = designationUnitsTotal > 0
+    ? (designationUnitsTotal % 1 === 0 ? designationUnitsTotal.toFixed(0) : designationUnitsTotal.toFixed(2))
+    : '';
 
   /* Label spans TIME/DAY + Subject Code (colspan 2) so print matches the on-screen form width.
      Remaining cells keep Description / Course / Students / Units / Hours / Room alignment. */
@@ -466,16 +522,18 @@ export function buildRegularLoadPrintHtml(input: BuildRegularLoadPrintInput): st
   const designationRow = mkSummaryRow(false, [
     { text: 'Designation', labelPad: true, colspan: 2 },
     { text: escHtml(designationText), center: true },
-    {}, {}, {}, {}, {},
+    {}, {},
+    { text: designationUnitsStr, center: true, bold: true },
+    {}, {},
   ]);
 
-  const praiseSpecialRows = praiseArr.length > 0
-    ? praiseArr.map(p => {
-        const pu = parseFloat(String(p.equivalent_units)) || 0;
+  const praiseSpecialRows = specialAssignmentDeds.length > 0
+    ? specialAssignmentDeds.map(d => {
+        const pu = Number(d.deducted_units) || 0;
         const puStr = pu % 1 === 0 ? pu.toFixed(0) : pu.toFixed(2);
         return mkSummaryRow(false, [
           { text: 'Add: Special Assignment', labelPad: true, colspan: 2 },
-          { text: escHtml(p.praise_type || p.description || ''), center: true },
+          { text: escHtml(d.description || 'Special Assignment'), center: true },
           {}, {},
           { text: puStr, center: true, bold: true },
           {}, {},
@@ -500,11 +558,11 @@ export function buildRegularLoadPrintHtml(input: BuildRegularLoadPrintInput): st
     {}, {},
   ]);
 
-  const praiseUnitsTotal = praiseArr.reduce(
+  const praiseUnitsTotal = praiseSubjectWU + praiseArr.reduce(
     (s, p) => s + (parseFloat(String(p.equivalent_units)) || 0),
     0,
   );
-  const praiseHoursTotal = praiseArr.reduce(
+  const praiseHoursTotal = praiseSubjectHours + praiseArr.reduce(
     (s, p) => s + (parseFloat(String(p.equivalent_hours ?? '')) || 0),
     0,
   );

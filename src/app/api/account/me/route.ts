@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUser } from '@/server/auth';
 import { query } from '@/server/db';
 import { ensureUsersSchema } from '@/server/ensure-users-schema';
@@ -11,13 +11,13 @@ import {
   assertUsernameAllowed,
 } from '@/server/emailIdentity';
 
-// GET /api/account/me — fetch own user record (admin or department_chair)
+// GET /api/account/me — fetch own user record (admin or program_chair)
 export async function GET(req: NextRequest) {
   try {
     await ensureUsersSchema();
     await ensureOtpEnabledColumn();
     const auth = await getAuthUser(req) as { role?: string; id?: number } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -41,7 +41,7 @@ export async function PATCH(req: NextRequest) {
     await ensureUsersSchema();
     await ensureOtpEnabledColumn();
     const auth = await getAuthUser(req) as { role?: string; id?: number } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

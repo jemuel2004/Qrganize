@@ -1,8 +1,9 @@
 ﻿import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/server/db';
 import { getAuthUser } from '@/server/auth';
-import { loadFacultyLoadSummaries } from '@/server/facultyLoadSummaries';
 import { syncWorkloadMonitoringNotifications } from '@/server/workloadMonitoring';
+import { canAccessMasterSchedule } from '@/server/programScope';
+import { ensurePraiseSplitColumn } from '@/server/praiseSplit';
 
 let schemaReady = false;
 async function ensureSchema() {
@@ -18,7 +19,7 @@ async function ensureSchema() {
 export async function POST(req: NextRequest) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     await ensureSchema();
 
@@ -27,6 +28,10 @@ export async function POST(req: NextRequest) {
 
     if (!faculty_id || !master_schedule_id) {
       return NextResponse.json({ error: 'Faculty and master schedule are required' }, { status: 400 });
+    }
+
+    if (!(await canAccessMasterSchedule(auth, master_schedule_id))) {
+      return NextResponse.json({ error: 'Schedule not found' }, { status: 404 });
     }
 
     const facultyResult = await query('SELECT * FROM faculty WHERE id=$1 AND is_active=true', [faculty_id]);
@@ -44,6 +49,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Subject is not assigned to this instructor' }, { status: 404 });
     }
     const loadRow = loadResult.rows[0];
+
+    await ensurePraiseSplitColumn();
+    const praiseSplit = await query(
+      'SELECT 1 FROM overloads WHERE faculty_id=$1 AND master_schedule_id=$2 AND is_praise = true',
+      [faculty_id, master_schedule_id]
+    );
+    if (praiseSplit.rows.length > 0) {
+      return NextResponse.json({
+        error: 'Part of this subject is in Praise Load. Return it to Regular Load first.',
+      }, { status: 409 });
+    }
 
     // Use curriculum data as the authoritative total — instructor_loads.units/hours may be
     // reduced from a previous split, so using the curriculum ensures correct re-split math.
@@ -75,13 +91,6 @@ export async function POST(req: NextRequest) {
 
     const unit = isPermanent ? 'units' : 'hours';
 
-    const summaries = await loadFacultyLoadSummaries({
-      semester: String(loadRow.semester || ''),
-      academicYear: String(loadRow.academic_year || ''),
-    });
-    const summary = summaries[faculty_id];
-    const excess = Math.max(0, (summary?.current_load ?? 0) - (summary?.regular_load_limit ?? 0));
-
     // ── Split mode ─────────────────────────────────────────────────────────────
     if (split_regular !== undefined && split_regular !== null) {
       const regularPart = parseFloat(String(split_regular));
@@ -94,11 +103,6 @@ export async function POST(req: NextRequest) {
       }
       if (regularPart > subjectTotal + 0.001) {
         return NextResponse.json({ error: 'Regular portion cannot exceed subject total' }, { status: 400 });
-      }
-      if (overloadPart > excess + 0.001) {
-        return NextResponse.json({
-          error: `Selected overload (${overloadPart.toFixed(2)} ${unit}) exceeds excess workload (${excess.toFixed(2)} ${unit}).`,
-        }, { status: 400 });
       }
 
       await query(
@@ -144,11 +148,6 @@ export async function POST(req: NextRequest) {
     }
     if (loadRow.load_category === 'Praise') {
       return NextResponse.json({ error: 'Subject is in Praise Load. Return it to Overload first if needed.' }, { status: 409 });
-    }
-    if (subjectTotal > excess + 0.001) {
-      return NextResponse.json({
-        error: `Selected overload (${subjectTotal.toFixed(2)} ${unit}) exceeds excess workload (${excess.toFixed(2)} ${unit}).`,
-      }, { status: 400 });
     }
 
     await query(

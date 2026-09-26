@@ -1,17 +1,34 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { createPortal } from 'react-dom';
 import { useToast } from '@/client/context/ToastContext';
 import Modal from '@/client/components/ui/Modal';
+import BackButton from '@/client/components/ui/BackButton';
+import WatermarkTitle from '@/client/components/ui/WatermarkTitle';
+import TrashDropAnimation from '@/client/components/ui/TrashDropAnimation';
 import {
   Plus, Pencil, Trash2, Users,
   User, Briefcase, Lock, Eye, EyeOff, ChevronRight, ChevronDown, AlertTriangle,
 } from 'lucide-react';
+import SubjectMultiSelect, { type PrioritySubject } from '@/client/components/ui/SubjectMultiSelect';
 import { SearchInput, FilterSelect } from '@/components/ui/SearchFilter';
 import { ListSkeleton, CardSkeleton, Skeleton } from '@/client/components/ui/skeletons';
 import { PageLoadTransition } from '@/client/components/ui/PageLoadTransition';
+import { EmploymentBadge, EMPLOYMENT_COLORS, employmentColors } from '@/client/components/ui/EmploymentBadge';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/client/hooks/useMinLoading';
+
+const FacultyStatsBarChart = dynamic(
+  () =>
+    import('@/client/components/charts/FacultyStatsBarChart').then(
+      m => m.FacultyStatsBarChart,
+    ),
+  {
+    ssr: false,
+    loading: () => <div className="h-[230px] rounded-lg bg-[#F8FAFC] animate-pulse" />,
+  },
+);
 
 interface Program { id: number; code: string; name: string; }
 interface Faculty {
@@ -28,6 +45,8 @@ interface Faculty {
   educational_qualification: string | null;
   major: string | null;
   eligibility: string | null;
+  specialization: string | null;
+  priority_subjects?: PrioritySubject[];
 }
 
 const POSITION_GROUPS: { label: string; items: string[] }[] = [
@@ -47,12 +66,20 @@ const POSITION_GROUPS: { label: string; items: string[] }[] = [
       'Associate Professor III', 'Associate Professor IV',
     ],
   },
-  { label: 'Professor', items: ['Professor I', 'Professor II'] },
+  {
+    label: 'Professor',
+    items: [
+      'Professor I', 'Professor II', 'Professor III',
+      'Professor IV', 'Professor V', 'Professor VI',
+    ],
+  },
 ];
 
 const POSITIONS = POSITION_GROUPS.flatMap(group => group.items);
 
 const HOUR_BASED_POSITIONS = new Set(['Contractual', 'Temporary Permanent']);
+
+const FACULTY_PAGE_SIZE = 10;
 
 
 const emptyForm = {
@@ -69,7 +96,48 @@ const emptyForm = {
   educational_qualification: '',
   major: '',
   eligibility: '',
+  specialization: '',
+  priority_subjects: [] as PrioritySubject[],
 };
+
+/* ── Unsaved-form draft (survives an accidental modal close) ──────────────
+   Keyed by "new" or "edit-<id>" so an in-progress add doesn't leak into an
+   edit and vice-versa. Session-scoped (sessionStorage) and never stores
+   passwords. */
+const FACULTY_DRAFT_KEY = 'qr-faculty-draft';
+
+function draftFormKey(editId: number | null) {
+  return editId ? `edit-${editId}` : 'new';
+}
+
+function readFacultyDraft(key: string): typeof emptyForm | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(FACULTY_DRAFT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { key: string; form: typeof emptyForm };
+    return parsed.key === key ? { ...emptyForm, ...parsed.form } : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeFacultyDraft(key: string, form: typeof emptyForm) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(FACULTY_DRAFT_KEY, JSON.stringify({
+      key,
+      form: { ...form, password: '', confirmPassword: '' },
+    }));
+  } catch {
+    // storage unavailable (private mode, quota) — draft just won't persist
+  }
+}
+
+function clearFacultyDraft() {
+  if (typeof window === 'undefined') return;
+  try { window.sessionStorage.removeItem(FACULTY_DRAFT_KEY); } catch { /* ignore */ }
+}
 
 function computeFullName(fn?: string | null, mn?: string | null, ln?: string | null) {
   return [(fn ?? '').trim(), (mn ?? '').trim(), (ln ?? '').trim()].filter(Boolean).join(' ');
@@ -79,21 +147,17 @@ function deriveEmploymentStatus(position: string): 'Permanent' | 'Contractual' {
   return HOUR_BASED_POSITIONS.has(position) ? 'Contractual' : 'Permanent';
 }
 
-// ── Small reusable pieces ─────────────────────────────────────────────────────
-
-function EmploymentBadge({ status, position }: { status: string; position?: string }) {
-  const isPermanent = position !== 'Temporary Permanent' && status === 'Permanent';
-  const label = position === 'Temporary Permanent' ? 'Hour-based' : status;
-  if (isPermanent) {
-    return (
-      <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border"
-        style={{ backgroundColor: '#F1F5F9', color: '#64748B', borderColor: '#CBD5E1' }}>
-        {label}
-      </span>
-    );
-  }
-  return <span className="text-sm" style={{ color: '#64748B' }}>{label}</span>;
+/**
+ * Display grouping for the Faculty list/filter/stats only. Temporary Permanent
+ * staff are grouped under "Permanent" here, but their stored `employment_status`
+ * stays 'Contractual' so workload/overload/praise/deduction logic elsewhere keeps
+ * treating them as hour-based (30 hrs cap), not unit-based (18.25 units).
+ */
+function facultyDisplayGroup(f: { position: string; employment_status: string }): 'Permanent' | 'Contractual' {
+  return f.position === 'Temporary Permanent' ? 'Permanent' : (f.employment_status as 'Permanent' | 'Contractual');
 }
+
+// ── Small reusable pieces ─────────────────────────────────────────────────────
 
 function PositionSelect({ value, onChange, error }: { value: string; onChange: (v: string) => void; error?: boolean }) {
   const [open, setOpen] = useState(false);
@@ -141,7 +205,10 @@ function PositionSelect({ value, onChange, error }: { value: string; onChange: (
       closeMenu();
       triggerRef.current?.focus();
     }
-    function onReposition() {
+    function onReposition(e: Event) {
+      // Scrolling inside the dropdown's own listbox shouldn't re-place it —
+      // only reposition when the page/modal behind it scrolled.
+      if (dropRef.current?.contains(e.target as Node)) return;
       placeMenu();
     }
 
@@ -169,10 +236,10 @@ function PositionSelect({ value, onChange, error }: { value: string; onChange: (
         onClick={() => setOpen(prev => !prev)}
         className={[
           'w-full border rounded-xl px-4 py-3 text-base text-left text-white bg-[#0b0f1a]',
-          'focus:outline-none focus:ring-2 focus:ring-[#3C91E6] focus:border-transparent transition',
+          'focus:outline-none focus:ring-2 focus:ring-[#1D5BD6] focus:border-transparent transition',
           'flex items-center justify-between gap-3',
           error ? 'border-red-500/50' : 'border-white/10',
-          open ? 'ring-2 ring-[#3C91E6] border-transparent' : '',
+          open ? 'ring-2 ring-[#1D5BD6] border-transparent' : '',
         ].join(' ')}
       >
         <span className={`truncate ${value ? '' : 'text-slate-500'}`}>
@@ -186,8 +253,9 @@ function PositionSelect({ value, onChange, error }: { value: string; onChange: (
           ref={dropRef}
           role="listbox"
           aria-label="Position / Academic Rank"
+          data-scroll-portal
           style={dropStyle}
-          className="overflow-y-auto rounded-xl border border-white/15 bg-[#111827] py-1.5 shadow-[0_12px_32px_rgba(15,23,42,0.18)] qr-fade-in"
+          className="overflow-y-auto overscroll-contain rounded-xl border border-white/15 bg-[#111827] py-1.5 shadow-[0_12px_32px_rgba(15,23,42,0.18)] qr-fade-in"
         >
           {POSITION_GROUPS.map((group, index) => (
             <div key={group.label} className={index > 0 ? 'mt-1 pt-1 border-t border-white/10' : ''}>
@@ -207,7 +275,7 @@ function PositionSelect({ value, onChange, error }: { value: string; onChange: (
                       'w-full text-left px-3 py-2 text-sm transition-colors duration-150',
                       'flex items-center gap-2',
                       isSelected
-                        ? 'bg-[#3C91E6]/15 text-[#2563EB] font-semibold'
+                        ? 'bg-[#1D5BD6]/15 text-[#164BB5] font-semibold'
                         : 'text-slate-200 hover:bg-white/5',
                     ].join(' ')}
                   >
@@ -227,7 +295,7 @@ function PositionSelect({ value, onChange, error }: { value: string; onChange: (
 function SectionHeader({ icon, title, subtitle }: { icon: React.ReactNode; title: string; subtitle?: string }) {
   return (
     <div className="flex items-start gap-3 mb-6">
-      <div className="w-8 h-8 rounded-xl bg-[#3C91E6]/10 flex items-center justify-center text-[#3C91E6] flex-shrink-0 mt-0.5">
+      <div className="w-8 h-8 rounded-xl bg-[#1D5BD6]/10 flex items-center justify-center text-[#1D5BD6] flex-shrink-0 mt-0.5">
         {icon}
       </div>
       <div className="flex-1">
@@ -258,7 +326,7 @@ function InputBase({ className = '', ...props }: React.InputHTMLAttributes<HTMLI
     <input
       {...props}
       className={`w-full border border-white/10 rounded-xl px-4 py-3 text-base text-white
-        placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#3C91E6] focus:border-transparent
+        placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#1D5BD6] focus:border-transparent
         bg-[#0b0f1a] disabled:opacity-50 transition ${className}`}
     />
   );
@@ -269,7 +337,7 @@ function SelectBase({ className = '', ...props }: React.SelectHTMLAttributes<HTM
     <select
       {...props}
       className={`w-full border border-white/10 rounded-xl px-4 py-3 text-base text-white
-        focus:outline-none focus:ring-2 focus:ring-[#3C91E6] focus:border-transparent
+        focus:outline-none focus:ring-2 focus:ring-[#1D5BD6] focus:border-transparent
         bg-[#0b0f1a] transition ${className}`}
     />
   );
@@ -281,6 +349,8 @@ export default function FacultyPage() {
   const toast = useToast();
   const [faculty, setFaculty] = useState<Faculty[]>([]);
   const [programs, setPrograms] = useState<Program[]>([]);
+  const [userRole, setUserRole] = useState<'admin' | 'department_chair' | 'program_chair'>('admin');
+  const [chairProgramId, setChairProgramId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [form, setForm] = useState(emptyForm);
@@ -289,25 +359,67 @@ export default function FacultyPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [showSaveSkeleton, setShowSaveSkeleton] = useState(false);
+  const [deleteSuccess, setDeleteSuccess] = useState(false);
   const [listLoading, setListLoading] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [googleVerified, setGoogleVerified] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Faculty | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSwitching, setPageSwitching] = useState(false);
+  const pageSwitchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function goToPage(next: number) {
+    setPage(next);
+    setPageSwitching(true);
+    if (pageSwitchTimeout.current) clearTimeout(pageSwitchTimeout.current);
+    pageSwitchTimeout.current = setTimeout(() => setPageSwitching(false), PAGE_SKELETON_MIN_MS);
+  }
+
+  useEffect(() => () => { if (pageSwitchTimeout.current) clearTimeout(pageSwitchTimeout.current); }, []);
 
   useEffect(() => {
     fetch('/api/programs').then(r => r.json()).then(d => setPrograms(d.programs || []));
+    fetch('/api/account/me')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        const role = d?.user?.role as string | undefined;
+        if (role === 'program_chair') {
+          setUserRole('program_chair');
+          setChairProgramId(d.user?.program_id != null ? Number(d.user.program_id) : null);
+        } else if (role === 'department_chair') {
+          setUserRole('department_chair');
+        }
+      })
+      .catch(() => {});
     loadFaculty();
   }, []);
 
-  useEffect(() => { loadFaculty(); }, [statusFilter]);
+  /* Subjects to Handle — pulled from the full curriculum across all programs
+     (not scoped to whichever program this faculty member belongs to). */
+  const [subjectOptions, setSubjectOptions] = useState<PrioritySubject[]>([]);
+  const [subjectOptionsLoading, setSubjectOptionsLoading] = useState(false);
+  useEffect(() => {
+    if (!modalOpen) return;
+    setSubjectOptionsLoading(true);
+    fetch('/api/curriculum/subjects')
+      .then(r => r.ok ? r.json() : { subjects: [] })
+      .then(d => setSubjectOptions(d.subjects || []))
+      .finally(() => setSubjectOptionsLoading(false));
+  }, [modalOpen]);
+
+  /* Back to page 1 whenever the filtered result set changes shape */
+  useEffect(() => { setPage(1); }, [search, statusFilter]);
 
   function loadFaculty() {
-    const params = new URLSearchParams();
-    if (statusFilter) params.set('employment_status', statusFilter);
+    // Status filtering happens client-side (see `facultyDisplayGroup`) so
+    // Temporary Permanent staff can be grouped under "Permanent" in the UI
+    // without changing what the server considers their employment_status.
     setListLoading(true);
-    fetch('/api/faculty?' + params)
+    fetch('/api/faculty')
       .then(r => r.json())
       .then(d => setFaculty(d.faculty || []))
       .finally(() => setListLoading(false));
@@ -329,7 +441,11 @@ export default function FacultyPage() {
   }
 
   function openAdd() {
-    setForm(emptyForm);
+    const draft = readFacultyDraft(draftFormKey(null));
+    const base = userRole === 'program_chair' && chairProgramId != null
+      ? { ...emptyForm, program_id: String(chairProgramId) }
+      : emptyForm;
+    setForm(draft ?? base);
     setEditId(null);
     setFieldErrors({});
     setSubmitError('');
@@ -337,6 +453,19 @@ export default function FacultyPage() {
     setShowConfirmPassword(false);
     setGoogleVerified(false);
     setModalOpen(true);
+    if (draft) toast.info('Restored your unsaved changes from last time.');
+  }
+
+  /** Close the modal, keeping an in-progress edit so it's there if reopened. */
+  function closeModal() {
+    const key = draftFormKey(editId);
+    const isUnchanged = JSON.stringify(form) === JSON.stringify(emptyForm);
+    if (isUnchanged) {
+      clearFacultyDraft();
+    } else {
+      writeFacultyDraft(key, form);
+    }
+    setModalOpen(false);
   }
 
   async function openEdit(f: Faculty) {
@@ -346,7 +475,9 @@ export default function FacultyPage() {
     setShowPassword(false);
     setShowConfirmPassword(false);
 
-    setForm({
+    const draft = readFacultyDraft(draftFormKey(f.id));
+
+    setForm(draft ?? {
       first_name: f.first_name ?? '',
       last_name: f.last_name ?? '',
       middle_name: f.middle_name ?? '',
@@ -363,29 +494,38 @@ export default function FacultyPage() {
       educational_qualification: f.educational_qualification ?? '',
       major: f.major ?? '',
       eligibility: f.eligibility ?? '',
+      specialization: f.specialization ?? '',
+      priority_subjects: f.priority_subjects ?? [],
     });
     setModalOpen(true);
+    if (draft) toast.info('Restored your unsaved changes from last time.');
 
     try {
       const res = await fetch(`/api/faculty/${f.id}`);
       if (res.ok) {
         const data = await res.json();
         const detail = data.faculty;
-        setForm(prev => ({
-          ...prev,
-          first_name: detail.first_name ?? prev.first_name,
-          last_name: detail.last_name ?? prev.last_name,
-          middle_name: detail.middle_name ?? prev.middle_name,
-          program_id: detail.program_id != null ? String(detail.program_id) : '',
-          position: detail.position ?? prev.position,
-          username: detail.username ?? '',
-          email: detail.email ?? '',
-          years_in_service: detail.years_in_service != null ? String(detail.years_in_service) : '',
-          educational_qualification: detail.educational_qualification ?? '',
-          major: detail.major ?? '',
-          eligibility: detail.eligibility ?? '',
-        }));
         setGoogleVerified(detail.google_verified === true);
+        // A restored draft already reflects what the user was editing —
+        // don't clobber it with the (possibly older) server snapshot.
+        if (!draft) {
+          setForm(prev => ({
+            ...prev,
+            first_name: detail.first_name ?? prev.first_name,
+            last_name: detail.last_name ?? prev.last_name,
+            middle_name: detail.middle_name ?? prev.middle_name,
+            program_id: detail.program_id != null ? String(detail.program_id) : '',
+            position: detail.position ?? prev.position,
+            username: detail.username ?? '',
+            email: detail.email ?? '',
+            years_in_service: detail.years_in_service != null ? String(detail.years_in_service) : '',
+            educational_qualification: detail.educational_qualification ?? '',
+            major: detail.major ?? '',
+            eligibility: detail.eligibility ?? '',
+            specialization: detail.specialization ?? '',
+            priority_subjects: detail.priority_subjects ?? [],
+          }));
+        }
       }
     } catch {
       // Non-fatal
@@ -474,6 +614,8 @@ export default function FacultyPage() {
       educational_qualification: form.educational_qualification.trim() || null,
       major: form.major.trim() || null,
       eligibility: form.eligibility.trim() || null,
+      specialization: form.specialization.trim() || null,
+      priority_subjects: form.priority_subjects,
     };
 
     if (!editId || form.password) {
@@ -504,9 +646,18 @@ export default function FacultyPage() {
         }
         return;
       }
-      setModalOpen(false);
-      toast.success(editId ? 'Faculty updated successfully.' : 'Faculty added successfully.');
+      clearFacultyDraft();
+      setLoading(false);
+      setSaveSuccess(true);
+      setShowSaveSkeleton(true);
       loadFaculty();
+      setTimeout(() => {
+        setSaveSuccess(false);
+        setShowSaveSkeleton(false);
+        setModalOpen(false);
+        toast.success(editId ? 'Faculty updated successfully.' : 'Faculty added successfully.');
+      }, 1300);
+      return;
     } catch {
       setSubmitError('Connection error. Please check your network and try again.');
       toast.error('Connection error. Please check your network and try again.');
@@ -521,9 +672,18 @@ export default function FacultyPage() {
     try {
       const res = await fetch(`/api/faculty/${deleteTarget.id}`, { method: 'DELETE' });
       if (res.ok) {
-        toast.delete(`${deleteTarget.name} has been permanently deleted.`);
-        setDeleteTarget(null);
+        const deletedName = deleteTarget.name;
+        setDeleteLoading(false);
+        setDeleteSuccess(true);
+        setShowSaveSkeleton(true);
         loadFaculty();
+        setTimeout(() => {
+          setDeleteSuccess(false);
+          setShowSaveSkeleton(false);
+          setDeleteTarget(null);
+          toast.delete(`${deletedName} has been permanently deleted.`);
+        }, 1300);
+        return;
       } else {
         const d = await res.json().catch(() => ({}));
         toast.error(d.error || 'Failed to delete faculty. Please try again.');
@@ -536,6 +696,7 @@ export default function FacultyPage() {
   }
 
   const filtered = faculty
+    .filter(f => !statusFilter || facultyDisplayGroup(f) === statusFilter)
     .filter(f =>
       !search ||
       f.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -545,9 +706,13 @@ export default function FacultyPage() {
     )
     .sort((a, b) => POSITIONS.indexOf(b.position) - POSITIONS.indexOf(a.position));
 
-  const totalPermanent = faculty.filter(f => f.employment_status === 'Permanent').length;
-  const totalContractual = faculty.filter(f => f.employment_status === 'Contractual').length;
-  const showListSkeleton = useMinLoading(listLoading && faculty.length === 0, PAGE_SKELETON_MIN_MS);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / FACULTY_PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const paginated = filtered.slice((safePage - 1) * FACULTY_PAGE_SIZE, safePage * FACULTY_PAGE_SIZE);
+
+  const totalPermanent = faculty.filter(f => facultyDisplayGroup(f) === 'Permanent').length;
+  const totalContractual = faculty.filter(f => facultyDisplayGroup(f) === 'Contractual').length;
+  const showListSkeleton = useMinLoading(listLoading && faculty.length === 0, PAGE_SKELETON_MIN_MS) || showSaveSkeleton;
 
   // ── Form ─────────────────────────────────────────────────────────────────────
 
@@ -633,12 +798,21 @@ export default function FacultyPage() {
               onChange={e => setField('program_id', e.target.value)}
               className={errorBorder('program_id')}
               data-field="program_id"
+              disabled={userRole === 'program_chair'}
             >
               <option value="">— Select Program —</option>
-              {programs.map(p => (
+              {(userRole === 'program_chair'
+                ? programs.filter(p => p.id === chairProgramId)
+                : programs
+              ).map(p => (
                 <option key={p.id} value={p.id}>{p.code} — {p.name}</option>
               ))}
             </SelectBase>
+            {userRole === 'program_chair' && (
+              <p className="text-xs text-slate-500 mt-1.5">
+                Locked to your assigned program.
+              </p>
+            )}
             <FieldError message={fieldErrors.program_id} />
           </div>
 
@@ -652,6 +826,18 @@ export default function FacultyPage() {
             <FieldError message={fieldErrors.position} />
           </div>
 
+          <div className="sm:col-span-2">
+            <FieldLabel>
+              Subjects to Handle&nbsp;<span className="text-slate-500 font-normal">(optional — a priority recommendation, not a restriction)</span>
+            </FieldLabel>
+            <SubjectMultiSelect
+              options={subjectOptions}
+              selected={form.priority_subjects}
+              onChange={next => setField('priority_subjects', next)}
+              loading={subjectOptionsLoading}
+            />
+          </div>
+
         </div>
       </section>
 
@@ -660,9 +846,21 @@ export default function FacultyPage() {
         <SectionHeader
           icon={<Briefcase className="w-4 h-4" />}
           title="Professional Profile"
-          subtitle="Optional fields shown on the Instructor Workload print form."
+          subtitle="Optional fields shown on the Faculty Workload print form."
         />
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+
+          <div className="sm:col-span-2">
+            <FieldLabel>
+              Specialization&nbsp;<span className="text-slate-500 font-normal">(optional — helps match faculty to subjects)</span>
+            </FieldLabel>
+            <InputBase
+              value={form.specialization}
+              onChange={e => setField('specialization', e.target.value)}
+              placeholder="e.g., Information Technology / Computer Engineering"
+              maxLength={255}
+            />
+          </div>
 
           <div>
             <FieldLabel>
@@ -860,7 +1058,7 @@ export default function FacultyPage() {
       <div className="flex gap-3 sm:ml-auto">
         <button
           type="button"
-          onClick={() => setModalOpen(false)}
+          onClick={closeModal}
           className="px-6 py-3 border border-white/10 text-slate-300 rounded-xl hover:bg-white/10 transition text-sm font-semibold min-w-[110px]"
         >
           Cancel
@@ -869,7 +1067,7 @@ export default function FacultyPage() {
           type="submit"
           form="faculty-form"
           disabled={loading}
-          className="px-6 py-3 bg-[#3C91E6] text-white rounded-xl hover:bg-[#2E7DD1] disabled:opacity-50 transition text-sm font-semibold min-w-[150px]"
+          className="px-6 py-3 bg-[#1D5BD6] text-white rounded-xl hover:bg-[#2E7DD1] disabled:opacity-50 transition text-sm font-semibold min-w-[150px]"
         >
           {loading ? 'Saving…' : editId ? 'Update Faculty' : 'Add Faculty'}
         </button>
@@ -896,11 +1094,7 @@ export default function FacultyPage() {
             </div>
 
             {/* Stats */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
-              <CardSkeleton className="h-24" />
-              <CardSkeleton className="h-24" />
-              <CardSkeleton className="h-24" />
-            </div>
+            <CardSkeleton className="h-[212px]" />
 
             {/* Filters */}
             <div className="bg-white rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.06)] p-4 flex flex-col sm:flex-row sm:flex-wrap gap-3">
@@ -915,35 +1109,38 @@ export default function FacultyPage() {
       >
 
       {/* Page Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between mb-6">
-        <div className="min-w-0">
-          <h1 className="text-xl sm:text-2xl font-bold break-words" style={{ color: '#1E3A5F' }}>Faculty Profiles</h1>
-          <p className="text-sm mt-0.5" style={{ color: '#64748B' }}>Manage instructor positions, employment status, and designations</p>
+      <div className="mb-6">
+        <div className="flex items-start justify-between gap-3">
+          <BackButton />
+          {userRole === 'admin' && (
+            <button
+              onClick={openAdd}
+              className="inline-flex items-center justify-center gap-2 px-5 py-2.5 min-h-11 rounded-xl transition font-semibold text-sm shadow-sm hover:opacity-90 flex-shrink-0"
+              style={{ backgroundColor: '#1D5BD6', color: '#ffffff' }}
+            >
+              <Plus className="w-4 h-4" /> Add Faculty
+            </button>
+          )}
         </div>
-        <button
-          onClick={openAdd}
-          className="inline-flex items-center justify-center gap-2 px-5 py-2.5 min-h-11 rounded-xl transition font-semibold text-sm shadow-sm hover:opacity-90 w-full sm:w-auto flex-shrink-0"
-          style={{ backgroundColor: '#3C91E6', color: '#ffffff' }}
-        >
-          <Plus className="w-4 h-4" /> Add Faculty
-        </button>
+        <div className="mt-4 sm:mt-7 mb-10">
+          <WatermarkTitle>Faculty Profiles</WatermarkTitle>
+        </div>
       </div>
 
       {/* Stats */}
       {faculty.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 mb-6">
-          <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 sm:p-5 text-center shadow-sm">
-            <div className="text-3xl sm:text-4xl font-black mb-1.5" style={{ color: '#1E3A5F' }}>{totalPermanent}</div>
-            <div className="text-sm font-medium" style={{ color: '#64748B' }}>Permanent</div>
-          </div>
-          <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 sm:p-5 text-center shadow-sm">
-            <div className="text-3xl sm:text-4xl font-black mb-1.5" style={{ color: '#1E3A5F' }}>{totalContractual}</div>
-            <div className="text-sm font-medium" style={{ color: '#64748B' }}>Contractual</div>
-          </div>
-          <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 sm:p-5 text-center shadow-sm">
-            <div className="text-3xl sm:text-4xl font-black mb-1.5" style={{ color: '#1E3A5F' }}>{faculty.length}</div>
-            <div className="text-sm font-medium" style={{ color: '#64748B' }}>Total Faculty</div>
-          </div>
+        <div className="qr-chart-card rounded-2xl p-4 sm:p-5 mb-6">
+          <FacultyStatsBarChart
+            data={[
+              { name: 'Permanent', value: totalPermanent, color: EMPLOYMENT_COLORS.Permanent.fg, gradient: ['#8FDDC0', '#4DB892'] },
+              { name: 'Contractual', value: totalContractual, color: EMPLOYMENT_COLORS.Contractual.fg, gradient: ['#F7CD92', '#EBA158'] },
+              { name: 'Total Faculty', value: faculty.length, color: '#1D5BD6', gradient: ['#4F84E8', '#1D4FB8'] },
+            ]}
+            // Clicking a bar filters the list below; "Total Faculty" or the
+            // already-active bar clears the filter.
+            activeName={statusFilter || undefined}
+            onSelect={name => setStatusFilter(name === 'Total Faculty' || name === statusFilter ? '' : name)}
+          />
         </div>
       )}
 
@@ -965,18 +1162,32 @@ export default function FacultyPage() {
       <div className="bg-white border border-[#E2E8F0] rounded-xl overflow-hidden">
         {/* Mobile cards */}
         <div className="md:hidden divide-y divide-[color:var(--border-subtle)]">
-          {filtered.length === 0 ? (
+          {pageSwitching ? (
+            Array.from({ length: paginated.length || FACULTY_PAGE_SIZE }, (_, i) => (
+              <div key={i} className="p-4 flex items-start gap-3">
+                <div className="min-w-0 flex-1 space-y-2">
+                  <Skeleton className="h-4 w-2/3 rounded" />
+                  <Skeleton className="h-3 w-1/2 rounded" />
+                  <Skeleton className="h-3 w-1/3 rounded" />
+                </div>
+                <Skeleton className="h-8 w-16 rounded-lg flex-shrink-0" />
+              </div>
+            ))
+          ) : filtered.length === 0 ? (
             <div className="text-center py-14 px-4 text-sm" style={{ color: '#64748B' }}>
               No faculty found.
             </div>
-          ) : filtered.map(f => {
+          ) : paginated.map(f => {
             const empStatus = f.employment_status || deriveEmploymentStatus(f.position);
             const isPermanent = empStatus === 'Permanent';
             return (
               <div key={f.id} className="p-4 space-y-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
-                    <p className="font-semibold text-base break-words leading-snug" style={{ color: '#1E3A5F' }}>{f.name}</p>
+                    <p className="font-semibold text-base break-words leading-snug" style={{ color: '#0B2A5B' }}>{f.name}</p>
+                    {f.specialization && (
+                      <p className="text-xs mt-0.5 break-words" style={{ color: '#1D5BD6' }}>{f.specialization}</p>
+                    )}
                     <p className="text-sm mt-1 break-words" style={{ color: '#64748B' }}>
                       {f.position}
                       {f.program_code ? ` · ${f.program_code}` : ''}
@@ -988,30 +1199,32 @@ export default function FacultyPage() {
                       <p className="text-xs italic mt-0.5 font-medium" style={{ color: '#D97706' }}>Not assigned</p>
                     )}
                   </div>
-                  <div className="flex gap-1 flex-shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => openEdit(f)}
-                      className="min-h-11 min-w-11 inline-flex items-center justify-center rounded-xl transition hover:bg-[#EFF6FF]"
-                      style={{ color: '#3C91E6' }}
-                      title="Edit"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setDeleteTarget(f)}
-                      className="min-h-11 min-w-11 inline-flex items-center justify-center rounded-xl transition hover:bg-red-50"
-                      style={{ color: '#EF4444' }}
-                      title="Delete Faculty"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
+                  {userRole === 'admin' && (
+                    <div className="flex gap-1 flex-shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => openEdit(f)}
+                        className="min-h-11 min-w-11 inline-flex items-center justify-center rounded-xl transition hover:bg-[#EFF6FF]"
+                        style={{ color: '#1D5BD6' }}
+                        title="Edit"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDeleteTarget(f)}
+                        className="min-h-11 min-w-11 inline-flex items-center justify-center rounded-xl transition hover:bg-red-50"
+                        style={{ color: '#EF4444' }}
+                        title="Delete Faculty"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs" style={{ color: '#64748B' }}>
                   <span>{f.designation_type}</span>
-                  <span className="font-bold" style={{ color: '#3C91E6' }}>
+                  <span className="font-bold" style={{ color: employmentColors(empStatus).fg }}>
                     {isPermanent
                       ? `${Math.round(parseFloat(String(f.remaining_regular_load)))} units`
                       : '30 hrs'}
@@ -1038,23 +1251,38 @@ export default function FacultyPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-[color:var(--border-subtle)]">
-              {filtered.length === 0 ? (
+              {pageSwitching ? (
+                Array.from({ length: paginated.length || FACULTY_PAGE_SIZE }, (_, i) => (
+                  <tr key={i}>
+                    {Array.from({ length: 6 }, (_, c) => (
+                      <td key={c} className={`px-5 py-4 ${c === 4 ? 'text-center' : ''}`}>
+                        <Skeleton className={`h-3.5 rounded ${c === 0 ? 'w-32' : c === 4 ? 'w-14 mx-auto' : c === 5 ? 'w-16' : 'w-24'}`} />
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              ) : filtered.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="text-center py-14" style={{ color: '#64748B' }}>
                     No faculty found.
                   </td>
                 </tr>
-              ) : filtered.map(f => {
+              ) : paginated.map(f => {
                 const empStatus = f.employment_status || deriveEmploymentStatus(f.position);
                 const isPermanent = empStatus === 'Permanent';
                 return (
                   <tr key={f.id} className="hover:bg-[#F8FAFC] transition-colors">
-                    <td className="px-5 py-4 font-semibold" style={{ color: '#1E3A5F' }}>{f.name}</td>
+                    <td className="px-5 py-4">
+                      <p className="font-semibold" style={{ color: '#0B2A5B' }}>{f.name}</p>
+                      {f.specialization && (
+                        <p className="text-xs mt-0.5" style={{ color: '#1D5BD6' }}>{f.specialization}</p>
+                      )}
+                    </td>
                     <td className="px-5 py-4">
                       {f.program_code
                         ? (
                           <div>
-                            <span className="font-semibold text-xs" style={{ color: '#1E3A5F' }}>{f.program_code}</span>
+                            <span className="font-semibold text-xs" style={{ color: '#0B2A5B' }}>{f.program_code}</span>
                             {f.program_name && (
                               <p className="text-[11px] leading-tight mt-0.5 max-w-[200px] break-words" style={{ color: '#64748B' }}>{f.program_name}</p>
                             )}
@@ -1062,35 +1290,39 @@ export default function FacultyPage() {
                         )
                         : <span className="text-xs italic font-medium" style={{ color: '#D97706' }}>Not assigned</span>}
                     </td>
-                    <td className="px-5 py-4 font-medium" style={{ color: '#1E3A5F' }}>{f.position}</td>
+                    <td className="px-5 py-4 font-medium" style={{ color: '#0B2A5B' }}>{f.position}</td>
                     <td className="px-5 py-4 text-xs" style={{ color: '#64748B' }}>{f.designation_type}</td>
-                    <td className="px-5 py-4 text-center font-bold" style={{ color: '#3C91E6' }}>
+                    <td className="px-5 py-4 text-center font-bold" style={{ color: employmentColors(empStatus).fg }}>
                       {isPermanent
                         ? `${Math.round(parseFloat(String(f.remaining_regular_load)))} units`
                         : '30 hrs'
                       }
                     </td>
                     <td className="px-5 py-4">
-                      <div className="flex gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => openEdit(f)}
-                          className="p-2 min-h-11 min-w-11 inline-flex items-center justify-center rounded-lg transition hover:bg-[#EFF6FF]"
-                          style={{ color: '#3C91E6' }}
-                          title="Edit"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setDeleteTarget(f)}
-                          className="p-2 min-h-11 min-w-11 inline-flex items-center justify-center rounded-lg transition hover:bg-red-50"
-                          style={{ color: '#EF4444' }}
-                          title="Delete Faculty"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
+                      {userRole === 'admin' ? (
+                        <div className="flex gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => openEdit(f)}
+                            className="p-2 min-h-11 min-w-11 inline-flex items-center justify-center rounded-lg transition hover:bg-[#EFF6FF]"
+                            style={{ color: '#1D5BD6' }}
+                            title="Edit"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDeleteTarget(f)}
+                            className="p-2 min-h-11 min-w-11 inline-flex items-center justify-center rounded-lg transition hover:bg-red-50"
+                            style={{ color: '#EF4444' }}
+                            title="Delete Faculty"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-xs italic" style={{ color: '#94A3B8' }}>View only</span>
+                      )}
                     </td>
                   </tr>
                 );
@@ -1099,8 +1331,34 @@ export default function FacultyPage() {
           </table>
         </div>
         {filtered.length > 0 && (
-          <div className="px-5 py-3 border-t border-[color:var(--border)] text-xs text-[#64748B]">
-            {filtered.length} instructor{filtered.length !== 1 ? 's' : ''}
+          <div className="px-5 py-3 border-t border-[color:var(--border)] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <p className="text-xs text-[#64748B]">
+              Showing {(safePage - 1) * FACULTY_PAGE_SIZE + 1}
+              –{Math.min(safePage * FACULTY_PAGE_SIZE, filtered.length)} of {filtered.length} instructor{filtered.length !== 1 ? 's' : ''}
+            </p>
+            {totalPages > 1 && (
+              <div className="flex items-center gap-2 self-end sm:self-auto">
+                <button
+                  type="button"
+                  onClick={() => goToPage(Math.max(1, safePage - 1))}
+                  disabled={safePage === 1}
+                  className="inline-flex items-center justify-center min-h-9 px-3 rounded-lg border border-[#E2E8F0] bg-white text-xs font-semibold text-[#475569] hover:bg-[#F8FAFC] hover:border-[#CBD5E1] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  Previous
+                </button>
+                <span className="text-xs font-medium text-[#0B2A5B] tabular-nums px-1 whitespace-nowrap">
+                  Page {safePage} of {totalPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => goToPage(Math.min(totalPages, safePage + 1))}
+                  disabled={safePage === totalPages}
+                  className="inline-flex items-center justify-center min-h-9 px-3 rounded-lg border border-[#E2E8F0] bg-white text-xs font-semibold text-[#475569] hover:bg-[#F8FAFC] hover:border-[#CBD5E1] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  Next
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1109,11 +1367,33 @@ export default function FacultyPage() {
       {/* Add / Edit Modal */}
       <Modal
         open={modalOpen}
-        onClose={() => setModalOpen(false)}
+        onClose={closeModal}
         title={editId ? 'Edit Faculty Member' : 'Add Faculty Member'}
         size="xl"
         footer={formFooter}
       >
+        {saveSuccess && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-2xl backdrop-blur-md save-success-overlay">
+            <div className="save-success-badge flex flex-col items-center gap-3 px-8 py-7 rounded-2xl bg-white border border-[#E2E8F0] shadow-2xl">
+              <svg width="72" height="72" viewBox="0 0 52 52">
+                <circle
+                  className="save-success-circle"
+                  cx="26" cy="26" r="24"
+                  fill="none" stroke="#22C55E" strokeWidth="3"
+                />
+                <path
+                  className="save-success-check"
+                  fill="none" stroke="#22C55E" strokeWidth="3.5"
+                  strokeLinecap="round" strokeLinejoin="round"
+                  d="M14.5 27 22 34.5 38 17"
+                />
+              </svg>
+              <p className="text-base font-semibold" style={{ color: '#0B2A5B' }}>
+                {editId ? 'Faculty updated!' : 'Faculty added!'}
+              </p>
+            </div>
+          </div>
+        )}
         <form id="faculty-form" onSubmit={handleSubmit} noValidate>
           {formContent}
         </form>
@@ -1125,6 +1405,14 @@ export default function FacultyPage() {
         onClose={() => !deleteLoading && setDeleteTarget(null)}
         title="Delete Faculty Member"
       >
+        {deleteSuccess && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-2xl backdrop-blur-md save-success-overlay">
+            <div className="save-success-badge flex flex-col items-center gap-3 px-8 py-7 rounded-2xl bg-white border border-[#E2E8F0] shadow-2xl">
+              <TrashDropAnimation className="bg-red-50 border-red-200" />
+              <p className="text-base font-semibold" style={{ color: '#0B2A5B' }}>Faculty deleted!</p>
+            </div>
+          </div>
+        )}
         {deleteTarget && (
           <div className="space-y-5">
 
@@ -1148,7 +1436,7 @@ export default function FacultyPage() {
                 <p className="font-bold text-white text-base truncate">{deleteTarget.name}</p>
                 <p className="text-sm text-slate-400 truncate">{deleteTarget.position}</p>
               </div>
-              <EmploymentBadge status={deleteTarget.employment_status} position={deleteTarget.position} />
+              <EmploymentBadge status={deleteTarget.employment_status} className="flex-shrink-0" />
             </div>
 
             {/* Confirmation message */}

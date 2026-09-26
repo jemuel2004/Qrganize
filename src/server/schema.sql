@@ -260,6 +260,16 @@ CREATE TABLE IF NOT EXISTS instructor_accounts (
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Faculty Priority Subjects ("Subjects to Handle" — a recommendation, not a restriction)
+CREATE TABLE IF NOT EXISTS faculty_priority_subjects (
+  id            SERIAL PRIMARY KEY,
+  faculty_id    INTEGER NOT NULL REFERENCES faculty(id) ON DELETE CASCADE,
+  subject_code  VARCHAR(50) NOT NULL,
+  subject_name  VARCHAR(255) NOT NULL DEFAULT '',
+  created_at    TIMESTAMP DEFAULT NOW(),
+  UNIQUE(faculty_id, subject_code)
+);
+
 -- Instructor Load Deductions (normalized per-semester deduction records)
 CREATE TABLE IF NOT EXISTS instructor_load_deductions (
   id            SERIAL PRIMARY KEY,

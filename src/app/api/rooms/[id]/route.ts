@@ -1,13 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/server/db';
 import { getAuthUser } from '@/server/auth';
+import { canManageRooms, roomNameTaken, ROOM_STATUSES, validateRoom } from '@/server/rooms';
+
+function parseId(raw: string): number | null {
+  const id = Number.parseInt(raw, 10);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await getAuthUser(req);
     if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const { id } = await params;
+    const id = parseId((await params).id);
+    if (!id) return NextResponse.json({ error: 'Not found' }, { status: 404 });
     const result = await query('SELECT * FROM rooms WHERE id=$1', [id]);
     if (result.rows.length === 0) return NextResponse.json({ error: 'Not found' }, { status: 404 });
     return NextResponse.json({ room: result.rows[0] });
@@ -17,22 +24,35 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   }
 }
 
+/** Edit a room. Status is only changed when one is sent — editing never
+ *  silently reactivates an Inactive room. */
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await getAuthUser(req);
     if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    const role = auth.role as string;
-    if (role !== 'admin' && role !== 'department_chair') {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    if (!canManageRooms(auth.role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
+    const id = parseId((await params).id);
+    if (!id) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+
+    const body = await req.json();
+    const v = validateRoom(body);
+    if (!v.ok) return NextResponse.json({ error: v.error }, { status: 400 });
+    const status = body.status == null ? null : String(body.status);
+    if (status !== null && !(ROOM_STATUSES as readonly string[]).includes(status)) {
+      return NextResponse.json({ error: 'Status must be Active or Inactive.' }, { status: 400 });
+    }
+    const { room_name, room_type, capacity, building } = v.room;
+
+    if (await roomNameTaken(room_name, id)) {
+      return NextResponse.json({ error: `A room named "${room_name}" is already registered.` }, { status: 409 });
     }
 
-    const { id } = await params;
-    const { room_name, room_type, capacity, building, status } = await req.json();
-
     const result = await query(`
-      UPDATE rooms SET room_name=$1, room_type=$2, capacity=$3, building=$4, status=$5, updated_at=NOW()
+      UPDATE rooms SET room_name=$1, room_type=$2, capacity=$3, building=$4,
+             status=COALESCE($5, status), updated_at=NOW()
       WHERE id=$6 RETURNING *
-    `, [room_name, room_type, capacity || 0, building, status || 'Active', id]);
+    `, [room_name, room_type, capacity, building, status, id]);
 
     if (result.rows.length === 0) return NextResponse.json({ error: 'Not found' }, { status: 404 });
     return NextResponse.json({ room: result.rows[0] });
@@ -42,16 +62,41 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   }
 }
 
+/** Activate / deactivate a room. Inactive rooms stay on file (and on existing
+ *  schedules) but can't be picked for new schedules. */
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const auth = await getAuthUser(req);
+    if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    if (!canManageRooms(auth.role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
+    const id = parseId((await params).id);
+    if (!id) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+
+    const { status } = await req.json();
+    if (!(ROOM_STATUSES as readonly string[]).includes(String(status))) {
+      return NextResponse.json({ error: 'Status must be Active or Inactive.' }, { status: 400 });
+    }
+    const result = await query(
+      'UPDATE rooms SET status=$1, updated_at=NOW() WHERE id=$2 RETURNING *',
+      [status, id],
+    );
+    if (result.rows.length === 0) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    return NextResponse.json({ room: result.rows[0] });
+  } catch (error) {
+    console.error('[PATCH /api/rooms/[id]]', error);
+    return NextResponse.json({ error: 'Failed to update room status.' }, { status: 500 });
+  }
+}
+
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await getAuthUser(req);
     if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    const role = auth.role as string;
-    if (role !== 'admin' && role !== 'department_chair') {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+    if (!canManageRooms(auth.role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
-    const { id } = await params;
+    const id = parseId((await params).id);
+    if (!id) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
     // Clear room assignment from all schedule sessions and master schedules
     // that reference this room — schedules themselves are preserved.

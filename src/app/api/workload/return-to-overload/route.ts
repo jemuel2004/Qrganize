@@ -1,7 +1,9 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import { query, transaction } from '@/server/db';
 import { getAuthUser } from '@/server/auth';
 import { syncWorkloadMonitoringNotifications } from '@/server/workloadMonitoring';
+import { canAccessMasterSchedule } from '@/server/programScope';
+import { ensurePraiseSplitColumn } from '@/server/praiseSplit';
 
 /**
  * Reclassify Praise Load subject(s) back to Overload.
@@ -10,7 +12,7 @@ import { syncWorkloadMonitoringNotifications } from '@/server/workloadMonitoring
 export async function POST(req: NextRequest) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -21,12 +23,18 @@ export async function POST(req: NextRequest) {
       : body.master_schedule_id != null
         ? [body.master_schedule_id]
         : [];
-    const master_schedule_ids = [...new Set(
+    let master_schedule_ids = [...new Set(
       rawIds.map(n => Number(n)).filter(n => Number.isInteger(n) && n > 0)
     )];
 
     if (!faculty_id || master_schedule_ids.length === 0) {
       return NextResponse.json({ error: 'Faculty and at least one Praise Load subject are required.' }, { status: 400 });
+    }
+
+    for (const msId of master_schedule_ids) {
+      if (!(await canAccessMasterSchedule(auth, msId))) {
+        return NextResponse.json({ error: 'Schedule not found' }, { status: 404 });
+      }
     }
 
     const facultyResult = await query(
@@ -37,6 +45,26 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Faculty not found' }, { status: 404 });
     }
     const isPermanent = facultyResult.rows[0].employment_status === 'Permanent';
+
+    /* Split Praise portions (only the Lec or Lab in Praise, rest Regular) just
+       flip back to an Overload split — the Regular part is untouched. */
+    await ensurePraiseSplitColumn();
+    const splitPraise = await query(
+      `UPDATE overloads SET is_praise = false, reason = 'Returned from Praise Load'
+       WHERE faculty_id = $1 AND master_schedule_id = ANY($2::int[]) AND is_praise = true
+       RETURNING master_schedule_id`,
+      [faculty_id, master_schedule_ids]
+    );
+    const splitIds = new Set((splitPraise.rows as { master_schedule_id: number }[]).map(r => Number(r.master_schedule_id)));
+    master_schedule_ids = master_schedule_ids.filter(id => !splitIds.has(id));
+    if (master_schedule_ids.length === 0) {
+      void syncWorkloadMonitoringNotifications(true);
+      return NextResponse.json({
+        success: true,
+        moved: splitIds.size,
+        message: 'Returned from Praise Load to Overload.',
+      });
+    }
 
     const loads = await query(
       `SELECT
@@ -112,7 +140,7 @@ export async function POST(req: NextRequest) {
 
     void syncWorkloadMonitoringNotifications(true);
 
-    const n = master_schedule_ids.length;
+    const n = master_schedule_ids.length + splitIds.size;
     return NextResponse.json({
       success: true,
       moved: n,

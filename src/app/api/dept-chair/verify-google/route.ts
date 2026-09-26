@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUser } from '@/server/auth';
 import { query, transaction } from '@/server/db';
 import { isGoogleIdentity, verifyGoogleIdToken } from '@/server/verifyGoogleIdToken';
@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
   try {
     await ensureUsersSchema();
     const authUser = await getAuthUser(req) as { role?: string; id?: number } | null;
-    if (!authUser || authUser.role !== 'department_chair' || !authUser.id) {
+    if (!authUser || authUser.role !== 'program_chair' || !authUser.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
       const account = await client.query(
         `SELECT id, email, google_sub, google_verified
          FROM users
-         WHERE id = $1 AND role = 'department_chair'
+         WHERE id = $1 AND role = 'program_chair'
          FOR UPDATE`,
         [userId]
       );
@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
              google_verified_at = NOW(),
              google_picture = $2,
              updated_at = NOW()
-         WHERE id = $3 AND role = 'department_chair'`,
+         WHERE id = $3 AND role = 'program_chair'`,
         [identity.sub, identity.picture, userId]
       );
 
@@ -128,7 +128,7 @@ export async function DELETE(req: NextRequest) {
   try {
     await ensureUsersSchema();
     const authUser = await getAuthUser(req) as { role?: string; id?: number } | null;
-    if (!authUser || authUser.role !== 'department_chair' || !authUser.id) {
+    if (!authUser || authUser.role !== 'program_chair' || !authUser.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -136,7 +136,7 @@ export async function DELETE(req: NextRequest) {
 
     const result = await transaction(async (client) => {
       const account = await client.query(
-        `SELECT id FROM users WHERE id = $1 AND role = 'department_chair' FOR UPDATE`,
+        `SELECT id FROM users WHERE id = $1 AND role = 'program_chair' FOR UPDATE`,
         [userId]
       );
       if (account.rows.length === 0) return { kind: 'not_found' as const };
@@ -149,7 +149,7 @@ export async function DELETE(req: NextRequest) {
              google_picture = NULL,
              otp_enabled = FALSE,
              updated_at = NOW()
-         WHERE id = $1 AND role = 'department_chair'`,
+         WHERE id = $1 AND role = 'program_chair'`,
         [userId]
       );
 

@@ -19,8 +19,8 @@ import {
 /** Same chrome tokens as Admin Sidebar — shared authenticated nav look. */
 const navItemBase =
   'group relative inline-flex items-center gap-2 h-10 px-3.5 text-[15px] font-medium rounded-md transition-colors duration-150 cursor-pointer';
-const navIdle = 'qr-nav-chrome-idle text-white/90 hover:text-[#3C91E6] hover:bg-white/15';
-const navActive = 'qr-nav-chrome-chip text-[#3074B8] bg-white';
+const navIdle = 'qr-nav-chrome-idle text-white/90 hover:text-[#1D5BD6] hover:bg-white/15';
+const navActive = 'qr-nav-chrome-chip text-[#12408F] bg-white';
 
 const SECTION_ICON: Record<string, LucideIcon> = {
   main: LayoutDashboard,
@@ -96,7 +96,7 @@ function DesktopMenu({
         <span className={`${navItemBase} ${sectionActive || open ? navActive : navIdle}`}>
           <Icon className="w-5 h-5 flex-shrink-0" />
           {section.label}
-          <ChevronDown className={`qr-nav-chrome-chevron w-3.5 h-3.5 transition-transform duration-150 ${open ? 'rotate-180' : ''} ${sectionActive || open ? 'text-[#3074B8]' : 'text-white/70 group-hover:text-[#3C91E6]'}`} />
+          <ChevronDown className={`qr-nav-chrome-chevron w-3.5 h-3.5 transition-transform duration-150 ${open ? 'rotate-180' : ''} ${sectionActive || open ? 'text-[#12408F]' : 'text-white/70 group-hover:text-[#1D5BD6]'}`} />
         </span>
         {sectionActive && (
           <span className="absolute bottom-0 left-2 right-2 h-0.5 bg-white" />
@@ -120,14 +120,14 @@ function DesktopMenu({
               className={[
                 'flex items-center gap-2 text-[14px] leading-6 min-h-10 px-3 py-2 transition-colors duration-150 cursor-pointer',
                 isInstructorPathActive(pathname, item.href)
-                  ? 'text-[#2563EB] font-medium bg-[#E8F1FB]'
-                  : 'text-[#475569] hover:text-[#3C91E6] hover:bg-[#F8FAFC]',
+                  ? 'text-[#164BB5] font-medium bg-[#E8F1FB]'
+                  : 'text-[#475569] hover:text-[#1D5BD6] hover:bg-[#F8FAFC]',
               ].join(' ')}
             >
               <item.icon className="w-4 h-4 flex-shrink-0" />
               <span className="flex-1">{item.label}</span>
               {item.badge !== undefined && (
-                <span className="min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center bg-[#3074B8] text-white">
+                <span className="min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center bg-[#12408F] text-white">
                   {item.badge > 9 ? '9+' : item.badge}
                 </span>
               )}
@@ -219,14 +219,14 @@ function MobileLink({
       className={[
         'flex items-center gap-2 min-h-11 px-4 text-[14px] transition-colors duration-150 cursor-pointer',
         active
-          ? 'text-[#2563EB] font-medium bg-[#E8F1FB]'
-          : 'text-[#475569] hover:text-[#3C91E6] hover:bg-[#F8FAFC]',
+          ? 'text-[#164BB5] font-medium bg-[#E8F1FB]'
+          : 'text-[#475569] hover:text-[#1D5BD6] hover:bg-[#F8FAFC]',
       ].join(' ')}
     >
       <item.icon className="w-4 h-4" />
       <span className="flex-1">{item.label}</span>
       {item.badge !== undefined && (
-        <span className="min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center bg-[#3074B8] text-white">
+        <span className="min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center bg-[#12408F] text-white">
           {item.badge > 9 ? '9+' : item.badge}
         </span>
       )}

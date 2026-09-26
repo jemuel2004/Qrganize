@@ -3,6 +3,7 @@ import { query } from '@/server/db';
 import { getAuthUser } from '@/server/auth';
 import QRCode from 'qrcode';
 import { v4 as uuidv4 } from 'uuid';
+import { canManageRooms, roomNameTaken, ROOM_STATUSES, validateRoom } from '@/server/rooms';
 
 export async function GET(req: NextRequest) {
   try {
@@ -33,15 +34,19 @@ export async function POST(req: NextRequest) {
   try {
     const auth = await getAuthUser(req);
     if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    const role = auth.role as string;
-    if (role !== 'admin' && role !== 'department_chair') {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    if (!canManageRooms(auth.role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
+    const body = await req.json();
+    const v = validateRoom(body);
+    if (!v.ok) return NextResponse.json({ error: v.error }, { status: 400 });
+    const status = body.status == null ? 'Active' : String(body.status);
+    if (!(ROOM_STATUSES as readonly string[]).includes(status)) {
+      return NextResponse.json({ error: 'Status must be Active or Inactive.' }, { status: 400 });
     }
+    const { room_name, room_type, capacity, building } = v.room;
 
-    const { room_name, room_type, capacity, building } = await req.json();
-
-    if (!room_name || !room_type) {
-      return NextResponse.json({ error: 'Room name and type are required' }, { status: 400 });
+    if (await roomNameTaken(room_name)) {
+      return NextResponse.json({ error: `A room named "${room_name}" is already registered.` }, { status: 409 });
     }
 
     const qrCodeId = `QR-${room_type.toUpperCase().slice(0, 3)}-${uuidv4().slice(0, 8).toUpperCase()}`;
@@ -50,8 +55,8 @@ export async function POST(req: NextRequest) {
 
     const result = await query(`
       INSERT INTO rooms (room_name, room_type, capacity, building, qr_code_id, qr_code_data, status)
-      VALUES ($1, $2, $3, $4, $5, $6, 'Active') RETURNING *
-    `, [room_name, room_type, capacity || 0, building, qrCodeId, qrCodeDataUrl]);
+      VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *
+    `, [room_name, room_type, capacity, building, qrCodeId, qrCodeDataUrl, status]);
 
     return NextResponse.json({ room: result.rows[0] }, { status: 201 });
   } catch (error) {

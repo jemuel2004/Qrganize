@@ -12,6 +12,8 @@ interface ModalProps {
   children: React.ReactNode;
   footer?: React.ReactNode;
   size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | 'full' | 'form';
+  /** Solid blue header background instead of the default transparent header. */
+  headerAccent?: boolean;
 }
 
 const sizes = {
@@ -24,7 +26,7 @@ const sizes = {
   form:  'max-w-[min(1280px,calc(100vw-1rem))]',
 };
 
-export default function Modal({ open, onClose, title, children, footer, size = 'md' }: ModalProps) {
+export default function Modal({ open, onClose, title, children, footer, size = 'md', headerAccent = false }: ModalProps) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
   useScrollLock(open);
@@ -62,17 +64,25 @@ export default function Modal({ open, onClose, title, children, footer, size = '
         aria-modal="true"
         aria-labelledby="modal-title"
         tabIndex={-1}
-        className={`relative bg-[#111827] border border-white/10 rounded-2xl shadow-2xl w-full ${sizes[size]} max-h-[94vh] sm:max-h-[92vh] flex flex-col min-w-0 qr-modal-in`}
+        className={`qr-modal-panel relative bg-[#111827] border border-white/10 rounded-2xl shadow-2xl w-full ${sizes[size]} max-h-[94vh] sm:max-h-[92vh] flex flex-col min-w-0 qr-modal-in`}
         /* Stop clicks inside the panel from bubbling to the backdrop */
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex-shrink-0 flex items-center justify-between gap-3 px-4 sm:px-8 py-4 sm:py-6 border-b border-white/10">
+        <div
+          className={`flex-shrink-0 flex items-center justify-between gap-3 px-4 sm:px-8 py-4 sm:py-6 rounded-t-2xl ${
+            headerAccent ? 'bg-[#1D5BD6]' : 'border-b border-white/10'
+          }`}
+        >
           <h2 id="modal-title" className="text-lg sm:text-xl font-bold text-white leading-tight min-w-0 break-words">{title}</h2>
           <button
             onClick={onClose}
             aria-label="Close modal"
-            className="p-2 -mr-1 rounded-xl text-slate-400 hover:text-white hover:bg-white/[0.07] transition-colors duration-150 min-h-11 min-w-11 inline-flex items-center justify-center flex-shrink-0"
+            className={`p-2 -mr-1 rounded-xl transition-colors duration-150 min-h-11 min-w-11 inline-flex items-center justify-center flex-shrink-0 ${
+              headerAccent
+                ? 'text-white/80 hover:text-white hover:bg-white/20'
+                : 'text-slate-400 hover:text-white hover:bg-white/[0.07]'
+            }`}
           >
             <X className="w-5 h-5" />
           </button>

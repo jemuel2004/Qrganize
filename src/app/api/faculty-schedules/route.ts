@@ -1,11 +1,12 @@
 ﻿import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/server/db';
 import { getAuthUser } from '@/server/auth';
+import { resolveProgramScope } from '@/server/programScope';
 
 export async function GET(req: NextRequest) {
   try {
-    const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    const auth = await getAuthUser(req) as { id?: number; role?: string } | null;
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -15,6 +16,13 @@ export async function GET(req: NextRequest) {
     const academic_year     = searchParams.get('academic_year') || '';
     const faculty_id        = searchParams.get('faculty_id') || '';
 
+    let programId = '';
+    if (auth.role === 'program_chair') {
+      const scope = await resolveProgramScope(auth);
+      if (!scope.ok) return scope.response;
+      programId = String(scope.programId);
+    }
+
     const conditions: string[] = ['f.is_active = true'];
     const values: (string | number)[] = [];
     let idx = 1;
@@ -23,6 +31,7 @@ export async function GET(req: NextRequest) {
     if (semester)          { conditions.push(`b.semester = $${idx++}`);          values.push(semester); }
     if (academic_year)     { conditions.push(`b.academic_year = $${idx++}`);     values.push(academic_year); }
     if (faculty_id)        { conditions.push(`f.id = $${idx++}`);                values.push(faculty_id); }
+    if (programId)         { conditions.push(`p.id = $${idx++}`);               values.push(programId); }
 
     const where = conditions.join(' AND ');
 

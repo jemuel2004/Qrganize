@@ -10,7 +10,7 @@ export default function WorkloadPrintPage() {
   return (
     <WorkloadPrintFallbackClient
       backHref="/workload"
-      backLabel="Back to Instructor Workload"
+      backLabel="Back to Faculty Workload"
     />
   );
 }

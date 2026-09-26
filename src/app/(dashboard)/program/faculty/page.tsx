@@ -4,6 +4,7 @@ import FacultyClient from './FacultyClient';
 
 export default async function FacultyPage() {
   const role = await getPageAuthRole();
-  if (role !== 'admin') redirect('/dept-chair');
+  if (!role) redirect('/login');
+  if (!['admin', 'department_chair', 'program_chair'].includes(role)) redirect('/dashboard');
   return <FacultyClient />;
 }

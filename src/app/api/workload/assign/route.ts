@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/server/db';
 import { getAuthUser } from '@/server/auth';
 import {
@@ -6,21 +6,26 @@ import {
   permanentRegularLoadLimit,
 } from '@/lib/regularLoad';
 import { syncWorkloadMonitoringNotifications } from '@/server/workloadMonitoring';
+import { canAccessMasterSchedule, canAccessProgram } from '@/server/programScope';
 
 export async function POST(req: NextRequest) {
   try {
-    const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    const auth = await getAuthUser(req) as { id?: number; role?: string } | null;
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     // assign_category: 'regular' | 'overload' | undefined
-    // If undefined → server checks load and returns requires_confirmation
-    // If provided   → admin already confirmed; proceed with that category
+    // If undefined â†’ server checks load and returns requires_confirmation
+    // If provided   â†’ admin already confirmed; proceed with that category
     const { faculty_id, master_schedule_id, assign_category } = await req.json();
 
     if (!faculty_id || !master_schedule_id) {
       return NextResponse.json({ error: 'Faculty and master schedule are required' }, { status: 400 });
+    }
+
+    if (!(await canAccessMasterSchedule(auth, master_schedule_id))) {
+      return NextResponse.json({ error: 'Schedule not found' }, { status: 404 });
     }
 
     const facultyResult = await query('SELECT * FROM faculty WHERE id=$1 AND is_active=true', [faculty_id]);
@@ -28,6 +33,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Faculty not found' }, { status: 404 });
     }
     const faculty = facultyResult.rows[0];
+    if (!(await canAccessProgram(auth, faculty.program_id))) {
+      return NextResponse.json({ error: 'Faculty not found' }, { status: 404 });
+    }
     const isPermanent = faculty.employment_status === 'Permanent';
 
     const schedResult = await query(`
@@ -169,6 +177,9 @@ export async function POST(req: NextRequest) {
         success: true,
         load_category: 'Overload',
         message: `Subject assigned as overload (${subjectValue.toFixed(2)} ${unit}).`,
+        // Overload doesn't count against the regular limit, so the regular balance is unchanged.
+        remaining: parseFloat(remainingRegular.toFixed(2)),
+        unit,
       });
     }
 
@@ -187,10 +198,13 @@ export async function POST(req: NextRequest) {
     ]);
 
     void syncWorkloadMonitoringNotifications(true);
+    const remainingAfter = parseFloat((remainingRegular - subjectValue).toFixed(2));
     return NextResponse.json({
       success: true,
       load_category: 'Regular',
       message: 'Subject assigned successfully within regular load.',
+      remaining: remainingAfter,
+      unit,
     });
   } catch (error) {
     console.error('[POST /api/workload/assign]', error);

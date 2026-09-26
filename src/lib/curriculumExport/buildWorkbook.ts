@@ -110,8 +110,8 @@ export async function buildCurriculumWorkbook(
       case 'logo':
         excelRow.height = logo ? 32 : 6;
         styleCells(excelRow, 1, LAST_COL, cell => {
-          cell.border = undefined;
-          cell.fill = undefined;
+          cell.border = {};
+          cell.fill = { type: 'pattern', pattern: 'none' };
           cell.value = null;
         });
         break;

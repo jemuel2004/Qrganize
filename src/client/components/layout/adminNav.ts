@@ -1,12 +1,16 @@
-export interface NavChild {
+﻿export interface NavChild {
   href: string;
   label: string;
 }
+
+export type NavBadgeKey = 'workload' | 'masterSchedule' | 'facultySchedule';
 
 export interface NavItem {
   href: string;
   label: string;
   children?: NavChild[];
+  /** Key into the pending-counts map — renders a small count badge when > 0. */
+  badgeKey?: NavBadgeKey;
 }
 
 export interface NavSection {
@@ -17,7 +21,8 @@ export interface NavSection {
 
 export const FACULTY_ACCOUNTS_CHILDREN: NavChild[] = [
   { href: '/instructor-accounts', label: 'Instructor Accounts' },
-  { href: '/dept-chair-accounts', label: 'Department Chair Accounts' },
+  { href: '/department-chair-accounts', label: 'Department Chair Accounts' },
+  { href: '/dept-chair-accounts', label: 'Program Chair Accounts' },
 ];
 
 export const ALL_NAV_SECTIONS: NavSection[] = [
@@ -41,11 +46,11 @@ export const ALL_NAV_SECTIONS: NavSection[] = [
     id: 'scheduling',
     label: 'Scheduling',
     items: [
-      { href: '/workload', label: 'Instructor Workload' },
+      { href: '/workload', label: 'Faculty Workload', badgeKey: 'workload' },
       { href: '/scheduling', label: 'Schedule Classes' },
       { href: '/program/class-program', label: 'Class Program' },
-      { href: '/master-schedule', label: 'Master Schedule' },
-      { href: '/faculty-schedules', label: 'Faculty Schedules' },
+      { href: '/master-schedule', label: 'Master Schedule', badgeKey: 'masterSchedule' },
+      { href: '/faculty-schedules', label: 'Faculty Schedules', badgeKey: 'facultySchedule' },
     ],
   },
   {
@@ -73,34 +78,74 @@ export const ALL_NAV_SECTIONS: NavSection[] = [
   },
 ];
 
-const DEPT_CHAIR_HIDDEN = new Set([
-  '/program/faculty',
+/**
+ * Program Chair is program-scoped: Faculty, Curriculum, Blocks, Scheduling,
+ * Workload, Master Schedule, and Faculty Schedules are all visible but
+ * filtered server-side to their assigned program. Only the dedicated
+ * account/credential-management surfaces and system Settings stay hidden.
+ */
+const PROGRAM_CHAIR_HIDDEN = new Set([
   '/instructor-accounts',
+  '/department-chair-accounts',
   '/dept-chair-accounts',
   '/settings',
 ]);
 
-const DEPT_CHAIR_ACCOUNT_SECTION: NavSection = {
+/**
+ * Department Chair is near-admin: it only loses the dedicated faculty
+ * account/credential-management surface (Instructor Accounts + Program Chair
+ * Accounts, under "Faculty Accounts") — enforced on the backend regardless,
+ * this just avoids showing a page that would 403 on every request.
+ */
+const DEPARTMENT_CHAIR_HIDDEN = new Set([
+  '/instructor-accounts',
+  '/department-chair-accounts',
+  '/dept-chair-accounts',
+  '/settings',
+]);
+
+const PROGRAM_CHAIR_ACCOUNT_SECTION: NavSection = {
   id: 'account',
   label: 'Account',
   items: [{ href: '/dept-chair/account', label: 'Settings' }],
 };
 
+const DEPARTMENT_CHAIR_ACCOUNT_SECTION: NavSection = {
+  id: 'account',
+  label: 'Account',
+  items: [{ href: '/department-chair/account', label: 'Settings' }],
+};
+
 export function getNavSections(role: string): NavSection[] {
-  if (role !== 'department_chair') return ALL_NAV_SECTIONS;
+  if (role === 'department_chair') {
+    const filtered = ALL_NAV_SECTIONS
+      .map(section => ({
+        ...section,
+        items: section.items.filter(item => {
+          if (DEPARTMENT_CHAIR_HIDDEN.has(item.href)) return false;
+          if (item.children?.every(c => DEPARTMENT_CHAIR_HIDDEN.has(c.href))) return false;
+          return true;
+        }),
+      }))
+      .filter(section => section.items.length > 0);
+    return [...filtered, DEPARTMENT_CHAIR_ACCOUNT_SECTION];
+  }
+
+  if (role !== 'program_chair') return ALL_NAV_SECTIONS;
+
   const filtered = ALL_NAV_SECTIONS.map(section => ({
     ...section,
     items: section.items
       .filter(item => {
-        if (DEPT_CHAIR_HIDDEN.has(item.href)) return false;
-        if (item.children?.some(c => DEPT_CHAIR_HIDDEN.has(c.href))) return false;
+        if (PROGRAM_CHAIR_HIDDEN.has(item.href)) return false;
+        if (item.children?.some(c => PROGRAM_CHAIR_HIDDEN.has(c.href))) return false;
         return true;
       })
       .map(item =>
         item.href === '/dashboard' ? { ...item, href: '/dept-chair' } : item
       ),
   })).filter(section => section.items.length > 0);
-  return [...filtered, DEPT_CHAIR_ACCOUNT_SECTION];
+  return [...filtered, PROGRAM_CHAIR_ACCOUNT_SECTION];
 }
 
 export const PRIORITY_PREFETCH = new Set([

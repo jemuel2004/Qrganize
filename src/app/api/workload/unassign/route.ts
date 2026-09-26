@@ -2,13 +2,18 @@
 import { query } from '@/server/db';
 import { getAuthUser } from '@/server/auth';
 import { syncWorkloadMonitoringNotifications } from '@/server/workloadMonitoring';
+import { canAccessMasterSchedule } from '@/server/programScope';
 
 export async function POST(req: NextRequest) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { faculty_id, master_schedule_id } = await req.json();
+
+    if (!(await canAccessMasterSchedule(auth, master_schedule_id))) {
+      return NextResponse.json({ error: 'Schedule not found' }, { status: 404 });
+    }
 
     await query('BEGIN');
     try {

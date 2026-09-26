@@ -1,4 +1,4 @@
-interface NotificationLike {
+﻿interface NotificationLike {
   type: string;
   related_module: string | null;
   is_read?: boolean;
@@ -56,7 +56,7 @@ export function matchesNotificationFilter(
 
 export function notificationHref(
   n: Pick<NotificationLike, 'type' | 'related_module'>,
-  role: 'admin' | 'department_chair' | 'instructor',
+  role: 'admin' | 'department_chair' | 'program_chair' | 'instructor',
 ): string | null {
   const category = getNotificationCategory(n);
   const instructor = role === 'instructor';

@@ -1,4 +1,4 @@
-﻿import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUser } from '@/server/auth';
 import { query } from '@/server/db';
 import { expireStaleOccupancy, expireStaleRoomRequests } from '@/server/ensureRoomOccupancy';
@@ -6,7 +6,7 @@ import { expireStaleOccupancy, expireStaleRoomRequests } from '@/server/ensureRo
 export async function GET(req: NextRequest) {
   try {
     const authUser = await getAuthUser(req) as { role?: string } | null;
-    if (!authUser || (authUser.role !== 'admin' && authUser.role !== 'department_chair')) {
+    if (!authUser || (authUser.role !== 'admin' && authUser.role !== 'program_chair')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -27,9 +27,17 @@ export async function GET(req: NextRequest) {
         rcr.confirmed_at,
         rcr.created_at,
         rcr.updated_at,
-        CONCAT_WS(' ', f.first_name, f.last_name) AS faculty_name,
+        COALESCE(NULLIF(TRIM(f.name), ''), CONCAT_WS(' ', f.first_name, f.last_name)) AS faculty_name,
         orig.room_name  AS original_room_name,
         req.room_name   AS requested_room_name,
+        req.room_type   AS requested_room_type,
+        -- When the room is needed: the class session on the day it was requested
+        -- (falls back to the class's first session)
+        (SELECT json_build_object('day', ss.day_of_week, 'start_time', ss.start_time::text, 'end_time', ss.end_time::text)
+         FROM schedule_sessions ss
+         WHERE ss.master_schedule_id = rcr.master_schedule_id AND ss.start_time IS NOT NULL
+         ORDER BY (ss.day_of_week = TRIM(to_char(rcr.created_at, 'FMDay'))) DESC, ss.start_time
+         LIMIT 1) AS use_session,
         c.subject_code,
         c.subject_name,
         b.block_name,
@@ -71,6 +79,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ requests: result.rows });
   } catch (error) {
+    console.error('[GET /api/admin/room-requests]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

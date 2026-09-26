@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import {
   OFFICIAL_GROUPS,
   isEmptySlotCoveredByOccupied,
@@ -29,6 +30,8 @@ export type OfficialFormSummary = {
   unitsText: string;
   hoursText: string;
   designation: string;
+  /** Units deducted from the regular load limit for this designation (e.g. "3.00"). */
+  designationUnitsText?: string;
   specialAssignments: { key: string; description: string; units: string }[];
   preparations: string;
   totalUnitsText: string;
@@ -38,14 +41,14 @@ export type OfficialFormSummary = {
 
 export type OfficialTableVariant = 'regular' | 'overload' | 'praise';
 
-const cellBase = 'border border-[#E2E8F0] print:border-black px-1.5 py-[6px] text-sm text-[#1E3A5F] print:text-black leading-snug align-middle';
+const cellBase = 'border border-[#E2E8F0] print:border-black px-1.5 py-[6px] text-sm text-[#0B2A5B] print:text-black leading-snug align-middle';
 const cell = `${cellBase} text-center`;
-const head = 'border border-[#E2E8F0] print:border-black px-1 py-[6px] text-sm font-bold text-[#1E3A5F] print:text-black bg-[#F8FAFC] print:bg-white leading-snug text-center align-middle';
+const head = 'border border-[#E2E8F0] print:border-black px-1 py-[6px] text-sm font-bold text-[#0B2A5B] print:text-black bg-[#F8FAFC] print:bg-white leading-snug text-center align-middle';
 /** TIME/DAY: slightly tighter padding; wrap only after the en-dash when needed. */
 const timeCell =
-  'border border-[#E2E8F0] print:border-black px-1 py-[6px] text-sm text-[#1E3A5F] print:text-black leading-snug align-middle text-center';
+  'border border-[#E2E8F0] print:border-black px-1 py-[6px] text-sm text-[#0B2A5B] print:text-black leading-snug align-middle text-center';
 const timeHead =
-  'border border-[#E2E8F0] print:border-black px-1 py-[6px] text-sm font-bold text-[#1E3A5F] print:text-black bg-[#F8FAFC] print:bg-white leading-snug text-center align-middle';
+  'border border-[#E2E8F0] print:border-black px-1 py-[6px] text-sm font-bold text-[#0B2A5B] print:text-black bg-[#F8FAFC] print:bg-white leading-snug text-center align-middle';
 
 /** Controlled TIME/DAY content — keeps "7:00 AM" intact; may wrap after "–" on narrow cells. */
 function TimeDayLabel({ label }: { label: string }) {
@@ -167,7 +170,9 @@ export default function OfficialWorkloadFormTable({
   variant?: OfficialTableVariant;
   showEmptySlots?: boolean;
 }) {
+  const reduceMotion = useReducedMotion();
   const colCount = showActions ? 9 : 8;
+  const needsClassification = variant !== 'overload' && variant !== 'praise';
   const bySlot = new Map<string, OfficialFormRow[]>();
   const unmatched: OfficialFormRow[] = [];
   for (const row of rows) {
@@ -204,6 +209,47 @@ export default function OfficialWorkloadFormTable({
     occupiedByGroup.set(group.id, ranges);
   }
 
+  const colgroupEl = (
+    <colgroup>
+      {/* Tuned so 9 columns (with Action) fit a form modal at desktop width. */}
+      <col style={{ width: showActions ? '13%' : '15%' }} />
+      <col style={{ width: showActions ? '10%' : '11%' }} />
+      <col style={{ width: showActions ? '22%' : '28%' }} />
+      <col style={{ width: showActions ? '8%' : '9%' }} />
+      <col style={{ width: showActions ? '7%' : '7%' }} />
+      <col style={{ width: showActions ? '6%' : '7%' }} />
+      <col style={{ width: showActions ? '7%' : '8%' }} />
+      <col style={{ width: showActions ? '9%' : '15%' }} />
+      {showActions && <col style={{ width: '18%' }} />}
+    </colgroup>
+  );
+
+  const theadEl = (
+    <thead>
+      <tr>
+        <th className={timeHead}>TIME/DAY</th>
+        <th className={head}>Subject Code</th>
+        <th className={head}>Description</th>
+        <th className={head}>Course</th>
+        <th className={head}>No. of<br />Students</th>
+        <th className={head}>Units</th>
+        <th className={head}>No. of<br />Hours</th>
+        <th className={head}>Room No.</th>
+        {showActions && (
+          <th className={`${head} print:hidden`}>Action</th>
+        )}
+      </tr>
+    </thead>
+  );
+
+  const tableClassName = [
+    'official-workload-table w-full table-fixed border-collapse bg-white text-[#0B2A5B] print:text-black border border-[#E2E8F0] print:border-black',
+    /* Below lg: do not compress — enable internal horizontal scroll */
+    'max-lg:min-w-[960px]',
+    /* Desktop: preserve prior fill behavior */
+    'lg:min-w-0',
+  ].join(' ');
+
   /*
    * Screen layout:
    * - Desktop (lg+): table fills the modal width (unchanged).
@@ -216,43 +262,77 @@ export default function OfficialWorkloadFormTable({
       <p className="lg:hidden no-print text-xs text-slate-500 mb-1.5 leading-snug">
         Swipe left or right to view all columns
       </p>
+
+      {/* "Other" subjects — not yet classified into Workload/Overload/Praise Load.
+          Schedule details (day/time/room) are irrelevant to that decision, so this
+          is a plain classification list, not a scheduling table. The red border +
+          pulse are a status indicator (subjects pending classification) — rows fade
+          out smoothly as each one gets classified, and the whole block fades/collapses
+          away once the list is empty, instead of snapping away instantly. */}
+      <AnimatePresence initial={false}>
+        {unmatched.length > 0 && (
+          <motion.div
+            key="other-block"
+            exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+            transition={{ duration: reduceMotion ? 0 : 0.35, ease: [0.16, 1, 0.3, 1] }}
+            className="overflow-hidden print:hidden"
+            style={{ marginBottom: '1rem' }}
+          >
+            {/* On Overload / Praise the rows are already classified — they just
+                have no day/time yet, so say that instead of "Needs Classification". */}
+            <div className={`rounded-xl border bg-white overflow-hidden ${needsClassification ? 'border-red-200' : 'border-[#BFD3F5]'}`}>
+              <div className="px-4 pt-3 pb-2 border-b border-[#E2E8F0]">
+                <span className="text-sm font-bold text-[#0B2A5B]">
+                  {needsClassification
+                    ? 'Other — Needs Classification'
+                    : `${variant === 'praise' ? 'Praise Load' : 'Overload'} — No Time Slot Yet`}
+                </span>
+                <p className="text-xs text-[#64748B] mt-0.5">
+                  {needsClassification
+                    ? 'Not yet assigned to Workload, Overload, or Praise Load.'
+                    : variant === 'praise'
+                      ? 'Already in Praise Load. Subjects appear in their time slot once scheduled in Scheduling.'
+                      : 'Already in Overload. Appears in its time slot once scheduled in Scheduling.'}
+                </p>
+              </div>
+              <div className="divide-y divide-[#F1F5F9]">
+                <AnimatePresence initial={false}>
+                  {unmatched.map(row => (
+                    <motion.div
+                      key={row.key}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: reduceMotion ? 0 : 0.25, ease: [0.16, 1, 0.3, 1] }}
+                      className="overflow-hidden"
+                    >
+                      {/* Each row animates its own qr-flag-pulse instance (no shared
+                          timer/state), so multiple rows pulse independently. */}
+                      <div className={`${needsClassification ? 'qr-flag-pulse ' : ''}flex flex-wrap items-center justify-between gap-3 px-4 py-2.5`}>
+                        <div className="min-w-0">
+                          <div className="flex items-baseline gap-2 flex-wrap">
+                            <span className="font-semibold text-sm text-[#0B2A5B] whitespace-nowrap">{row.subjectCode}</span>
+                            <span className="text-sm text-[#0B2A5B]">{row.description}</span>
+                          </div>
+                          <div className="text-xs text-[#64748B] mt-0.5">
+                            {[row.course, row.units && `${row.units} units`].filter(Boolean).join(' · ')}
+                          </div>
+                        </div>
+                        {showActions && row.action && (
+                          <div className="shrink-0">{row.action}</div>
+                        )}
+                      </div>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="bg-white w-full max-w-full min-w-0 overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
-        <table
-          className={[
-            'official-workload-table w-full table-fixed border-collapse bg-white text-[#1E3A5F] print:text-black border border-[#E2E8F0] print:border-black',
-            /* Below lg: do not compress — enable internal horizontal scroll */
-            'max-lg:min-w-[960px]',
-            /* Desktop: preserve prior fill behavior */
-            'lg:min-w-0',
-          ].join(' ')}
-        >
-          <colgroup>
-            {/* Tuned so 9 columns (with Action) fit a form modal at desktop width. */}
-            <col style={{ width: showActions ? '13%' : '15%' }} />
-            <col style={{ width: showActions ? '10%' : '11%' }} />
-            <col style={{ width: showActions ? '22%' : '28%' }} />
-            <col style={{ width: showActions ? '8%' : '9%' }} />
-            <col style={{ width: showActions ? '7%' : '7%' }} />
-            <col style={{ width: showActions ? '6%' : '7%' }} />
-            <col style={{ width: showActions ? '7%' : '8%' }} />
-            <col style={{ width: showActions ? '9%' : '15%' }} />
-            {showActions && <col style={{ width: '18%' }} />}
-          </colgroup>
-          <thead>
-            <tr>
-              <th className={timeHead}>TIME/DAY</th>
-              <th className={head}>Subject Code</th>
-              <th className={head}>Description</th>
-              <th className={head}>Course</th>
-              <th className={head}>No. of<br />Students</th>
-              <th className={head}>Units</th>
-              <th className={head}>No. of<br />Hours</th>
-              <th className={head}>Room No.</th>
-              {showActions && (
-                <th className={`${head} print:hidden`}>Action</th>
-              )}
-            </tr>
-          </thead>
+        <table className={tableClassName}>
+          {colgroupEl}
+          {theadEl}
           <tbody>
             {OFFICIAL_GROUPS.map(group => {
               const groupHasRows = group.slots.some(slot => (bySlot.get(slot.id) ?? []).length > 0);
@@ -301,27 +381,6 @@ export default function OfficialWorkloadFormTable({
               );
             })}
 
-            {unmatched.length > 0 && (
-              <>
-                <tr>
-                  <td colSpan={colCount} className={`${cellBase} font-bold text-left bg-[#F8FAFC] print:bg-white`}>Other</td>
-                </tr>
-                {unmatched.map(row => (
-                  <tr key={row.key}>
-                    <td className={timeCell}>
-                      <TimeDayLabel label={row.timeLabel || ''} />
-                    </td>
-                    <DataCells row={row} />
-                    {showActions && (
-                      <td className={`${cell} print:hidden px-0.5`}>
-                        <ActionCellContent>{row.action}</ActionCellContent>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </>
-            )}
-
             {summary && variant === 'regular' && (
               <>
                 <SummaryRow
@@ -334,6 +393,7 @@ export default function OfficialWorkloadFormTable({
                 <SummaryRow
                   label="Designation"
                   description={summary.designation}
+                  units={summary.designationUnitsText}
                   showActions={showActions}
                 />
                 {specialRows.map(sa => (

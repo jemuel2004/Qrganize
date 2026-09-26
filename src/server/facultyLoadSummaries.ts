@@ -1,4 +1,5 @@
 import { query } from '@/server/db';
+import { ensurePraiseSplitColumn } from '@/server/praiseSplit';
 import {
   CONTRACTUAL_REGULAR_HOURS_LIMIT,
   REGULAR_LOAD_MAX_UNITS,
@@ -50,6 +51,7 @@ export async function loadFacultyLoadSummaries(options: {
   programId?: string;
 }): Promise<Record<number, FacultyLoadSummary>> {
   await ensureDeductionsTable();
+  await ensurePraiseSplitColumn();
 
   const semester = options.semester || '';
   const academicYear = options.academicYear || '';
@@ -70,7 +72,19 @@ export async function loadFacultyLoadSummaries(options: {
                SUM(units) AS total_units,
                SUM(hours) AS total_hours
         FROM   overloads
-        WHERE  ($1 = '' OR semester      = $1)
+        WHERE  is_praise = false
+          AND  ($1 = '' OR semester      = $1)
+          AND  ($2 = '' OR academic_year = $2)
+        GROUP  BY faculty_id
+      ),
+      -- Split Praise portions: only the Lec or Lab of a Regular subject moved to Praise
+      praise_split_agg AS (
+        SELECT faculty_id,
+               SUM(units) AS total_units,
+               SUM(hours) AS total_hours
+        FROM   overloads
+        WHERE  is_praise = true
+          AND  ($1 = '' OR semester      = $1)
           AND  ($2 = '' OR academic_year = $2)
         GROUP  BY faculty_id
       ),
@@ -114,17 +128,18 @@ export async function loadFacultyLoadSummaries(options: {
           CASE WHEN il.load_category = 'Praise' THEN
             COALESCE(c2.lecture_hours, 0) * 1.0 + COALESCE(c2.laboratory_hours, 0) * 0.75
           ELSE 0 END
-        ), 0)                                                     AS total_praise_units,
+        ), 0) + COALESCE(psa.total_units, 0)                      AS total_praise_units,
 
         COALESCE(SUM(
           CASE WHEN il.load_category = 'Praise'
             THEN COALESCE(c2.total_hours, il.hours, 0)
           ELSE 0 END
-        ), 0)                                                     AS total_praise_hours
+        ), 0) + COALESCE(psa.total_hours, 0)                      AS total_praise_hours
 
       FROM   faculty f
       LEFT   JOIN deduction_agg da  ON da.faculty_id = f.id
       LEFT   JOIN overload_agg  oa  ON oa.faculty_id = f.id
+      LEFT   JOIN praise_split_agg psa ON psa.faculty_id = f.id
       LEFT   JOIN instructor_loads il
         ON   il.faculty_id    = f.id
         AND  ($1 = '' OR il.semester      = $1)
@@ -144,7 +159,7 @@ export async function loadFacultyLoadSummaries(options: {
     params.push(programId);
   }
 
-  sql += ' GROUP BY f.id, f.employment_status, da.total_deducted, oa.total_units, oa.total_hours';
+  sql += ' GROUP BY f.id, f.employment_status, da.total_deducted, oa.total_units, oa.total_hours, psa.total_units, psa.total_hours';
 
   const result = await query(sql, params);
   const summaries: Record<number, FacultyLoadSummary> = {};

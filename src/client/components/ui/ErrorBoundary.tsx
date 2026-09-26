@@ -51,7 +51,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
           ) : null}
           <button
             onClick={() => this.reset()}
-            className="inline-flex items-center gap-2 bg-[#3C91E6] hover:bg-[#2E7DD1] text-white px-5 py-2.5 rounded-xl font-semibold text-sm transition-colors"
+            className="inline-flex items-center gap-2 bg-[#1D5BD6] hover:bg-[#2E7DD1] text-white px-5 py-2.5 rounded-xl font-semibold text-sm transition-colors"
           >
             <RefreshCw className="w-4 h-4" />
             Reload page

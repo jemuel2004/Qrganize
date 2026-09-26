@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import { transaction } from '@/server/db';
 import { chairLoginResponse, instructorLoginResponse } from '@/server/auth';
 import { isGoogleIdentity, verifyGoogleIdToken } from '@/server/verifyGoogleIdToken';
@@ -219,7 +219,7 @@ export async function POST(req: NextRequest) {
       }>(
         `SELECT id, email, google_sub, google_verified, is_active, otp_enabled, username, program_id
          FROM users
-         WHERE id = $1 AND role = 'department_chair'
+         WHERE id = $1 AND role = 'program_chair'
          FOR UPDATE`,
         [challenge.accountId]
       );
@@ -248,7 +248,7 @@ export async function POST(req: NextRequest) {
              google_verified_at = NOW(),
              google_picture = $2,
              updated_at = NOW()
-         WHERE id = $3 AND role = 'department_chair'`,
+         WHERE id = $3 AND role = 'program_chair'`,
         [identity.sub, identity.picture, challenge.accountId]
       );
 
@@ -290,7 +290,7 @@ export async function POST(req: NextRequest) {
     if (row.otp_enabled === true) {
       const trusted = await findTrustedDevice(req, 'user', row.id);
       if (trusted) {
-        const res = await chairLoginResponse(chairUser, { req, registerDevice: true });
+        const res = await chairLoginResponse(chairUser, 'program_chair', { req, registerDevice: true });
         clearEmailVerifyCookie(res);
         return res;
       }
@@ -304,15 +304,15 @@ export async function POST(req: NextRequest) {
       const otpRes = await startLoginOtp({
         accountKind: 'user',
         accountId: row.id,
-        role: 'department_chair',
+        role: 'program_chair',
         email: String(row.email ?? ''),
-        payload: { kind: 'department_chair', ...chairUser },
+        payload: { kind: 'program_chair', ...chairUser },
       });
       clearEmailVerifyCookie(otpRes);
       return otpRes;
     }
 
-    const res = await chairLoginResponse(chairUser, { req, registerDevice: true });
+    const res = await chairLoginResponse(chairUser, 'program_chair', { req, registerDevice: true });
     clearEmailVerifyCookie(res);
     return res;
   } catch (error) {

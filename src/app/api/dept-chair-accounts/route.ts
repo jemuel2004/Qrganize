@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUser } from '@/server/auth';
 import { query } from '@/server/db';
 import { DEPT_CHAIR_ACCOUNT_SELECT, ensureUsersSchema } from '@/server/ensure-users-schema';
@@ -94,7 +94,7 @@ export async function POST(req: NextRequest) {
          username, email, password_hash, role, is_active,
          program_id, google_sub, google_verified, google_verified_at, google_picture
        )
-       VALUES ($1, $2, $3, 'department_chair', true, $4, NULL, false, NULL, NULL)
+       VALUES ($1, $2, $3, 'program_chair', true, $4, NULL, false, NULL, NULL)
        RETURNING id`,
       [normalUsername, normalEmail, passwordHash, program.id]
     );

@@ -1,1047 +1,505 @@
 'use client';
 
-import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { useVisibilityAwareInterval } from '@/client/hooks/useVisibilityAwareInterval';
-import dynamic from 'next/dynamic';
-import { useToast } from '@/client/context/ToastContext';
-import {
-  XCircle,
-  RefreshCw, Users, Loader2, History,
-  ArrowRight, AlertCircle, ChevronDown,
-} from 'lucide-react';
-import { FilterSelect, SearchInput } from '@/components/ui/SearchFilter';
+/**
+ * Room Utilization — "Are the rooms actually being used as scheduled?"
+ *
+ *  • Filters: Date (centred calendar), View (Daily / Weekly / Monthly),
+ *    Room, Room Type, Refresh
+ *  • Status cards: Occupied · Available · Pending / No Scan · Overall
+ *    Utilization — the first three filter the Room Activity list
+ *  • Room Activity: scheduled vs. actual (QR check-in) per class; Expand
+ *    gives it the full width; View opens a room's own usage-history page
+ *  • Utilization Summary: hours used per room — foldable
+ */
+
+import React, { useMemo, useState } from 'react';
+import Link from 'next/link';
+import { useReducedMotion } from 'framer-motion';
+import BackButton from '@/client/components/ui/BackButton';
+import WatermarkTitle from '@/client/components/ui/WatermarkTitle';
+import CalendarModal from '@/client/components/ui/CalendarModal';
+import { FilterSelect } from '@/components/ui/SearchFilter';
 import { ListSkeleton } from '@/client/components/ui/skeletons';
 import { PageLoadTransition } from '@/client/components/ui/PageLoadTransition';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/client/hooks/useMinLoading';
+import {
+  ChevronDown, ChevronLeft, ChevronRight, DoorClosed, DoorOpen, Eye, Hourglass,
+  Maximize2, Minimize2, PieChart,
+} from 'lucide-react';
+import {
+  AnimatePresence, AutoHeight, DateButton, EASE, fmt12, fmtDate, hrs, motion, rangeLabel, RefreshButton, RoomIcon,
+  ROOM_TONE, roomStatusFor, RowStatusPill, useApplyingDate, useUtilization, WHITE,
+  type RoomStatus, type UtilRow, type View,
+} from './shared';
 
-const OVERVIEW_COLORS = {
-  available: '#3C91E6',
-  inUse: '#22C55E',
-  pending: '#F59E0B',
-} as const;
+type CardFilter = 'Occupied' | 'Available' | 'PendingNoScan' | null;
 
-const OverviewChart = dynamic(
-  () =>
-    import('@/client/components/charts/RoomUtilizationAnalyticsCharts').then(
-      m => m.RoomUtilizationOverviewChart,
-    ),
-  {
-    ssr: false,
-    loading: () => <div className="h-[200px] rounded-lg bg-[#F8FAFC] animate-pulse" />,
-  },
-);
+/* ─── Status card ───────────────────────────────────────────────────────── */
 
-const TrendChart = dynamic(
-  () =>
-    import('@/client/components/charts/RoomUtilizationAnalyticsCharts').then(
-      m => m.RoomUtilizationTrendChart,
-    ),
-  {
-    ssr: false,
-    loading: () => <div className="h-[220px] rounded-lg bg-[#F8FAFC] animate-pulse" />,
-  },
-);
-
-/* ─── Types ──────────────────────────────────────────────────── */
-interface Faculty {
-  id: number; name: string; employee_id: string;
-  position: string; employment_status: string;
-}
-interface AvailableRoom {
-  id: number; room_name: string; room_type: string;
-  building: string; capacity: number;
-}
-interface OccupancyRecord {
-  id: number; room_id: number; faculty_id: number;
-  status: 'Pending' | 'Occupied';
-  reserved_at: string; expires_at: string; occupied_at?: string;
-  scheduled_start?: string; scheduled_end?: string;
-  room_name: string; room_type: string; building: string;
-  faculty_name: string; employee_id: string;
-  current_subject?: string;
-}
-interface AnalyticsData {
-  available:  { count: number; rooms:   AvailableRoom[]    };
-  pending:    { count: number; records: OccupancyRecord[]  };
-  occupied:   { count: number; records: OccupancyRecord[]  };
-  expired:    { count: number; records: OccupancyRecord[]  };
-  most_utilized: { rooms: MostUtilizedRoom[] };
-  peak_hours: { hourly: HourlyData[]; heatmap: HeatmapCell[] };
-  summary:    { total_active_rooms: number; utilization_rate: number };
-}
-interface MostUtilizedRoom {
-  id: number; room_name: string; room_type: string;
-  building: string; capacity: number;
-  usage_count: number; total_hours: number; utilization_pct: number;
-}
-interface HourlyData { hour: number; count: number; }
-interface HeatmapCell { day_of_week: number; hour: number; scan_count: number; }
-
-/* ─── Helpers ────────────────────────────────────────────────── */
-function Countdown({ expiresAt, onExpired }: { expiresAt: string; onExpired: () => void }) {
-  const [secs, setSecs] = useState(0);
-  useEffect(() => {
-    const remaining = Math.max(0, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000));
-    setSecs(remaining);
-    if (remaining <= 0) { onExpired(); return; }
-    const t = setInterval(() => {
-      setSecs(s => {
-        if (s <= 1) { onExpired(); clearInterval(t); return 0; }
-        return s - 1;
-      });
-    }, 1000);
-    return () => clearInterval(t);
-  }, [expiresAt, onExpired]);
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
-  const urgent = secs < 120;
-  return (
-    <span className={`font-mono font-bold tabular-nums text-sm ${urgent ? 'text-red-500 animate-pulse' : 'text-amber-600'}`}>
-      {m}:{String(s).padStart(2, '0')}
-    </span>
-  );
-}
-
-function StatusPill({ status }: { status: 'Available' | 'Pending' | 'Occupied' | 'Expired' }) {
-  const cfg = {
-    Available: 'text-green-700 bg-green-50 border-green-200',
-    Pending:   'text-amber-700 bg-amber-50 border-amber-200',
-    Occupied:  'text-red-700 bg-red-50 border-red-200',
-    Expired:   'text-slate-600 bg-slate-100 border-slate-200',
-  } as const;
-  return (
-    <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-md border whitespace-nowrap ${cfg[status]}`}>
-      {status}
-    </span>
-  );
-}
-
-function fmtTime(iso: string): string {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-}
-
-function fmtTimeStr(timeStr: string | undefined | null): string {
-  if (!timeStr) return '—';
-  const [h, m] = timeStr.split(':').map(Number);
-  const ampm = h >= 12 ? 'PM' : 'AM';
-  const h12  = h % 12 || 12;
-  return `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
-}
-
-function fmtDateTime(iso: string): string {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleString('en-US', {
-    month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  });
-}
-
-const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-/* ─── Summary card ───────────────────────────────────────────── */
-function SummaryCard({
-  label, value, sub, onClick,
-}: {
-  label: string;
-  value: string | number;
-  sub?: string;
-  onClick?: () => void;
+function StatCard({ icon, label, value, total, pct, tone, active, onClick }: {
+  icon: React.ReactNode; label: string; value: React.ReactNode; total: string; pct: number;
+  tone: { bar: string; soft: string; text: string }; active?: boolean; onClick?: () => void;
 }) {
-  const className = [
-    'bg-white border border-[#E2E8F0] rounded-xl p-4 sm:p-5 text-left w-full h-full min-w-0',
-    'shadow-[0_1px_2px_rgba(15,23,42,0.04)]',
-    onClick ? 'hover:border-[#3C91E6]/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3C91E6]/30' : '',
-  ].join(' ');
-  const body = (
-    <>
-      <p className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: '#94A3B8' }}>
-        {label}
-      </p>
-      <p className="text-2xl font-bold tabular-nums mt-0.5 leading-tight" style={{ color: '#0F172A' }}>
-        {value}
-      </p>
-      {sub && (
-        <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>{sub}</p>
-      )}
-    </>
-  );
-  if (onClick) {
-    return (
-      <button type="button" onClick={onClick} className={className}>
-        {body}
-      </button>
-    );
-  }
-  return <div className={className}>{body}</div>;
-}
-
-/* ─── Status section shell ───────────────────────────────────── */
-function StatusPanel({
-  title, count, accent, children, toolbar, headerMeta, sectionRef,
-  expanded, onToggle,
-}: {
-  title: string;
-  count: number;
-  accent: 'green' | 'amber' | 'red';
-  children: React.ReactNode;
-  /** Shown in the header always (e.g. “15-min window”). */
-  headerMeta?: React.ReactNode;
-  /** Shown only when expanded (e.g. Available filters). */
-  toolbar?: React.ReactNode;
-  sectionRef?: React.RefObject<HTMLDivElement | null>;
-  expanded: boolean;
-  onToggle: () => void;
-}) {
-  const accentBar = {
-    green: 'bg-green-500',
-    amber: 'bg-amber-500',
-    red:   'bg-red-500',
-  }[accent];
-  const countCls = {
-    green: 'text-green-700 bg-green-50 border-green-200',
-    amber: 'text-amber-700 bg-amber-50 border-amber-200',
-    red:   'text-red-700 bg-red-50 border-red-200',
-  }[accent];
-
+  const reduceMotion = useReducedMotion();
+  const Tag = onClick ? motion.button : motion.div;
   return (
-    <div
-      ref={sectionRef}
-      className={[
-        'bg-white border border-[#E2E8F0] rounded-xl overflow-hidden flex flex-col shadow-[0_1px_2px_rgba(15,23,42,0.04)]',
-        expanded ? 'max-h-[420px]' : '',
-      ].join(' ')}
+    <Tag
+      type={onClick ? 'button' : undefined}
+      onClick={onClick}
+      aria-pressed={onClick ? active : undefined}
+      whileHover={onClick && !reduceMotion ? { y: -2 } : undefined}
+      whileTap={onClick && !reduceMotion ? { scale: 0.98 } : undefined}
+      className={`qr-stat-tint relative overflow-hidden text-left rounded-2xl border p-4 w-full min-w-0 transition-[border-color,box-shadow] duration-300 ${
+        active ? 'shadow-[0_10px_24px_-14px_rgba(29,91,214,0.6)]' : 'shadow-[0_2px_8px_-4px_rgba(11,42,91,0.12)]'
+      } ${onClick ? 'cursor-pointer' : ''}`}
+      // A light wash of the status colour so the card stands off the white page
+      style={{
+        background: `linear-gradient(135deg, ${tone.soft} 0%, #FFFFFF 72%)`,
+        borderColor: active ? tone.bar : `${tone.bar}40`,
+        ...(active ? { boxShadow: `0 0 0 3px ${tone.soft}` } : {}),
+      }}
     >
-      <div className={`h-0.5 w-full flex-shrink-0 ${accentBar}`} />
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={expanded}
-        aria-label={expanded ? `Collapse ${title}` : `Expand ${title}`}
-        className={[
-          'w-full px-4 py-3 flex items-center gap-2 text-left transition-colors',
-          'hover:bg-[#F8FAFC] focus-visible:outline-none focus-visible:bg-[#F8FAFC]',
-          expanded ? 'border-b border-[#F1F5F9]' : '',
-        ].join(' ')}
-      >
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <h2 className="text-sm font-bold truncate" style={{ color: '#1E3A5F' }}>{title}</h2>
-          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-md border tabular-nums flex-shrink-0 ${countCls}`}>
-            {count}
-          </span>
-          {headerMeta && (
-            <span className="inline-flex flex-shrink min-w-0 truncate">
-              {headerMeta}
-            </span>
-          )}
-        </div>
-        <span
-          className="flex-shrink-0 w-8 h-8 inline-flex items-center justify-center rounded-md"
-          style={{ color: '#94A3B8' }}
-          aria-hidden
-        >
-          <ChevronDown
-            className={`w-4 h-4 transition-transform duration-200 ${expanded ? 'rotate-180' : 'rotate-0'}`}
-          />
+      <span className="absolute inset-x-0 top-0 h-[3px]" style={{ backgroundColor: tone.bar }} aria-hidden="true" />
+      <div className="flex items-start gap-3">
+        <span className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 bg-white shadow-[0_2px_6px_-2px_rgba(11,42,91,0.15)]" style={{ color: tone.bar }}>
+          {icon}
         </span>
-      </button>
-
-      <div
-        aria-hidden={!expanded}
-        className="transition-[grid-template-rows,opacity] duration-200 ease-out"
-        style={{
-          display: 'grid',
-          gridTemplateRows: expanded ? '1fr' : '0fr',
-          opacity: expanded ? 1 : 0,
-        }}
-      >
-        <div className="overflow-hidden min-h-0">
-          {toolbar && (
-            <div className="px-4 py-2.5 border-b border-[#F1F5F9] flex items-center gap-2 flex-wrap">
-              {toolbar}
-            </div>
-          )}
-          <div className="overflow-y-auto overscroll-contain max-h-[340px]">
-            {children}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function EmptyList({ message }: { message: string }) {
-  return (
-    <div className="px-4 py-12 text-center text-sm" style={{ color: '#94A3B8' }}>
-      {message}
-    </div>
-  );
-}
-
-function RoomMeta({ type, building, capacity }: { type: string; building?: string; capacity?: number }) {
-  const parts = [type, building || null, capacity != null ? `${capacity} seats` : null].filter(Boolean);
-  return (
-    <p className="text-xs mt-0.5 break-words" style={{ color: '#64748B' }}>
-      {parts.join(' · ')}
-    </p>
-  );
-}
-
-/* ─── Main ───────────────────────────────────────────────────── */
-export default function RoomUtilizationClient() {
-  const toast = useToast();
-
-  const [faculty, setFaculty] = useState<Faculty[]>([]);
-  const [selectedFaculty, setSelectedFaculty] = useState('');
-  const [facultyLoading, setFacultyLoading] = useState(true);
-
-  const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [period, setPeriod] = useState<'weekly' | 'monthly' | 'semester'>('weekly');
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-
-  const [reserving, setReserving] = useState<number | null>(null);
-  const [releasing, setReleasing] = useState(false);
-
-  const [historyLoading, setHistoryLoading] = useState(false);
-
-  const [searchBuilding, setSearchBuilding] = useState('');
-  const [searchType, setSearchType] = useState('');
-  const [panelOpen, setPanelOpen] = useState({
-    available: true,
-    pending: false,
-    occupied: false,
-  });
-
-  const availableRef = useRef<HTMLDivElement>(null);
-  const pendingRef = useRef<HTMLDivElement>(null);
-  const occupiedRef = useRef<HTMLDivElement>(null);
-
-  const togglePanel = (key: keyof typeof panelOpen) => {
-    setPanelOpen(prev => ({ ...prev, [key]: !prev[key] }));
-  };
-
-  const openPanelAndScroll = (
-    key: keyof typeof panelOpen,
-    ref: React.RefObject<HTMLDivElement | null>,
-  ) => {
-    setPanelOpen(prev => ({ ...prev, [key]: true }));
-    requestAnimationFrame(() => {
-      ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-  };
-
-  useEffect(() => {
-    fetch('/api/faculty')
-      .then(r => r.json())
-      .then(d => {
-        const list: Faculty[] = (d.faculty || d || []).map((f: Record<string, string | number>) => ({
-          id:                f.id,
-          name:              f.name || `${f.first_name ?? ''} ${f.last_name ?? ''}`.trim(),
-          employee_id:       String(f.employee_id || f.faculty_code || ''),
-          position:          String(f.position || ''),
-          employment_status: String(f.employment_status || ''),
-        })).filter((f: Faculty) => f.name);
-        setFaculty(list);
-      })
-      .catch(() => {})
-      .finally(() => setFacultyLoading(false));
-  }, []);
-
-  const fetchAnalytics = useCallback(() => {
-    setLoading(true);
-    fetch(`/api/rooms/analytics?period=${period}`)
-      .then(r => r.json())
-      .then(d => {
-        if (!d.error) {
-          setAnalytics(d);
-          setLastUpdated(new Date());
-        }
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [period]);
-
-  useEffect(() => { fetchAnalytics(); }, [fetchAnalytics]);
-  useVisibilityAwareInterval(fetchAnalytics, 30_000);
-
-  const showUtilSkeleton = useMinLoading(loading && !analytics, PAGE_SKELETON_MIN_MS);
-
-  const fetchHistory = useCallback(() => {
-    if (!selectedFaculty) return;
-    setHistoryLoading(true);
-    fetch(`/api/rooms/occupancy?faculty_id=${selectedFaculty}&include_history=true`)
-      .then(r => r.json())
-      .catch(() => {})
-      .finally(() => setHistoryLoading(false));
-  }, [selectedFaculty]);
-
-  useEffect(() => { fetchHistory(); }, [fetchHistory]);
-
-  const myOccupancy = analytics
-    ? [...(analytics.pending.records || []), ...(analytics.occupied.records || [])]
-        .find(r => String(r.faculty_id) === String(selectedFaculty))
-    : null;
-
-  async function reserveRoom(roomId: number) {
-    if (!selectedFaculty) { toast.error('Select an instructor first.'); return; }
-    setReserving(roomId);
-    try {
-      const res  = await fetch('/api/rooms/occupancy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ room_id: roomId, faculty_id: Number(selectedFaculty) }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.error || 'Room reservation failed.');
-      } else {
-        toast.success('Room reserved! You have 15 minutes to scan the QR code.');
-        fetchAnalytics(); fetchHistory();
-      }
-    } catch { toast.error('Connection error. Please try again.'); }
-    finally { setReserving(null); }
-  }
-
-  async function releaseRoom(roomId: number) {
-    if (!selectedFaculty) return;
-    setReleasing(true);
-    try {
-      const res = await fetch('/api/rooms/occupancy', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ room_id: roomId, faculty_id: Number(selectedFaculty) }),
-      });
-      const data = await res.json();
-      if (!res.ok) { toast.error(data.error || 'Release failed.'); }
-      else { toast.success('Room released successfully.'); fetchAnalytics(); fetchHistory(); }
-    } catch { toast.error('Connection error.'); }
-    finally { setReleasing(false); }
-  }
-
-  const filteredAvailable = useMemo(() => {
-    return (analytics?.available.rooms || []).filter(r => {
-      const bOk = !searchBuilding || r.building?.toLowerCase().includes(searchBuilding.toLowerCase());
-      const tOk = !searchType || r.room_type === searchType;
-      return bOk && tOk;
-    });
-  }, [analytics?.available.rooms, searchBuilding, searchType]);
-
-  const totalRooms = analytics?.summary.total_active_rooms ?? 0;
-  const availableCount = analytics?.available.count ?? 0;
-  const pendingCount = analytics?.pending.count ?? 0;
-  const occupiedCount = analytics?.occupied.count ?? 0;
-  const utilizationRate = analytics?.summary.utilization_rate ?? 0;
-
-  const byTypeRows = useMemo(() => {
-    type Agg = { type: string; total: number; inUse: number; available: number; pending: number };
-    const map = new Map<string, Agg>();
-    const bump = (type: string, field: 'available' | 'pending' | 'inUse') => {
-      const key = type || 'Other';
-      const row = map.get(key) ?? { type: key, total: 0, inUse: 0, available: 0, pending: 0 };
-      row[field] += 1;
-      row.total += 1;
-      map.set(key, row);
-    };
-    for (const r of analytics?.available.rooms || []) bump(r.room_type, 'available');
-    for (const r of analytics?.pending.records || []) bump(r.room_type, 'pending');
-    for (const r of analytics?.occupied.records || []) bump(r.room_type, 'inUse');
-    return Array.from(map.values()).sort((a, b) => b.total - a.total);
-  }, [analytics]);
-
-  const overviewSegments = useMemo(() => [
-    { name: 'Available', value: availableCount, color: OVERVIEW_COLORS.available },
-    { name: 'In Use', value: occupiedCount, color: OVERVIEW_COLORS.inUse },
-    { name: 'Pending', value: pendingCount, color: OVERVIEW_COLORS.pending },
-  ], [availableCount, occupiedCount, pendingCount]);
-
-  const trendData = useMemo(() => {
-    // Source of truth: QR scan counts from peak_hours.heatmap (Valid/Late),
-    // aggregated by day-of-week. Rate = relative share of the busiest day in view (0–100%).
-    const scansByDay = Array.from({ length: 7 }, () => 0);
-    for (const cell of analytics?.peak_hours.heatmap || []) {
-      const dow = Number(cell.day_of_week);
-      if (dow >= 0 && dow <= 6) scansByDay[dow] += Number(cell.scan_count) || 0;
-    }
-
-    // Weekly: Mon–Fri only. Monthly/Semester keep prior Mon–Sun axis.
-    const order = period === 'weekly'
-      ? [1, 2, 3, 4, 5]
-      : [1, 2, 3, 4, 5, 6, 0];
-
-    const scoped = order.map(dow => scansByDay[dow]);
-    const max = Math.max(0, ...scoped);
-    const denom = max > 0 ? max : 1;
-
-    return order.map((dow, i) => {
-      const scans = scoped[i];
-      const raw = (scans / denom) * 100;
-      const rate = max === 0 ? 0 : Math.min(100, Math.round(raw * 100) / 100);
-      return {
-        day: DAYS_SHORT[dow],
-        scans,
-        rate,
-      };
-    });
-  }, [analytics?.peak_hours.heatmap, period]);
-
-  // All active rooms from analytics (incl. 0%); sorted high → low utilization.
-  const sortedTopRooms = useMemo(() => {
-    const list = [...(analytics?.most_utilized.rooms || [])];
-    list.sort((a, b) => {
-      const ua = Number(a.utilization_pct) || 0;
-      const ub = Number(b.utilization_pct) || 0;
-      if (ub !== ua) return ub - ua;
-      const ca = Number(a.usage_count) || 0;
-      const cb = Number(b.usage_count) || 0;
-      if (cb !== ca) return cb - ca;
-      return String(a.room_name).localeCompare(String(b.room_name), undefined, { sensitivity: 'base' });
-    });
-    return list;
-  }, [analytics?.most_utilized.rooms]);
-
-  const trendHasActivity = trendData.some(d => d.scans > 0 || d.rate > 0);
-
-  /* ─── Render ───────────────────────────────────────────────── */
-  return (
-    <div className="w-full min-w-0 p-4 sm:p-6 space-y-5">
-
-      {/* Header */}
-      <div className="flex items-start justify-between flex-wrap gap-3">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold" style={{ color: '#1E3A5F' }}>Room Utilization</h1>
-          <p className="text-sm mt-0.5" style={{ color: '#64748B' }}>
-            Overview of room usage and availability
-          </p>
+          <p className="text-[13px] font-semibold text-[#475569]">{label}</p>
+          <p className="text-2xl font-bold text-[#0B2A5B] leading-tight tabular-nums">{value}</p>
+          <p className="text-xs text-[#94A3B8]">{total}</p>
+        </div>
+      </div>
+      <div className="mt-3 flex items-center gap-2">
+        <div className="flex-1 h-1.5 rounded-full bg-[#EEF2F8] overflow-hidden">
+          <motion.div
+            className="h-full rounded-full"
+            style={{ backgroundColor: tone.bar }}
+            initial={false}
+            animate={{ width: `${pct}%` }}
+            transition={reduceMotion ? { duration: 0 } : { duration: 0.6, ease: EASE }}
+          />
+        </div>
+        <span className="text-xs font-semibold text-[#64748B] tabular-nums w-9 text-right">{pct}%</span>
+      </div>
+    </Tag>
+  );
+}
+
+/* ─── Page ──────────────────────────────────────────────────────────────── */
+
+export default function RoomUtilizationClient() {
+  const reduceMotion = useReducedMotion();
+  const [date, setDate] = useState('');            // '' = today (server clock)
+  const [view, setView] = useState<View>('daily');
+  const [roomFilter, setRoomFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
+  const [card, setCard] = useState<CardFilter>(null);
+  const [calOpen, setCalOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(true);
+  const [page, setPage] = useState(0);
+
+  const { data, loading, error, reload } = useUtilization(date, view);
+  const [applying, startApplying, applied] = useApplyingDate(loading, () => setCalOpen(false));
+  const showSkeleton = useMinLoading(loading && !data, PAGE_SKELETON_MIN_MS);
+
+  const liveDay = !!data && data.view === 'daily' && data.date === data.today;
+
+  const rooms = useMemo(() => (data?.rooms ?? [])
+    .filter(r => !roomFilter || String(r.id) === roomFilter)
+    .filter(r => !typeFilter || r.room_type === typeFilter || (typeFilter === 'Laboratory' && r.room_type === 'Computer Lab')),
+  [data, roomFilter, typeFilter]);
+
+  const statusOf = useMemo(() => {
+    const m = new Map<number, RoomStatus>();
+    for (const r of rooms) m.set(r.id, roomStatusFor(r, data?.activity ?? [], liveDay));
+    return m;
+  }, [rooms, data, liveDay]);
+
+  const counts = useMemo(() => {
+    const c = { Occupied: 0, Available: 0, Pending: 0, 'No Scan': 0 } as Record<RoomStatus, number>;
+    statusOf.forEach(s => { c[s] += 1; });
+    return c;
+  }, [statusOf]);
+  const total = rooms.length;
+  const pct = (n: number) => (total ? Math.round((n / total) * 100) : 0);
+
+  const inCard = (s: RoomStatus) =>
+    !card || (card === 'PendingNoScan' ? s === 'Pending' || s === 'No Scan' : s === card);
+
+  /* Activity rows (+ a placeholder row for a filtered room with no classes) */
+  const rows = useMemo(() => {
+    const roomIds = new Set(rooms.filter(r => inCard(statusOf.get(r.id) ?? 'Available')).map(r => r.id));
+    const list: (UtilRow & { placeholder?: boolean })[] = (data?.activity ?? []).filter(a => roomIds.has(a.room_id));
+    if (card && (data?.activity.length ?? 0) > 0) {
+      for (const r of rooms) {
+        if (!roomIds.has(r.id) || list.some(a => a.room_id === r.id)) continue;
+        list.push({
+          key: `ph-${r.id}`, date: data?.date ?? '', day: '', room_id: r.id, room_name: r.room_name, room_type: r.room_type,
+          subject_code: null, subject_name: null, component: null, block: null, faculty_id: null,
+          faculty_name: r.live_faculty, start: null, end: null, scan_time: null, late: false,
+          status: 'Upcoming', hours_scheduled: 0, hours_used: 0, placeholder: true,
+        });
+      }
+    }
+    return list;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, rooms, statusOf, card]);
+
+  const pageSize = expanded ? 20 : 8;
+  const pages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const safePage = Math.min(page, pages - 1);
+  const pageRows = rows.slice(safePage * pageSize, safePage * pageSize + pageSize);
+
+  /* Utilization summary per room */
+  const summary = useMemo(() => rooms.map(r => {
+    const mine = (data?.activity ?? []).filter(a => a.room_id === r.id);
+    const used = mine.reduce((s, a) => s + a.hours_used, 0);
+    const sched = mine.reduce((s, a) => s + a.hours_scheduled, 0);
+    const p = sched > 0 ? Math.min(100, Math.round((used / sched) * 100)) : used > 0 ? 100 : 0;
+    return { room: r, used, sched, pct: p, status: statusOf.get(r.id) ?? 'Available' };
+  }).sort((a, b) => b.used - a.used || a.room.room_name.localeCompare(b.room.room_name, undefined, { numeric: true })),
+  [rooms, data, statusOf]);
+
+  const resetPage = () => setPage(0);
+  const toggleCard = (c: CardFilter) => { setCard(cur => (cur === c ? null : c)); resetPage(); };
+  const viewQs = (roomId: number) => `/room-utilization/${roomId}?${new URLSearchParams({ date: data?.date ?? '', view })}`;
+
+  return (
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto w-full min-w-0 space-y-5">
+      {/* Header — watermark title like the other sections */}
+      <div>
+        <div className="flex items-center justify-between gap-3">
+          <BackButton />
+          <AnimatePresence>
+            {liveDay && (
+              <motion.span
+                key="live"
+                initial={reduceMotion ? false : { opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0, transition: { duration: 0.35, ease: EASE } }}
+                exit={{ opacity: 0, transition: { duration: 0.2 } }}
+                className="inline-flex items-center gap-2 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-3 py-1"
+              >
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" /> Live · {fmt12(data?.now ?? null)}
+              </motion.span>
+            )}
+          </AnimatePresence>
+        </div>
+        <div className="mt-4 sm:mt-7 mb-4">
+          <WatermarkTitle>Room Utilization</WatermarkTitle>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="bg-white rounded-2xl border border-[#E3E9F3] shadow-[0_1px_3px_rgba(11,42,91,0.06)] p-4 sm:p-5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto] gap-4 items-end">
+          <div>
+            <DateButton label={data ? rangeLabel(view, data.date, data.range) : '…'} onClick={() => setCalOpen(true)} />
+          </div>
+          <div>
+            <FilterSelect value={view} onChange={v => { setView(v as View); resetPage(); }} label="View" className="qr-ms-field">
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+            </FilterSelect>
+          </div>
+          <div>
+            <FilterSelect value={roomFilter} onChange={v => { setRoomFilter(v); resetPage(); }} label="Room" className="qr-ms-field">
+              <option value="">All Rooms</option>
+              {(data?.rooms ?? []).map(r => <option key={r.id} value={r.id}>{r.room_name}</option>)}
+            </FilterSelect>
+          </div>
+          <div>
+            <FilterSelect value={typeFilter} onChange={v => { setTypeFilter(v); resetPage(); }} label="Room Type" className="qr-ms-field">
+              <option value="">All</option>
+              <option value="Lecture">Lecture</option>
+              <option value="Laboratory">Laboratory</option>
+            </FilterSelect>
+          </div>
+          <RefreshButton onRefresh={reload} loading={loading} />
+        </div>
+        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+      </div>
+
+      <PageLoadTransition showSkeleton={showSkeleton} skeleton={<ListSkeleton rows={8} />}>
+        {/* Status cards — click to list just those rooms */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+          <StatCard icon={<DoorClosed className="w-5 h-5" />} label="Occupied Rooms" value={counts.Occupied}
+            total={`of ${total} rooms`} pct={pct(counts.Occupied)} tone={ROOM_TONE.Occupied}
+            active={card === 'Occupied'} onClick={() => toggleCard('Occupied')} />
+          <StatCard icon={<DoorOpen className="w-5 h-5" />} label="Available Rooms" value={counts.Available}
+            total={`of ${total} rooms`} pct={pct(counts.Available)} tone={ROOM_TONE.Available}
+            active={card === 'Available'} onClick={() => toggleCard('Available')} />
+          <StatCard icon={<Hourglass className="w-5 h-5" />} label="Pending / No Scan" value={counts.Pending + counts['No Scan']}
+            total={`of ${total} rooms`} pct={pct(counts.Pending + counts['No Scan'])} tone={ROOM_TONE.Pending}
+            active={card === 'PendingNoScan'} onClick={() => toggleCard('PendingNoScan')} />
+          <StatCard icon={<PieChart className="w-5 h-5" />} label="Overall Utilization" value={`${pct(counts.Occupied)}%`}
+            total={`(${counts.Occupied} of ${total} rooms)`} pct={pct(counts.Occupied)}
+            tone={{ bar: '#12408F', soft: '#EAF1FC', text: '#12408F' }} />
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex rounded-lg border border-[#E2E8F0] overflow-hidden bg-white">
-            {(['weekly', 'monthly', 'semester'] as const).map(p => (
-              <button
-                key={p}
+        <div className={`mt-5 grid gap-5 items-start ${expanded ? 'grid-cols-1' : 'grid-cols-1 xl:grid-cols-[minmax(0,1.75fr)_minmax(0,1fr)]'}`}>
+          {/* ── Room Activity ── */}
+          <motion.section layout transition={reduceMotion ? { duration: 0 } : { duration: 0.5, ease: EASE }}
+            className="bg-white rounded-2xl border border-[#E3E9F3] shadow-[0_1px_3px_rgba(11,42,91,0.06)] overflow-hidden min-w-0">
+            <motion.div layout="position" className="flex items-center gap-3 px-5 py-4 border-b border-[#EEF2F8]">
+              <div className="min-w-0 flex-1">
+                <h2 className="text-[15px] font-bold text-[#0B2A5B]">Room Activity</h2>
+                {card && (
+                  <button type="button" onClick={() => toggleCard(card)} className="mt-0.5 text-xs font-semibold text-[#1D5BD6] hover:underline">
+                    {card === 'PendingNoScan' ? 'Pending / No Scan' : card} only ✕
+                  </button>
+                )}
+              </div>
+              <motion.button
                 type="button"
-                onClick={() => setPeriod(p)}
-                className={`px-3.5 py-2 text-xs font-semibold capitalize transition ${
-                  period === p ? 'text-white' : 'hover:bg-[#F8FAFC]'
-                }`}
-                style={period === p ? { backgroundColor: '#3C91E6', color: '#ffffff' } : { color: '#64748B' }}
+                onClick={() => { setExpanded(e => !e); resetPage(); }}
+                whileTap={reduceMotion ? undefined : { scale: 0.96 }}
+                aria-pressed={expanded}
+                className="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg border border-[#BFDBFE] text-[13px] font-semibold text-[#1D5BD6] bg-white hover:bg-[#EFF6FF] transition-colors"
               >
-                {p}
-              </button>
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={fetchAnalytics}
-            className="p-2 rounded-lg border border-[#E2E8F0] bg-white hover:bg-[#F8FAFC] transition"
-            aria-label="Refresh"
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} style={{ color: '#64748B' }} />
-          </button>
-        </div>
-      </div>
+                {expanded ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                {expanded ? 'Collapse' : 'Expand'}
+              </motion.button>
+            </motion.div>
 
-      <div className="flex flex-wrap items-end gap-4">
-        <div className="w-72 max-w-full">
-          <label htmlFor="room-util-instructor" className="block text-xs font-semibold text-[#64748B] mb-1.5">
-            Instructor
-          </label>
-          {facultyLoading ? (
-            <div className="h-[42px] flex items-center">
-              <Loader2 className="w-4 h-4 animate-spin" style={{ color: '#94A3B8' }} />
-            </div>
-          ) : (
-            <div className="relative">
-              <select
-                id="room-util-instructor"
-                value={selectedFaculty}
-                onChange={e => setSelectedFaculty(e.target.value)}
-                className="w-full appearance-none bg-white border border-[#CBD5E1] rounded-xl pl-3 pr-9 py-2.5 text-sm text-[#1E3A5F] cursor-pointer hover:border-[#94A3B8] focus:outline-none focus:ring-2 focus:ring-[#3C91E6]/25 focus:border-[#3C91E6]"
-              >
-                <option value="">Choose an instructor</option>
-                {faculty.map(f => (
-                  <option key={f.id} value={f.id}>{f.name}</option>
-                ))}
-              </select>
-              <ChevronDown
-                aria-hidden
-                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#64748B]"
-              />
-            </div>
-          )}
-        </div>
-        {myOccupancy && (
-          <div className="flex items-center gap-2 pb-1 text-sm text-[#475569]">
-            <span>
-              {myOccupancy.room_name} · {myOccupancy.status}
-              {myOccupancy.status === 'Pending' && (
-                <> · <Countdown expiresAt={myOccupancy.expires_at} onExpired={fetchAnalytics} /> left</>
-              )}
-            </span>
-            <button
-              type="button"
-              onClick={() => releaseRoom(myOccupancy.room_id)}
-              disabled={releasing}
-              className="text-sm font-medium text-[#3C91E6] hover:text-[#2563EB] disabled:opacity-50"
-            >
-              Release
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4 w-full">
-        <SummaryCard
-          label="Total Rooms"
-          value={totalRooms}
-          sub="All active rooms"
-        />
-        <SummaryCard
-          label="In Use"
-          value={occupiedCount}
-          sub="Currently used"
-          onClick={() => openPanelAndScroll('occupied', occupiedRef)}
-        />
-        <SummaryCard
-          label="Available"
-          value={availableCount}
-          sub="Ready to use"
-          onClick={() => openPanelAndScroll('available', availableRef)}
-        />
-        <SummaryCard
-          label="Pending"
-          value={pendingCount}
-          sub="Reserved soon"
-          onClick={() => openPanelAndScroll('pending', pendingRef)}
-        />
-        <SummaryCard
-          label="Utilization Rate"
-          value={`${utilizationRate}%`}
-          sub="Pending + occupied now"
-        />
-      </div>
-
-      {/* Room status sections */}
-      <PageLoadTransition
-        showSkeleton={showUtilSkeleton}
-        skeleton={<ListSkeleton rows={8} />}
-      >
-        <>
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 w-full min-w-0">
-            {/* Available */}
-            <StatusPanel
-              sectionRef={availableRef}
-              title="Available Rooms"
-              count={filteredAvailable.length}
-              accent="green"
-              expanded={panelOpen.available}
-              onToggle={() => togglePanel('available')}
-              toolbar={
-                <div className="flex items-center gap-1.5 w-full sm:w-auto">
-                  <SearchInput
-                    value={searchBuilding}
-                    onChange={setSearchBuilding}
-                    placeholder="Building…"
-                    className="w-full sm:w-28 text-xs"
-                  />
-                  <FilterSelect
-                    value={searchType}
-                    onChange={setSearchType}
-                    label="Type"
-                    className="min-w-[7.5rem] text-xs"
-                  >
-                    <option value="">All types</option>
-                    <option value="Lecture">Lecture</option>
-                    <option value="Laboratory">Laboratory</option>
-                    <option value="Computer Lab">Computer Lab</option>
-                  </FilterSelect>
-                </div>
-              }
-            >
-              {filteredAvailable.length === 0 ? (
-                <EmptyList message="No available rooms match the current filters." />
-              ) : (
-                <ul className="divide-y divide-[#F1F5F9]">
-                  {filteredAvailable.map(room => (
-                    <li key={room.id} className="px-4 py-3 hover:bg-[#F8FAFC] transition-colors">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <p className="font-semibold text-sm break-words leading-snug" style={{ color: '#0F172A' }}>
-                            {room.room_name}
-                          </p>
-                          <RoomMeta type={room.room_type} building={room.building} capacity={room.capacity} />
-                        </div>
-                        <StatusPill status="Available" />
-                      </div>
-                      {selectedFaculty && (
-                        <button
-                          type="button"
-                          onClick={() => reserveRoom(room.id)}
-                          disabled={reserving === room.id || !!myOccupancy}
-                          className="mt-2.5 w-full py-1.5 rounded-lg text-white text-xs font-semibold transition flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90"
-                          style={{ backgroundColor: '#3C91E6', color: '#ffffff' }}
-                        >
-                          {reserving === room.id
-                            ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Reserving…</>
-                            : myOccupancy
-                              ? 'Already reserved'
-                              : <><ArrowRight className="w-3.5 h-3.5" /> Reserve</>
-                          }
-                        </button>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </StatusPanel>
-
-            {/* Pending */}
-            <StatusPanel
-              sectionRef={pendingRef}
-              title="Pending Rooms"
-              count={pendingCount}
-              accent="amber"
-              expanded={panelOpen.pending}
-              onToggle={() => togglePanel('pending')}
-              headerMeta={
-                <span className="text-[11px] flex items-center gap-1" style={{ color: '#94A3B8' }}>
-                  <AlertCircle className="w-3 h-3" /> 15-min window
-                </span>
-              }
-            >
-              {(analytics?.pending.records || []).length === 0 ? (
-                <EmptyList message="No pending reservations." />
-              ) : (
-                <ul className="divide-y divide-[#F1F5F9]">
-                  {(analytics?.pending.records || []).map(rec => (
-                    <li key={rec.id} className="px-4 py-3 hover:bg-[#F8FAFC] transition-colors">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <p className="font-semibold text-sm break-words leading-snug" style={{ color: '#0F172A' }}>
-                            {rec.room_name}
-                          </p>
-                          <RoomMeta type={rec.room_type} building={rec.building} />
-                          <p className="text-xs mt-1 flex items-center gap-1" style={{ color: '#64748B' }}>
-                            <Users className="w-3 h-3 flex-shrink-0" />
-                            <span className="break-words">{rec.faculty_name}</span>
-                          </p>
-                          <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>
-                            Expires in <Countdown expiresAt={rec.expires_at} onExpired={fetchAnalytics} />
-                          </p>
-                        </div>
-                        <StatusPill status="Pending" />
-                      </div>
-                      {selectedFaculty && String(rec.faculty_id) === String(selectedFaculty) && (
-                        <button
-                          type="button"
-                          onClick={() => releaseRoom(rec.room_id)}
-                          disabled={releasing}
-                          className="mt-2.5 w-full py-1.5 rounded-lg border border-red-200 text-red-600 text-xs font-semibold hover:bg-red-50 transition"
-                        >
-                          Cancel reservation
-                        </button>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </StatusPanel>
-
-            {/* Occupied */}
-            <StatusPanel
-              sectionRef={occupiedRef}
-              title="Occupied Rooms"
-              count={occupiedCount}
-              accent="red"
-              expanded={panelOpen.occupied}
-              onToggle={() => togglePanel('occupied')}
-            >
-              {(analytics?.occupied.records || []).length === 0 ? (
-                <EmptyList message="No rooms currently occupied." />
-              ) : (
-                <ul className="divide-y divide-[#F1F5F9]">
-                  {(analytics?.occupied.records || []).map(rec => {
-                    const occupiedSince = rec.occupied_at ? fmtTime(rec.occupied_at) : fmtTime(rec.reserved_at);
-                    const endsAt = rec.scheduled_end
-                      ? fmtTimeStr(rec.scheduled_end)
-                      : fmtTime(rec.expires_at);
-                    return (
-                      <li key={rec.id} className="px-4 py-3 hover:bg-[#F8FAFC] transition-colors">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0 flex-1">
-                            <p className="font-semibold text-sm break-words leading-snug" style={{ color: '#0F172A' }}>
-                              {rec.room_name}
-                            </p>
-                            <RoomMeta type={rec.room_type} building={rec.building} />
-                            <p className="text-xs mt-1 flex items-center gap-1" style={{ color: '#64748B' }}>
-                              <Users className="w-3 h-3 flex-shrink-0" />
-                              <span className="break-words">{rec.faculty_name}</span>
-                            </p>
-                            {rec.current_subject && (
-                              <p className="text-xs mt-0.5 break-words" style={{ color: '#3C91E6' }}>
-                                {rec.current_subject}
-                              </p>
-                            )}
-                            <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>
-                              Since {occupiedSince} · Ends {endsAt}
-                            </p>
-                          </div>
-                          <StatusPill status="Occupied" />
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </StatusPanel>
-          </div>
-
-          {/* Analytics */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 w-full min-w-0">
-            <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 sm:p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-              <h2 className="text-sm font-bold mb-1" style={{ color: '#1E3A5F' }}>
-                Room Utilization Overview
-              </h2>
-              <p className="text-xs mb-4" style={{ color: '#94A3B8' }}>
-                Current status across active rooms
-              </p>
-              <OverviewChart segments={overviewSegments} total={totalRooms} />
-            </div>
-
-            <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 sm:p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-              <h2 className="text-sm font-bold mb-1" style={{ color: '#1E3A5F' }}>
-                Room Utilization by Type
-              </h2>
-              <p className="text-xs mb-4" style={{ color: '#94A3B8' }}>
-                Breakdown from live room status
-              </p>
-              {byTypeRows.length === 0 ? (
-                <EmptyList message="No room type data." />
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm min-w-[420px]">
-                    <thead>
-                      <tr className="text-left text-[11px] uppercase tracking-wide border-b border-[#F1F5F9]" style={{ color: '#94A3B8' }}>
-                        <th className="pb-2 font-semibold">Room Type</th>
-                        <th className="pb-2 font-semibold text-right">Total</th>
-                        <th className="pb-2 font-semibold text-right">In Use</th>
-                        <th className="pb-2 font-semibold text-right">Available</th>
-                        <th className="pb-2 font-semibold pl-3">Utilization</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[#F1F5F9]">
-                      {byTypeRows.map(row => {
-                        const rate = row.total > 0
-                          ? Math.round(((row.inUse + row.pending) / row.total) * 100)
-                          : 0;
-                        return (
-                          <tr key={row.type}>
-                            <td className="py-2.5 font-medium break-words" style={{ color: '#0F172A' }}>{row.type}</td>
-                            <td className="py-2.5 text-right tabular-nums" style={{ color: '#64748B' }}>{row.total}</td>
-                            <td className="py-2.5 text-right tabular-nums" style={{ color: '#64748B' }}>{row.inUse}</td>
-                            <td className="py-2.5 text-right tabular-nums" style={{ color: '#64748B' }}>{row.available}</td>
-                            <td className="py-2.5 pl-3 min-w-[120px]">
-                              <div className="flex items-center gap-2">
-                                <div className="flex-1 h-1.5 rounded-full bg-[#F1F5F9] overflow-hidden">
-                                  <div
-                                    className="h-full rounded-full bg-green-500"
-                                    style={{ width: `${rate}%` }}
-                                  />
-                                </div>
-                                <span className="text-xs font-semibold tabular-nums w-9 text-right" style={{ color: '#1E3A5F' }}>
-                                  {rate}%
-                                </span>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                      <tr className="border-t border-[#E2E8F0]">
-                        <td className="py-2.5 font-bold" style={{ color: '#1E3A5F' }}>Total</td>
-                        <td className="py-2.5 text-right font-bold tabular-nums" style={{ color: '#1E3A5F' }}>{totalRooms}</td>
-                        <td className="py-2.5 text-right font-bold tabular-nums" style={{ color: '#1E3A5F' }}>{occupiedCount}</td>
-                        <td className="py-2.5 text-right font-bold tabular-nums" style={{ color: '#1E3A5F' }}>{availableCount}</td>
-                        <td className="py-2.5 pl-3">
-                          <span className="text-xs font-bold tabular-nums" style={{ color: '#1E3A5F' }}>
-                            {utilizationRate}%
-                          </span>
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-
-            <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 sm:p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] h-full flex flex-col min-h-[280px]">
-              <h2 className="text-sm font-bold mb-1" style={{ color: '#1E3A5F' }}>
-                Utilization Trend
-              </h2>
-              <p className="text-xs" style={{ color: '#94A3B8' }}>
-                Relative scan activity by day ({period})
-              </p>
-              {!trendHasActivity && (
-                <p className="text-[11px] mt-1 mb-1" style={{ color: '#CBD5E1' }}>
-                  No usage recorded yet
-                </p>
-              )}
-              <div className={`flex-1 min-h-[220px] ${trendHasActivity ? 'mt-2' : 'mt-1'}`}>
-                <TrendChart data={trendData} />
-              </div>
-            </div>
-
-            <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 sm:p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] h-full flex flex-col min-h-[280px]">
-              <div className="flex-shrink-0">
-                <h2 className="text-sm font-bold mb-1" style={{ color: '#1E3A5F' }}>
-                  Top Room Usage
-                </h2>
-                <p className="text-xs mb-3" style={{ color: '#94A3B8' }}>
-                  Most used rooms this {period}
-                </p>
-              </div>
-              {sortedTopRooms.length === 0 ? (
-                <p className="text-sm py-6" style={{ color: '#94A3B8' }}>
-                  No rooms available.
-                </p>
-              ) : (
-                <ul
-                  className="divide-y divide-[#F1F5F9] overflow-y-auto overscroll-contain -mx-1 px-1 flex-1"
-                  style={{ maxHeight: 260 }}
+            <AutoHeight>
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.div
+                  key={`${card}|${roomFilter}|${typeFilter}|${data?.date}|${view}|${safePage}|${expanded}`}
+                  initial={reduceMotion ? false : { opacity: 0 }}
+                  animate={{ opacity: 1, transition: { duration: 0.3, ease: EASE } }}
+                  exit={reduceMotion ? { opacity: 0 } : { opacity: 0, transition: { duration: 0.2, ease: EASE } }}
                 >
-                  {sortedTopRooms.map(room => {
-                    const displayPct = Math.min(100, Math.max(0, Number(room.utilization_pct) || 0));
-                    const sessions = Number(room.usage_count) || 0;
-                    return (
-                      <li key={room.id} className="py-2.5 first:pt-0">
-                        <div className="flex items-start justify-between gap-2 mb-1">
-                          <div className="min-w-0">
-                            <p className="text-sm font-semibold break-words leading-snug" style={{ color: '#0F172A' }}>
-                              {room.room_name}
-                            </p>
-                            <p className="text-xs break-words mt-0.5" style={{ color: '#94A3B8' }}>
-                              {room.room_type}{room.building ? ` · ${room.building}` : ''}
-                              {' · '}{sessions} session{sessions === 1 ? '' : 's'}
-                            </p>
-                          </div>
-                          <span className="text-xs font-bold tabular-nums flex-shrink-0" style={{ color: '#1E3A5F' }}>
-                            {displayPct}%
-                          </span>
-                        </div>
-                        <div className="h-1.5 rounded-full bg-[#F1F5F9] overflow-hidden">
-                          <div
-                            className="h-full rounded-full"
-                            style={{ width: `${displayPct}%`, backgroundColor: '#3C91E6' }}
-                          />
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-          </div>
-
-          {/* Expired (compact) */}
-          {(analytics?.expired.records || []).length > 0 && (
-            <div className="bg-white border border-[#E2E8F0] rounded-xl overflow-hidden shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-              <div className="px-4 py-3 border-b border-[#F1F5F9] flex items-center gap-2">
-                <XCircle className="w-4 h-4" style={{ color: '#94A3B8' }} />
-                <h2 className="text-sm font-bold" style={{ color: '#1E3A5F' }}>Expired Reservations</h2>
-                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md border border-slate-200 bg-slate-50 text-slate-600">
-                  Last 24 hours · {analytics?.expired.count ?? 0}
-                </span>
-              </div>
-              <div className="overflow-x-auto max-h-56 overflow-y-auto">
-                <table className="w-full text-sm min-w-[560px]">
-                  <thead>
-                    <tr className="text-left text-[11px] uppercase tracking-wide border-b border-[#F1F5F9] bg-[#F8FAFC]" style={{ color: '#94A3B8' }}>
-                      <th className="px-4 py-2 font-semibold">Room</th>
-                      <th className="px-4 py-2 font-semibold">Instructor</th>
-                      <th className="px-4 py-2 font-semibold">Reserved</th>
-                      <th className="px-4 py-2 font-semibold">Expired</th>
-                      <th className="px-4 py-2 font-semibold text-center">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#F1F5F9]">
-                    {(analytics?.expired.records || []).map(rec => (
-                      <tr key={rec.id} className="hover:bg-[#F8FAFC]">
-                        <td className="px-4 py-2">
-                          <div className="font-medium break-words" style={{ color: '#0F172A' }}>{rec.room_name}</div>
-                          <div className="text-xs" style={{ color: '#94A3B8' }}>{rec.building}</div>
-                        </td>
-                        <td className="px-4 py-2" style={{ color: '#64748B' }}>{rec.faculty_name}</td>
-                        <td className="px-4 py-2" style={{ color: '#64748B' }}>{fmtDateTime(rec.reserved_at)}</td>
-                        <td className="px-4 py-2 text-red-500 font-mono text-xs">{fmtDateTime(rec.expires_at)}</td>
-                        <td className="px-4 py-2 text-center"><StatusPill status="Expired" /></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* Personal history when instructor selected */}
-          {selectedFaculty && (
-            <div className="bg-white border border-[#E2E8F0] rounded-xl overflow-hidden shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-              <div className="px-4 py-3 border-b border-[#F1F5F9] flex items-center gap-2 flex-wrap">
-                <History className="w-4 h-4" style={{ color: '#64748B' }} />
-                <h2 className="text-sm font-bold" style={{ color: '#1E3A5F' }}>Instructor Room History</h2>
-                <span className="text-xs px-2 py-0.5 rounded-md bg-[#F8FAFC] border border-[#E2E8F0]" style={{ color: '#64748B' }}>
-                  {faculty.find(f => String(f.id) === selectedFaculty)?.name}
-                </span>
-              </div>
-              {historyLoading ? (
-                <div className="py-10 flex justify-center">
-                  <Loader2 className="w-5 h-5 animate-spin" style={{ color: '#94A3B8' }} />
-                </div>
-              ) : (analytics?.expired.records || []).filter(r => String(r.faculty_id) === selectedFaculty).length === 0 && !myOccupancy ? (
-                <EmptyList message="No room usage history for this instructor." />
-              ) : (
-                <ul className="divide-y divide-[#F1F5F9]">
-                  {myOccupancy && (
-                    <li className="px-4 py-3 flex items-center justify-between gap-3 bg-[#F8FAFC]">
-                      <div className="min-w-0">
-                        <p className="font-semibold text-sm break-words" style={{ color: '#0F172A' }}>{myOccupancy.room_name}</p>
-                        <p className="text-xs" style={{ color: '#94A3B8' }}>
-                          {myOccupancy.building} · Reserved at {fmtTime(myOccupancy.reserved_at)}
-                        </p>
+                  {pageRows.length === 0 ? (
+                    <div className="px-5 py-14 text-center">
+                      <p className="text-sm font-semibold text-[#0B2A5B]">
+                        No classes scheduled {view === 'daily' && data ? `on ${fmtDate(data.date, { weekday: 'long' })}` : 'in this period'}
+                      </p>
+                      {data?.next_class_date && (
+                        <motion.button
+                          type="button"
+                          onClick={() => { setDate(data.next_class_date!); setView('daily'); resetPage(); }}
+                          whileHover={reduceMotion ? undefined : { y: -1 }}
+                          whileTap={reduceMotion ? undefined : { scale: 0.97 }}
+                          className="mt-3 inline-flex items-center gap-1.5 h-9 px-4 rounded-lg border border-[#BFDBFE] bg-white text-[13px] font-semibold text-[#1D5BD6] hover:bg-[#EFF6FF] transition-colors"
+                        >
+                          Next class day · {fmtDate(data.next_class_date, { weekday: 'short', month: 'short', day: 'numeric' })}
+                          <ChevronRight className="w-4 h-4" />
+                        </motion.button>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      {/* Desktop table */}
+                      <div className="hidden md:block overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="bg-[#F8FAFC] border-b border-[#EEF2F8] text-left text-[12px] font-semibold text-[#475569]">
+                              <th className="px-5 py-3">Room</th>
+                              <th className="px-3 py-3">Schedule</th>
+                              <th className="px-3 py-3">Instructor</th>
+                              <th className="px-3 py-3">QR Scan</th>
+                              <th className="px-3 py-3">Status</th>
+                              <th className="px-5 py-3 text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {pageRows.map((r, i) => (
+                              <motion.tr
+                                key={r.key}
+                                initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+                                animate={{ opacity: 1, y: 0, transition: { duration: 0.4, ease: EASE, delay: reduceMotion ? 0 : 0.05 + i * 0.04 } }}
+                                className="border-b border-[#F1F5F9] last:border-0 hover:bg-[#F8FBFF] transition-colors"
+                              >
+                                <td className="px-5 py-3">
+                                  <div className="flex items-center gap-2.5">
+                                    <span className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                                      r.room_type === 'Lecture' ? 'bg-[#EFF6FF] text-[#1D5BD6]' : 'bg-amber-50 text-amber-600'
+                                    }`}>
+                                      <RoomIcon type={r.room_type} className="w-4 h-4" />
+                                    </span>
+                                    <span className="font-semibold text-[#0B2A5B] whitespace-nowrap">{r.room_name}</span>
+                                  </div>
+                                </td>
+                                <td className="px-3 py-3">
+                                  {r.placeholder ? (
+                                    <span className="text-[#94A3B8]">No classes</span>
+                                  ) : (
+                                    <>
+                                      <p className="font-medium text-[#0B2A5B] whitespace-nowrap">
+                                        {view !== 'daily' && <span className="text-[#64748B]">{fmtDate(r.date, { weekday: 'short', month: 'short', day: 'numeric' })} · </span>}
+                                        {fmt12(r.start)}{r.end ? ` – ${fmt12(r.end)}` : ''}
+                                      </p>
+                                      <p className="text-xs text-[#64748B] truncate max-w-[220px]">
+                                        {r.subject_code ? `${r.subject_code}${r.component === 'lab' ? ' Lab' : ''} · ${r.block}` : 'Walk-in (no class scheduled)'}
+                                      </p>
+                                    </>
+                                  )}
+                                </td>
+                                <td className="px-3 py-3 text-[#334155] whitespace-nowrap">{r.faculty_name || '—'}</td>
+                                <td className="px-3 py-3">
+                                  {r.scan_time ? (
+                                    <>
+                                      <p className="font-semibold text-[#0B2A5B] tabular-nums">{fmt12(r.scan_time)}</p>
+                                      <p className={`text-xs ${r.late ? 'text-amber-600' : 'text-emerald-600'}`}>● {r.late ? 'Late' : 'Scanned'}</p>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <p className="text-[#94A3B8]">—</p>
+                                    </>
+                                  )}
+                                </td>
+                                <td className="px-3 py-3">
+                                  {r.placeholder
+                                    ? <span className="inline-flex text-[11px] font-semibold px-2.5 py-0.5 rounded-full border" style={{ backgroundColor: ROOM_TONE[statusOf.get(r.room_id) ?? 'Available'].soft, color: ROOM_TONE[statusOf.get(r.room_id) ?? 'Available'].text, borderColor: ROOM_TONE[statusOf.get(r.room_id) ?? 'Available'].bar + '55' }}>{statusOf.get(r.room_id)}</span>
+                                    : <RowStatusPill status={r.status} />}
+                                </td>
+                                <td className="px-5 py-3 text-right">
+                                  <Link href={viewQs(r.room_id)}
+                                    className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[#D6E0EF] text-[13px] font-semibold text-[#0B2A5B] hover:border-[#9DB8E8] hover:text-[#1D5BD6] hover:bg-[#F8FBFF] transition-colors">
+                                    <Eye className="w-3.5 h-3.5" /> View
+                                  </Link>
+                                </td>
+                              </motion.tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
-                      <StatusPill status={myOccupancy.status} />
-                    </li>
+
+                      {/* Mobile cards */}
+                      <ul className="md:hidden divide-y divide-[#F1F5F9]">
+                        {pageRows.map(r => (
+                          <li key={r.key} className="p-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="font-semibold text-[#0B2A5B]">{r.room_name}</p>
+                                <p className="text-xs text-[#64748B] mt-0.5">
+                                  {r.placeholder ? 'No classes' : `${view !== 'daily' ? fmtDate(r.date, { weekday: 'short', month: 'short', day: 'numeric' }) + ' · ' : ''}${fmt12(r.start)}${r.end ? ` – ${fmt12(r.end)}` : ''}`}
+                                </p>
+                                {!r.placeholder && <p className="text-xs text-[#64748B]">{r.subject_code ? `${r.subject_code} · ${r.block}` : 'Walk-in'} · {r.faculty_name || '—'}</p>}
+                                <p className="text-xs mt-1 text-[#475569]">QR: {r.scan_time ? `${fmt12(r.scan_time)}${r.late ? ' (late)' : ''}` : '—'}</p>
+                              </div>
+                              <div className="flex flex-col items-end gap-2">
+                                {!r.placeholder && <RowStatusPill status={r.status} />}
+                                <Link href={viewQs(r.room_id)} className="text-[13px] font-semibold text-[#1D5BD6]">View</Link>
+                              </div>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
                   )}
-                  {(analytics?.expired.records || [])
-                    .filter(r => String(r.faculty_id) === selectedFaculty)
-                    .slice(0, 8)
-                    .map(rec => (
-                      <li key={rec.id} className="px-4 py-3 flex items-center justify-between gap-3 hover:bg-[#F8FAFC]">
-                        <div className="min-w-0">
-                          <p className="font-medium text-sm break-words" style={{ color: '#64748B' }}>{rec.room_name}</p>
-                          <p className="text-xs" style={{ color: '#94A3B8' }}>{rec.building} · {fmtDateTime(rec.reserved_at)}</p>
-                        </div>
-                        <StatusPill status="Expired" />
-                      </li>
-                    ))}
-                </ul>
+                </motion.div>
+              </AnimatePresence>
+            </AutoHeight>
+
+            {/* Footer + pagination */}
+            {pages > 1 && (
+            <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-[#EEF2F8] text-[13px] text-[#64748B]">
+              <span>{`${safePage * pageSize + 1}–${Math.min(rows.length, (safePage + 1) * pageSize)} of ${rows.length}`}</span>
+              {(
+                <div className="flex items-center gap-1">
+                  <button type="button" disabled={safePage === 0} onClick={() => setPage(p => p - 1)} aria-label="Previous page"
+                    className="w-8 h-8 rounded-lg border border-[#D6E0EF] flex items-center justify-center disabled:opacity-40 hover:bg-[#F8FBFF]"><ChevronLeft className="w-4 h-4" /></button>
+                  {Array.from({ length: pages }, (_, i) => i).slice(Math.max(0, safePage - 2), Math.max(0, safePage - 2) + 5).map(i => (
+                    <button key={i} type="button" onClick={() => setPage(i)}
+                      className={`w-8 h-8 rounded-lg text-[13px] font-semibold transition-colors ${i === safePage ? 'bg-[#1D5BD6]' : 'border border-[#D6E0EF] text-[#0B2A5B] hover:bg-[#F8FBFF]'}`}
+                      style={i === safePage ? WHITE : undefined}>{i + 1}</button>
+                  ))}
+                  <button type="button" disabled={safePage >= pages - 1} onClick={() => setPage(p => p + 1)} aria-label="Next page"
+                    className="w-8 h-8 rounded-lg border border-[#D6E0EF] flex items-center justify-center disabled:opacity-40 hover:bg-[#F8FBFF]"><ChevronRight className="w-4 h-4" /></button>
+                </div>
               )}
             </div>
-          )}
-        </>
+            )}
+          </motion.section>
+
+          {/* ── Utilization Summary (foldable) ── */}
+          <AnimatePresence initial={false}>
+            {!expanded && (
+              <motion.section
+                key="summary"
+                initial={reduceMotion ? false : { opacity: 0, x: 16 }}
+                animate={{ opacity: 1, x: 0, transition: { duration: 0.45, ease: EASE, delay: reduceMotion ? 0 : 0.15 } }}
+                exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: 16, transition: { duration: 0.25, ease: EASE } }}
+                className="bg-white rounded-2xl border border-[#E3E9F3] shadow-[0_1px_3px_rgba(11,42,91,0.06)] overflow-hidden min-w-0"
+              >
+                <button
+                  type="button"
+                  onClick={() => setSummaryOpen(o => !o)}
+                  aria-expanded={summaryOpen}
+                  className={`w-full flex items-center gap-3 px-5 py-4 text-left hover:bg-[#F8FBFF] transition-colors border-b ${summaryOpen ? 'border-[#EEF2F8]' : 'border-transparent'}`}
+                >
+                  <div className="min-w-0 flex-1">
+                    <h2 className="text-[15px] font-bold text-[#0B2A5B]">Room Utilization Summary</h2>
+                  </div>
+                  <motion.span animate={{ rotate: summaryOpen ? 180 : 0 }} transition={{ duration: 0.4, ease: EASE }}
+                    className="w-8 h-8 rounded-full border border-[#D6E0EF] flex items-center justify-center text-[#1D5BD6]">
+                    <ChevronDown className="w-4 h-4" />
+                  </motion.span>
+                </button>
+                <AnimatePresence initial={false}>
+                  {summaryOpen && (
+                    <motion.div
+                      key="body"
+                      initial={reduceMotion ? false : { height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1, transition: { duration: 0.45, ease: EASE } }}
+                      exit={reduceMotion ? { opacity: 0 } : { height: 0, opacity: 0, transition: { duration: 0.35, ease: EASE } }}
+                      className="overflow-hidden"
+                    >
+                      <ul className="px-5 py-3 space-y-3.5 max-h-[460px] overflow-y-auto">
+                        {summary.map(s => (
+                          <li key={s.room.id}>
+                            <div className="flex items-baseline justify-between gap-2">
+                              <Link href={viewQs(s.room.id)} className="text-sm font-semibold text-[#0B2A5B] hover:text-[#1D5BD6] truncate">{s.room.room_name}</Link>
+                              <span className="text-xs font-semibold text-[#0B2A5B] tabular-nums whitespace-nowrap">
+                                {hrs(s.used)} <span className="text-[#94A3B8] font-medium">({s.pct}%)</span>
+                              </span>
+                            </div>
+                            <div className="mt-1.5 h-2 rounded-full bg-[#EEF2F8] overflow-hidden">
+                              <motion.div
+                                className="h-full rounded-full"
+                                style={{ backgroundColor: ROOM_TONE[s.status].bar }}
+                                initial={false}
+                                animate={{ width: `${Math.max(s.pct, s.used > 0 ? 4 : 0)}%` }}
+                                transition={reduceMotion ? { duration: 0 } : { duration: 0.6, ease: EASE }}
+                              />
+                            </div>
+                          </li>
+                        ))}
+                        {summary.length === 0 && <li className="text-sm text-[#94A3B8] py-6 text-center">No rooms.</li>}
+                      </ul>
+                      <div className="px-5 pb-4">
+                        <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-[11px] text-[#64748B] pt-3 border-t border-[#F1F5F9]">
+                          {(['Occupied', 'Available', 'Pending', 'No Scan'] as RoomStatus[]).map(s => (
+                            <span key={s} className="inline-flex items-center gap-1.5">
+                              <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: ROOM_TONE[s].bar }} /> {s}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </motion.section>
+            )}
+          </AnimatePresence>
+        </div>
       </PageLoadTransition>
 
-      <div className="flex items-center justify-between gap-3 flex-wrap pb-1 pt-1">
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-          <span className="text-xs" style={{ color: '#94A3B8' }}>Auto-refreshes every 30 seconds</span>
-        </div>
-        {lastUpdated && (
-          <span className="text-xs" style={{ color: '#94A3B8' }}>
-            Last updated {lastUpdated.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-          </span>
-        )}
-      </div>
+
+      <CalendarModal
+        open={calOpen}
+        value={data?.date ?? new Date().toISOString().slice(0, 10)}
+        today={data?.today ?? new Date().toISOString().slice(0, 10)}
+        highlight={view === 'weekly' ? 'week' : view === 'monthly' ? 'month' : 'day'}
+        onClose={() => setCalOpen(false)}
+        applying={applying}
+        success={applied}
+        onApply={d => { setDate(d); resetPage(); startApplying(); }}
+      />
     </div>
   );
 }

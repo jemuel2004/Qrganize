@@ -2,6 +2,7 @@
 import { query } from '@/server/db';
 import { getAuthUser } from '@/server/auth';
 import { REGULAR_LOAD_MAX_UNITS } from '@/lib/regularLoad';
+import { canAccessProgram } from '@/server/programScope';
 
 /* Module-level guard — DDL runs once per cold start, never on every request */
 let tableReady = false;
@@ -31,9 +32,17 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    const auth = await getAuthUser(req) as { role?: string; program_id?: number | null } | null;
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    if (auth.role === 'program_chair') {
+      const { id: fid } = await params;
+      const ownerCheck = await query('SELECT program_id FROM faculty WHERE id = $1', [fid]);
+      if (ownerCheck.rows.length === 0) return NextResponse.json({ error: 'Faculty not found.' }, { status: 404 });
+      if (!(await canAccessProgram(auth, ownerCheck.rows[0].program_id))) {
+        return NextResponse.json({ error: 'Faculty not found.' }, { status: 404 });
+      }
     }
 
     await ensureTable();
@@ -63,9 +72,17 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const authPost = await getAuthUser(req) as { role?: string } | null;
-    if (!authPost || !['admin', 'department_chair'].includes(authPost.role ?? '')) {
+    const authPost = await getAuthUser(req) as { role?: string; program_id?: number | null } | null;
+    if (!authPost || !['admin', 'department_chair', 'program_chair'].includes(authPost.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    if (authPost.role === 'program_chair') {
+      const { id: fid } = await params;
+      const ownerCheck = await query('SELECT program_id FROM faculty WHERE id = $1', [fid]);
+      if (ownerCheck.rows.length === 0) return NextResponse.json({ error: 'Faculty not found.' }, { status: 404 });
+      if (!(await canAccessProgram(authPost, ownerCheck.rows[0].program_id))) {
+        return NextResponse.json({ error: 'Faculty not found.' }, { status: 404 });
+      }
     }
 
     await ensureTable();

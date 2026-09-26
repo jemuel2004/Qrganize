@@ -24,10 +24,15 @@ export async function PATCH(
         UPDATE notifications SET is_read = true
         WHERE id = $1 AND recipient_role = 'admin'
       `, [nid]);
-    } else if (authUser.role === 'department_chair' && authUser.id) {
+    } else if (authUser.role === 'department_chair') {
       await query(`
         UPDATE notifications SET is_read = true
-        WHERE id = $1 AND recipient_role = 'department_chair' AND recipient_id = $2
+        WHERE id = $1 AND recipient_role = 'department_chair'
+      `, [nid]);
+    } else if (authUser.role === 'program_chair' && authUser.id) {
+      await query(`
+        UPDATE notifications SET is_read = true
+        WHERE id = $1 AND recipient_role = 'program_chair' AND recipient_id = $2
       `, [nid, authUser.id]);
     } else if (authUser.role === 'instructor' && authUser.faculty_id) {
       await query(`

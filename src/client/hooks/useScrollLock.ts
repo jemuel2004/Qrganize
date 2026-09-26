@@ -30,17 +30,26 @@ function topModalRoot(): HTMLElement | null {
   return roots.length ? roots[roots.length - 1] : null;
 }
 
+/**
+ * Popovers/dropdowns opened from inside a modal (e.g. a custom listbox) are
+ * often portaled straight to document.body so they can escape the modal's
+ * clipping/stacking context. That makes them DOM *siblings* of the modal,
+ * not descendants — so `[data-modal-root]`/`[role="dialog"]` alone won't
+ * recognize them as "inside". Anything portaled that way should carry
+ * data-scroll-portal so the lock still allows scrolling/typing inside it.
+ */
 export function isInsideModal(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return Boolean(
     target.closest('[data-modal-root]')
-    || target.closest('[role="dialog"][aria-modal="true"]'),
+    || target.closest('[role="dialog"][aria-modal="true"]')
+    || target.closest('[data-scroll-portal]'),
   );
 }
 
 function canScrollInside(start: EventTarget | null, deltaX: number, deltaY: number): boolean {
   if (!(start instanceof Element)) return false;
-  const root = start.closest('[data-modal-root], [role="dialog"][aria-modal="true"]');
+  const root = start.closest('[data-modal-root], [role="dialog"][aria-modal="true"], [data-scroll-portal]');
   if (!root) return false;
 
   let node: Element | null = start;

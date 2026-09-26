@@ -6,6 +6,9 @@ import { useToast } from '@/client/context/ToastContext';
 import { useSchoolYear } from '@/client/context/SchoolYearContext';
 import { SearchInput, FilterSelect, FilterBar } from '@/components/ui/SearchFilter';
 import Modal from '@/client/components/ui/Modal';
+import BackButton from '@/client/components/ui/BackButton';
+import WatermarkTitle from '@/client/components/ui/WatermarkTitle';
+import TrashDropAnimation from '@/client/components/ui/TrashDropAnimation';
 import OfficialWorkloadFormTable, { type OfficialFormRow } from '@/client/components/OfficialWorkloadFormTable';
 import {
   matchOfficialSlot,
@@ -18,7 +21,9 @@ import { openWorkloadPrintableVersion } from '@/lib/openPrintHtmlDocument';
 import { coerceSubjectCategory } from '@/lib/subjectCategory';
 import { REGULAR_LOAD_MAX_UNITS } from '@/lib/regularLoad';
 import { blockCurriculumVersion, curriculumVersionAbbrev } from '@/lib/curriculumVersion';
-import { ListSkeleton } from '@/client/components/ui/skeletons';
+import { ListSkeleton, Skeleton, TableSkeleton } from '@/client/components/ui/skeletons';
+import { PageLoadTransition } from '@/client/components/ui/PageLoadTransition';
+import { EmploymentBadge } from '@/client/components/ui/EmploymentBadge';
 import { LOADING_DELAY, useMinLoading } from '@/client/hooks/useMinLoading';
 import {
   Plus, X, AlertTriangle,
@@ -26,6 +31,7 @@ import {
   Trash2, ArrowUpCircle, ArrowDownCircle, ArrowRight, ArrowLeft,
 } from 'lucide-react';
 
+interface PrioritySubject { subject_code: string; subject_name: string; }
 interface Faculty {
   id: number; name: string; employee_id: string; position: string; employment_status: string;
   designation_type: string; designation_units: number;
@@ -34,6 +40,8 @@ interface Faculty {
   educational_qualification: string | null;
   major: string | null;
   eligibility: string | null;
+  specialization: string | null;
+  priority_subjects?: PrioritySubject[];
 }
 interface FacultySummary {
   current_load: number;
@@ -99,6 +107,8 @@ interface WorkloadLoad {
   lec_room_name: string | null; lab_room_name: string | null;
   day_pattern: string | null; start_time: string | null; end_time: string | null;
   split_overload_units?: number; split_overload_hours?: number;
+  /** The split-off Lec/Lab portion is Praise Load, not Overload. */
+  split_is_praise?: boolean;
   overload_component?: string;
   lec_scheduled?: boolean; lab_scheduled?: boolean;
   lec_start_time?: string | null; lec_end_time?: string | null;
@@ -374,6 +384,7 @@ export default function WorkloadPage({
   const appliedFacultyQuery = useRef<string | null>(null);
 
   const [faculty, setFaculty] = useState<Faculty[]>([]);
+  const [facultyListLoading, setFacultyListLoading] = useState(true);
   const [programs, setPrograms] = useState<Program[]>([]);
   const [allBlocks, setAllBlocks] = useState<Block[]>([]);
   const [search, setSearch] = useState('');
@@ -440,6 +451,8 @@ export default function WorkloadPage({
   const [praiseLoading, setPraiseLoading] = useState(false);
   const [deletePraiseTarget, setDeletePraiseTarget] = useState<{ id: number; praise_type: string } | null>(null);
   const [deletingPraise, setDeletingPraise]         = useState(false);
+  const [deletePraiseSuccess, setDeletePraiseSuccess] = useState(false);
+  const [showPraiseDeleteSkeleton, setShowPraiseDeleteSkeleton] = useState(false);
 
   /* Return to Regular Load modal */
   const [returnToRegularTarget, setReturnToRegularTarget] = useState<WorkloadLoad | null>(null);
@@ -450,6 +463,14 @@ export default function WorkloadPage({
 
   const [moveToPraiseConfirm, setMoveToPraiseConfirm] = useState<{ ids: number[]; total: number } | null>(null);
   const [moveToPraiseProcessing, setMoveToPraiseProcessing] = useState(false);
+
+  /* Praise Load directly from an unclassified ("Other") subject — chains
+     move-to-overload then move-to-praise behind one confirmation, since the
+     API only allows reclassifying an existing Overload row as Praise. */
+  const [praiseFromOtherTarget, setPraiseFromOtherTarget] = useState<WorkloadLoad | null>(null);
+  /** Lec or Lab only (Lec+Lab subject) — like Overload, the other component stays Regular. */
+  const [praiseFromOtherComponent, setPraiseFromOtherComponent] = useState<'lec' | 'lab' | 'full'>('full');
+  const [praiseFromOtherProcessing, setPraiseFromOtherProcessing] = useState(false);
   const [returnToOverloadConfirm, setReturnToOverloadConfirm] = useState<{ ids: number[]; total: number } | null>(null);
   const [returnToOverloadProcessing, setReturnToOverloadProcessing] = useState(false);
 
@@ -467,8 +488,23 @@ export default function WorkloadPage({
   const [deductionMsg, setDeductionMsg] = useState('');
   const [subjectSearch, setSubjectSearch] = useState('');
   const [subjectCategory, setSubjectCategory] = useState<'Minor' | 'Major'>('Minor');
+  const [categorySwitching, setCategorySwitching] = useState(false);
+  const categorySwitchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showInstructorDropdown, setShowInstructorDropdown] = useState(false);
   const instructorDropRef = useRef<HTMLDivElement>(null);
+
+  /* Purely client-side filter switch, but a brief skeleton makes the tab feel
+     responsive/interactive instead of an instant, jarring swap. */
+  function handleSubjectCategoryChange(cat: 'Minor' | 'Major') {
+    if (cat === subjectCategory) return;
+    setSubjectCategory(cat);
+    setCategorySwitching(true);
+    if (categorySwitchTimeout.current) clearTimeout(categorySwitchTimeout.current);
+    categorySwitchTimeout.current = setTimeout(() => setCategorySwitching(false), 2000);
+  }
+  useEffect(() => () => {
+    if (categorySwitchTimeout.current) clearTimeout(categorySwitchTimeout.current);
+  }, []);
 
   const loadBlocks = useCallback(() => {
     fetch('/api/blocks')
@@ -485,6 +521,7 @@ export default function WorkloadPage({
   }, []);
 
   const loadFacultyList = useCallback(() => {
+    setFacultyListLoading(true);
     fetch('/api/faculty')
       .then(async r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -495,7 +532,8 @@ export default function WorkloadPage({
       })
       .catch(err => {
         console.warn('[workload] loadFacultyList failed:', err instanceof Error ? err.message : err);
-      });
+      })
+      .finally(() => setFacultyListLoading(false));
   }, []);
 
   useEffect(() => {
@@ -633,13 +671,14 @@ export default function WorkloadPage({
       const split = permanent
         ? (parseFloat(String(l.split_overload_units)) || 0) > 0.001
         : (parseFloat(String(l.split_overload_hours)) || 0) > 0.001;
-      if (split) n += 1;
+      if (split && !l.split_is_praise) n += 1;
     }
     return n;
   }
 
   function countPraiseEntries(loads: WorkloadLoad[], praiseRows: unknown[]): number {
-    return loads.filter(l => l.load_category === 'Praise').length + praiseRows.length;
+    return loads.filter(l => l.load_category === 'Praise' || (l.load_category === 'Regular' && l.split_is_praise)).length
+      + praiseRows.length;
   }
 
   /**
@@ -782,7 +821,12 @@ export default function WorkloadPage({
 
       if (!res.ok) { setAssignError(data.error || 'Failed to assign subject'); toast.error(data.error || 'Failed to assign subject.'); return; }
       setAssignMsg(data.message || 'Subject assigned successfully.');
-      toast.success('Subject assigned successfully.');
+      const remainingNote = typeof data.remaining === 'number' && data.unit
+        ? (data.remaining < -0.001
+          ? ` ${Math.abs(data.remaining).toFixed(2)} ${data.unit} over the regular limit.`
+          : ` ${data.remaining.toFixed(2)} ${data.unit} remaining.`)
+        : '';
+      toast.success(`Subject assigned successfully.${remainingNote}`);
       setRemainingBalanceWarning(null);
       setOverloadConfirm(null);
       loadWorkload(); loadAllFacultyLoads(); loadAvailable(); loadFacultySummaries(); loadBlocks();
@@ -942,6 +986,84 @@ export default function WorkloadPage({
     }
   }
 
+  /* Unclassified ("Other") subjects are stored as Regular, but move-to-praise
+     only accepts subjects already in Overload — so this flags the subject as
+     a full Overload first, then immediately reclassifies it as Praise Load. */
+  async function confirmPraiseFromOther() {
+    if (!selectedFaculty || !praiseFromOtherTarget) return;
+    setPraiseFromOtherProcessing(true);
+    try {
+      const load = praiseFromOtherTarget;
+      if (praiseFromOtherComponent !== 'full') {
+        const res = await fetch('/api/workload/move-to-praise', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            faculty_id: selectedFaculty.id,
+            master_schedule_id: load.ms_id,
+            component: praiseFromOtherComponent,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          toast.error(data.error || 'Failed to move to Praise Load.');
+          return;
+        }
+        toast.success(data.message || 'Moved to Praise Load.');
+        setPraiseFromOtherTarget(null);
+        await Promise.all([loadAllFacultyLoads(), loadWorkload()]);
+        loadFacultySummaries();
+        return;
+      }
+      const overloadRes = await fetch('/api/workload/move-to-overload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          faculty_id: selectedFaculty.id,
+          master_schedule_id: load.ms_id,
+          component: 'full',
+        }),
+      });
+      const overloadData = await overloadRes.json();
+      if (!overloadRes.ok) {
+        toast.error(overloadData.error || 'Failed to classify subject.');
+        return;
+      }
+
+      const praiseRes = await fetch('/api/workload/move-to-praise', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          faculty_id: selectedFaculty.id,
+          master_schedule_ids: [load.ms_id],
+        }),
+      });
+      const praiseData = await praiseRes.json();
+      if (!praiseRes.ok) {
+        toast.error(praiseData.error || 'Failed to move subject to Praise Load.');
+        return;
+      }
+
+      toast.success('Subject moved to Praise Load.');
+      setPraiseFromOtherTarget(null);
+      const [freshAll, freshWorkload] = await Promise.all([
+        loadAllFacultyLoads(),
+        loadWorkload(),
+      ]);
+      loadFacultySummaries();
+      const isP = selectedFaculty.employment_status === 'Permanent';
+      syncWorkloadModalTab({
+        current: workloadModalTab,
+        overloadCount: countOverloadEntries(freshAll, isP),
+        praiseCount: countPraiseEntries(freshAll, freshWorkload?.praise ?? []),
+      });
+    } catch {
+      toast.error('Connection error. Please try again.');
+    } finally {
+      setPraiseFromOtherProcessing(false);
+    }
+  }
+
   function requestReturnToOverload(loads: WorkloadLoad[], msIds: number[]) {
     const unique = [...new Set(msIds.filter(id => Number.isInteger(id) && id > 0))];
     const movable = loads.filter(l => unique.includes(l.ms_id) && l.load_category === 'Praise');
@@ -1090,8 +1212,9 @@ export default function WorkloadPage({
       );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error((data as { error?: string }).error || 'Delete failed');
-      toast.success('Praise Load removed successfully.');
-      setDeletePraiseTarget(null);
+      setDeletingPraise(false);
+      setDeletePraiseSuccess(true);
+      setShowPraiseDeleteSkeleton(true);
 
       const [freshAll, freshWorkload] = await Promise.all([
         loadAllFacultyLoads(),
@@ -1105,6 +1228,14 @@ export default function WorkloadPage({
         overloadCount: countOverloadEntries(freshAll, isPermanent),
         praiseCount: countPraiseEntries(freshAll, freshWorkload?.praise ?? []),
       });
+
+      setTimeout(() => {
+        setDeletePraiseSuccess(false);
+        setShowPraiseDeleteSkeleton(false);
+        setDeletePraiseTarget(null);
+        toast.success('Praise Load removed successfully.');
+      }, 1300);
+      return;
     } catch (err) {
       console.error('[handleDeletePraise]', err);
       toast.error('Failed to remove Praise Load. Please try again.');
@@ -1226,6 +1357,8 @@ export default function WorkloadPage({
       setSelectedFaculty(updated);
       setDesignationPending(null);
       setDeductionMsg('Load deduction saved. Workload updated.');
+      const availableLoad = Math.max(0, REGULAR_LOAD_MAX_UNITS - (Number(data.total_deduction) || 0));
+      toast.success(`Load deduction saved successfully. ${availableLoad.toFixed(2)} units remaining.`);
       loadWorkload();
       loadAllFacultyLoads();
       loadFacultySummaries();
@@ -1277,11 +1410,24 @@ export default function WorkloadPage({
     /* Exceeded: teaching load (current_load) surpasses the available slot (regular_load_limit = REGULAR_LOAD_MAX_UNITS - deduction) */
     const exceeded = Math.max(0, s.current_load - s.regular_load_limit);
     if (exceeded > 0.001)          return { label: 'Exceeded',    dot: 'bg-red-500',    text: 'text-red-400'    } as const;
-    if (s.has_overload)            return { label: 'Has Overload', dot: 'bg-purple-500', text: 'text-purple-400' } as const;
+    if (s.has_overload)            return { label: 'Has Overload', dot: 'bg-orange-500', text: 'text-orange-500' } as const;
     if (s.remaining_load <= 0.001) return { label: 'Full Load',   dot: 'bg-amber-500',  text: 'text-amber-400'  } as const;
     const pct = s.regular_load_limit > 0 ? s.remaining_load / s.regular_load_limit : 1;
     if (pct <= 0.3)                return { label: 'Near Limit',  dot: 'bg-yellow-400', text: 'text-yellow-400' } as const;
     return                                { label: 'Available',   dot: 'bg-emerald-500', text: 'text-emerald-400' } as const;
+  }
+
+  /**
+   * Lower = higher priority: instructors whose units/hours are not yet
+   * complete come first, then those over the limit. Faculty with no summary
+   * data yet sort after those but before "complete".
+   */
+  function workloadProblemPriority(s: FacultySummary | undefined): number {
+    if (!s) return 2;
+    const remaining = s.remaining_load;
+    if (remaining > 0.001)  return 0; // not yet complete
+    if (remaining < -0.001) return 1; // exceeded the limit
+    return 3;                          // exactly complete — no problem
   }
 
   const filteredFaculty = faculty
@@ -1294,11 +1440,28 @@ export default function WorkloadPage({
       return matchesSearch && matchesType;
     })
     .sort((a, b) => {
+      const sa = facultySummaries[a.id];
+      const sb = facultySummaries[b.id];
+      const pa = workloadProblemPriority(sa);
+      const pb = workloadProblemPriority(sb);
+      if (pa !== pb) return pa - pb;
+      // Permanent (units) before Contractual (hours) within each group
+      const permA = a.employment_status === 'Permanent' ? 0 : 1;
+      const permB = b.employment_status === 'Permanent' ? 0 : 1;
+      if (permA !== permB) return permA - permB;
+      if (pa === 0) {
+        // Incomplete: lowest current units/hours first
+        const loadA = sa?.current_load ?? 0;
+        const loadB = sb?.current_load ?? 0;
+        if (Math.abs(loadA - loadB) > 0.001) return loadA - loadB;
+      }
+      const devA = Math.abs(sa?.remaining_load ?? 0);
+      const devB = Math.abs(sb?.remaining_load ?? 0);
+      if (Math.abs(devA - devB) > 0.001) return devB - devA; // bigger shortfall/excess first
       if (filterEmploymentType === 'Permanent') {
         const ra = POSITION_RANK[a.position] ?? 99;
         const rb = POSITION_RANK[b.position] ?? 99;
         if (ra !== rb) return ra - rb;
-        return a.name.localeCompare(b.name);
       }
       return a.name.localeCompare(b.name);
     });
@@ -1342,7 +1505,7 @@ export default function WorkloadPage({
         // Component-specific split: show Split only on the split component row, Regular on the other
         if (rowType === oc) {
           return (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-purple-500/20 text-purple-400 border border-purple-500/30">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-orange-500/15 text-orange-600 border border-orange-500/30">
               <ArrowUpCircle className="w-3 h-3" /> Split
             </span>
           );
@@ -1356,7 +1519,7 @@ export default function WorkloadPage({
       // Full / single-component split: show Split on first (lec) row only
       if (hasBoth2 && rowType === 'lab') return null;
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-purple-500/20 text-purple-400 border border-purple-500/30">
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-orange-500/15 text-orange-600 border border-orange-500/30">
           <ArrowUpCircle className="w-3 h-3" /> Split
         </span>
       );
@@ -1372,35 +1535,81 @@ export default function WorkloadPage({
   }
 
 
+  /* Priority Subjects — a visual recommendation from the instructor's profile,
+     not an assignment restriction. Any subject can still be assigned. */
+  const priorityCodes = new Set((selectedFaculty?.priority_subjects ?? []).map(p => p.subject_code));
+
   /* Subject-table client-side search — scoped to the active Major/Minor tab */
   const categorySchedules = availableSchedules.filter(s =>
     coerceSubjectCategory(s.subject_category, 'Minor') === subjectCategory
   );
-  const displaySchedules = categorySchedules.filter(s =>
-    !subjectSearch ||
-    s.subject_code.toLowerCase().includes(subjectSearch.toLowerCase()) ||
-    s.subject_name.toLowerCase().includes(subjectSearch.toLowerCase())
-  );
+  const displaySchedules = categorySchedules
+    .filter(s =>
+      !subjectSearch ||
+      s.subject_code.toLowerCase().includes(subjectSearch.toLowerCase()) ||
+      s.subject_name.toLowerCase().includes(subjectSearch.toLowerCase())
+    )
+    /* Priority subjects surface to the top — stable sort keeps each group's
+       original relative order intact, so this only reorders priority vs not. */
+    .slice()
+    .sort((a, b) => Number(priorityCodes.has(b.subject_code)) - Number(priorityCodes.has(a.subject_code)));
   const showSubjectsSkeleton = useMinLoading(availLoading, LOADING_DELAY);
+  const showFacultyListSkeleton = useMinLoading(facultyListLoading, LOADING_DELAY);
+  /* Tab switch is instant client-side filtering — only the list area fakes a
+     brief load so it feels responsive; the tabs/search/badge stay visible
+     throughout so the tab pill itself doesn't vanish mid-switch. */
+  const showListSkeleton = showSubjectsSkeleton || categorySwitching || showPraiseDeleteSkeleton;
 
   return (
-    <div className="p-4 sm:p-6 max-w-7xl mx-auto w-full min-w-0 space-y-5">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto w-full min-w-0">
+      <PageLoadTransition
+        showSkeleton={showFacultyListSkeleton}
+        className="space-y-5"
+        skeleton={
+          <div className="space-y-5" role="status" aria-live="polite" aria-label="Loading faculty workload">
+            {/* Header skeleton */}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+              <div className="space-y-2 min-w-0">
+                <Skeleton className="h-7 w-48 rounded-md" />
+                <Skeleton className="h-4 w-72 max-w-full rounded" />
+              </div>
+              <Skeleton className="h-10 w-40 rounded-xl flex-shrink-0" />
+            </div>
+
+            {/* Filter card skeleton */}
+            <div className="bg-white rounded-2xl border border-[#E2E8F0]/70 shadow-sm p-5">
+              <div className="mb-4 space-y-1.5">
+                <Skeleton className="h-4 w-16 rounded" />
+                <Skeleton className="h-3 w-56 rounded" />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-4">
+                {['lg:col-span-2', 'lg:col-span-3', 'lg:col-span-3', 'lg:col-span-2', 'lg:col-span-2'].map((span, i) => (
+                  <div key={i} className={`min-w-0 space-y-1.5 ${span}`}>
+                    <Skeleton className="h-3 w-20 rounded" />
+                    <Skeleton className="h-[42px] w-full rounded-xl" />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Select Subject card skeleton */}
+            <div className="bg-[var(--surface-elevated)] rounded-2xl border border-[#E2E8F0]/70 shadow-sm overflow-hidden">
+              <ListSkeleton rows={6} />
+            </div>
+          </div>
+        }
+      >
       {/* -- Page Header ------------------------------------------------------- */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6 min-w-0">
         <div className="min-w-0">
-          <h1 className="text-[22px] sm:text-[26px] font-bold tracking-tight text-[#1E3A5F] leading-tight">
-            Faculty Workload
-          </h1>
-          <p className="text-sm text-[#65676B] mt-1 max-w-xl">
-            Assign an instructor to each block subject before scheduling.
-          </p>
+          <BackButton />
         </div>
         <div className="flex flex-wrap items-center gap-2 sm:justify-end sm:flex-shrink-0">
           {selectedFaculty && isPermanent && (
             <button
               type="button"
               onClick={() => openDeductionModal(selectedFaculty)}
-              className="inline-flex items-center justify-center gap-1.5 px-3.5 min-h-10 rounded-xl text-sm font-semibold border border-[#E2E8F0] bg-[var(--surface-elevated)] text-[#1E3A5F] hover:bg-[var(--background-secondary)] transition-colors"
+              className="inline-flex items-center justify-center gap-1.5 px-3.5 min-h-10 rounded-xl text-sm font-semibold border border-[#E2E8F0] bg-[var(--surface-elevated)] text-[#0B2A5B] hover:bg-[var(--background-secondary)] transition-colors"
             >
               <Pencil className="w-3.5 h-3.5" />
               Edit Deduction
@@ -1414,7 +1623,7 @@ export default function WorkloadPage({
                 setPraiseError('');
                 setPraiseModalOpen(true);
               }}
-              className="inline-flex items-center justify-center gap-1.5 px-3.5 min-h-10 rounded-xl text-sm font-semibold border border-[#E2E8F0] bg-[var(--surface-elevated)] text-[#1E3A5F] hover:bg-[var(--background-secondary)] transition-colors"
+              className="inline-flex items-center justify-center gap-1.5 px-3.5 min-h-10 rounded-xl text-sm font-semibold border border-[#E2E8F0] bg-[var(--surface-elevated)] text-[#0B2A5B] hover:bg-[var(--background-secondary)] transition-colors"
             >
               <Award className="w-3.5 h-3.5" />
               Add Praise Load
@@ -1431,7 +1640,7 @@ export default function WorkloadPage({
             className={[
               'inline-flex items-center justify-center gap-2 px-4 min-h-10 rounded-xl text-sm font-semibold transition-colors',
               selectedFaculty
-                ? 'bg-[#3C91E6] text-white hover:bg-[#2E7DD1]'
+                ? 'bg-[#1D5BD6] text-white hover:bg-[#2E7DD1]'
                 : 'bg-[#E4E6EB] text-[#64748B] cursor-not-allowed border border-[#D1D5DB]',
             ].join(' ')}
             title={selectedFaculty ? 'View assigned workload' : 'Select an instructor first'}
@@ -1441,13 +1650,12 @@ export default function WorkloadPage({
           </button>
         </div>
       </div>
+      <div className="mt-4 sm:mt-7 mb-10">
+        <WatermarkTitle>Faculty Workload</WatermarkTitle>
+      </div>
 
       {/* -- Filter Card: Instructor → Program → Year → Block ------------------ */}
       <FilterBar className="relative z-20 min-w-0 overflow-visible mb-0">
-        <div className="mb-4">
-          <p className="text-sm font-semibold text-[#1E3A5F]">Filter by</p>
-          <p className="text-xs text-slate-400 mt-0.5">Instructor, then program, year level, and block</p>
-        </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-4">
 
@@ -1475,7 +1683,7 @@ export default function WorkloadPage({
               <div className={`flex items-center gap-2 rounded-xl px-3 min-h-[42px] py-2.5 transition-all duration-200 ${
                 selectedFaculty
                   ? 'bg-white shadow-[0_1px_3px_rgba(0,0,0,0.05)] hover:bg-slate-50 focus-within:shadow-[0_2px_12px_rgba(0,0,0,0.09)]'
-                  : 'bg-slate-100 hover:bg-slate-200/60 focus-within:bg-white focus-within:shadow-[0_2px_12px_rgba(0,0,0,0.09)]'
+                  : `bg-slate-100 hover:bg-slate-200/60 focus-within:bg-white focus-within:shadow-[0_2px_12px_rgba(0,0,0,0.09)] ${!search ? 'qr-guide-pulse' : ''}`
               }`}>
                 <input
                   value={selectedFaculty ? selectedFaculty.name : search}
@@ -1532,7 +1740,13 @@ export default function WorkloadPage({
                       >
                         <div className="flex items-center justify-between gap-2">
                           <div className="min-w-0">
-                            <div className="font-semibold text-slate-800 text-sm break-words">{f.name}</div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-semibold text-slate-800 text-sm break-words">{f.name}</span>
+                              <EmploymentBadge status={f.employment_status} />
+                            </div>
+                            {f.specialization && (
+                              <div className="text-xs text-[#1D5BD6] mt-0.5 break-words">{f.specialization}</div>
+                            )}
                             <div className="text-xs text-slate-500 mt-0.5">{f.employee_id}{f.program_code ? ` · ${f.program_code}` : ''}</div>
                           </div>
                           {status && (
@@ -1543,7 +1757,7 @@ export default function WorkloadPage({
                           )}
                         </div>
                         {fSummary && (
-                          <div className="mt-1 text-xs text-slate-400">{current.toFixed(2)} / {limit} {unit}</div>
+                          <div className="mt-1 text-xs text-slate-400">Current Load: {current.toFixed(2)} / {Math.round(limit)} {unit}</div>
                         )}
                       </button>
                     );
@@ -1566,7 +1780,7 @@ export default function WorkloadPage({
               onChange={handleProgramChange}
               disabled={!instructorSelected}
               label="Program"
-              className="w-full min-h-[42px]"
+              className={`w-full min-h-[42px] ${instructorSelected && !filterProgram ? 'qr-guide-pulse' : ''}`}
             >
               <option value="">
                 {instructorSelected ? '— Select Program —' : 'Select an instructor first'}
@@ -1586,7 +1800,7 @@ export default function WorkloadPage({
               onChange={handleYearLevelChange}
               disabled={!filterProgram}
               label="Year Level"
-              className="w-full min-h-[42px]"
+              className={`w-full min-h-[42px] ${filterProgram && !filterYearLevel ? 'qr-guide-pulse' : ''}`}
             >
               <option value="">— Select Year Level —</option>
               {programYearLevels.map(yl => (
@@ -1604,7 +1818,7 @@ export default function WorkloadPage({
               onChange={handleBlockChange}
               disabled={!filterYearLevel}
               label="Block"
-              className="w-full min-h-[42px]"
+              className={`w-full min-h-[42px] ${filterYearLevel && !filterBlock ? 'qr-guide-pulse' : ''}`}
             >
               <option value="">— Select Block —</option>
               {filteredBlocks
@@ -1623,9 +1837,12 @@ export default function WorkloadPage({
 
 
       {/* Select Subject */}
-          <div className="bg-[var(--surface-elevated)] rounded-2xl border border-[#E2E8F0]/70 shadow-sm overflow-hidden">
+          <div
+            key={selectedFaculty ? `faculty-${selectedFaculty.id}` : 'instructor-list'}
+            className="bg-[var(--surface-elevated)] rounded-2xl border border-[#E2E8F0]/70 shadow-sm overflow-hidden qr-content-fade-in"
+          >
             {selectedFaculty && (
-              <div className="bg-[#3C91E6] px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <div className="bg-[#1D5BD6] px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                 <div className="min-w-0">
                   <div className="font-bold text-base text-white leading-tight break-words">Select Subject</div>
                   <div className="text-sm mt-0.5 font-medium text-white/85">Pick a subject to assign to this instructor</div>
@@ -1643,26 +1860,27 @@ export default function WorkloadPage({
                 <div
                   role="tablist"
                   aria-label="Subject category"
-                  className="relative grid grid-cols-2 p-1 rounded-xl bg-[#F1F5F9] border border-[#E2E8F0]"
+                  className="grid grid-cols-2 gap-3"
                 >
-                  <span
-                    aria-hidden
-                    className={`pointer-events-none absolute top-1 bottom-1 left-1 w-[calc(50%-4px)] rounded-lg bg-[#3C91E6] shadow-sm transition-transform duration-200 ease-out ${
-                      subjectCategory === 'Major' ? 'translate-x-full' : 'translate-x-0'
-                    }`}
-                  />
                   {(['Minor', 'Major'] as const).map(cat => {
                     const active = subjectCategory === cat;
+                    // Major = light blue, Minor = gray. Selected tab is filled;
+                    // the other stays white with a tinted outline.
+                    const tone = cat === 'Major'
+                      ? active
+                        ? 'bg-[#DCE8FB] border-[#8FB3EE] text-[#12408F] shadow-sm ring-2 ring-[#1D5BD6]/15'
+                        : 'bg-white border-[#BFD3F5] text-[#1D5BD6] hover:bg-[#EAF1FC]'
+                      : active
+                        ? 'bg-[#E2E8F0] border-[#94A3B8] text-[#334155] shadow-sm ring-2 ring-[#64748B]/15'
+                        : 'bg-white border-[#E2E8F0] text-[#64748B] hover:bg-[#F1F5F9]';
                     return (
                       <button
                         key={cat}
                         type="button"
                         role="tab"
                         aria-selected={active}
-                        onClick={() => setSubjectCategory(cat)}
-                        className={`relative z-10 min-h-[44px] px-2 sm:px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold whitespace-nowrap transition-colors duration-200 ${
-                          active ? 'text-white' : 'text-[#64748B]'
-                        }`}
+                        onClick={() => handleSubjectCategoryChange(cat)}
+                        className={`min-h-[44px] px-2 sm:px-3 py-2 rounded-xl border text-xs sm:text-sm font-semibold whitespace-nowrap transition-colors duration-200 ${tone}`}
                       >
                         {cat} Subjects
                       </button>
@@ -1679,14 +1897,86 @@ export default function WorkloadPage({
             )}
 
             {!selectedFaculty ? (
-              <div className="py-14 px-8 text-center">
-                <p className="text-sm text-[#64748B]">No instructor selected.</p>
-              </div>
+              filteredFaculty.length === 0 ? (
+                <div className="py-14 px-8 text-center">
+                  <p className="text-sm text-[#64748B]">No instructors found.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-[#F8FAFC] text-xs font-semibold text-[#64748B] uppercase tracking-wide border-b border-[#E2E8F0]">
+                        <th className="px-6 py-3 text-left">Instructor</th>
+                        <th className="px-6 py-3 text-left">Program</th>
+                        <th className="px-6 py-3 text-left">Status</th>
+                        <th className="px-6 py-3 text-left">Load</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredFaculty.map(f => {
+                        const fSummary = facultySummaries[f.id];
+                        const status   = fSummary ? getFacultyStatus(fSummary) : null;
+                        const isP      = f.employment_status === 'Permanent';
+                        const unit     = isP ? 'units' : 'hrs';
+                        const limit    = fSummary?.regular_load_limit ?? 0;
+                        const current  = fSummary?.current_load ?? 0;
+                        return (
+                          <tr
+                            key={f.id}
+                            onClick={() => {
+                              selectFaculty(f);
+                              if (f.employment_status === 'Permanent') void openDeductionModal(f);
+                            }}
+                            className="cursor-pointer hover:bg-slate-50 active:bg-slate-100 transition-colors duration-200"
+                          >
+                            <td className="px-6 py-3">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-semibold text-slate-800">{f.name}</span>
+                                <EmploymentBadge status={f.employment_status} />
+                              </div>
+                              {f.specialization && (
+                                <div className="text-xs text-[#1D5BD6] mt-0.5">{f.specialization}</div>
+                              )}
+                              <div className="text-xs text-slate-500 mt-0.5">{f.employee_id}</div>
+                            </td>
+                            <td className="px-6 py-3 text-slate-600">{f.program_code || '—'}</td>
+                            <td className="px-6 py-3">
+                              {status ? (
+                                <span className="inline-flex items-center gap-1.5">
+                                  <span className={`w-2 h-2 rounded-full ${status.dot}`} />
+                                  <span className={`text-xs font-medium ${status.text}`}>{status.label}</span>
+                                </span>
+                              ) : (
+                                <span className="text-xs text-slate-400">—</span>
+                              )}
+                            </td>
+                            <td className="px-6 py-3 tabular-nums">
+                              {fSummary ? (() => {
+                                const incomplete = workloadProblemPriority(fSummary) !== 3;
+                                return (
+                                  <span
+                                    className={incomplete ? 'qr-attention-dot font-bold text-red-600' : 'text-slate-600'}
+                                    title={incomplete ? 'Incomplete workload — needs attention' : undefined}
+                                  >
+                                    {current.toFixed(2)} / {Math.round(limit)} {unit}
+                                  </span>
+                                );
+                              })() : (
+                                <span className="text-slate-600">—</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )
             ) : !allFiltersSet ? (
               <div className="py-14 px-8 text-center">
                 <p className="text-sm text-[#64748B]">No subjects to display.</p>
               </div>
-            ) : showSubjectsSkeleton ? (
+            ) : showListSkeleton ? (
               <div className="p-4 sm:p-6">
                 <ListSkeleton rows={6} />
               </div>
@@ -1695,7 +1985,7 @@ export default function WorkloadPage({
                 <div className="w-14 h-14 bg-[#FEF9C3] rounded-2xl flex items-center justify-center mx-auto mb-4 border border-[#FDE68A]">
                   <AlertTriangle className="w-7 h-7 text-[#CA8A04]" />
                 </div>
-                <p className="text-[#1E3A5F] font-semibold text-base mb-1">
+                <p className="text-[#0B2A5B] font-semibold text-base mb-1">
                   {subjectSearch
                     ? 'No Results Found'
                     : subjectCategory === 'Minor'
@@ -1728,16 +2018,21 @@ export default function WorkloadPage({
                       const willExceed = remainingForWarning !== null && (
                         remainingForWarning <= 0.001 || wu > remainingForWarning + 0.001
                       );
+                      const isPriority = priorityCodes.has(s.subject_code);
                       return (
                         <tr
                           key={s.id}
-                          className={`transition-colors ${willExceed ? 'bg-[#FEF2F2] hover:bg-red-50' : 'hover:bg-[#F8FAFC]'}`}
+                          className={`transition-colors ${
+                            willExceed ? 'bg-[#FEF2F2] hover:bg-red-50'
+                              : isPriority ? 'bg-[#DCFCE7] hover:bg-[#BBF7D0] border-l-[3px] border-l-[#22C55E]'
+                              : 'hover:bg-[#F8FAFC]'
+                          }`}
                         >
-                          <td className="px-5 py-4 font-mono font-semibold text-[#1E3A5F] text-sm align-middle whitespace-nowrap">{s.subject_code}</td>
+                          <td className="px-5 py-4 font-mono font-semibold text-[#0B2A5B] text-sm align-middle whitespace-nowrap">{s.subject_code}</td>
                           <td className="px-5 py-4 align-middle">
                             <div style={{ minWidth: 160, maxWidth: 280 }}>
                               <div
-                                className="text-[#1E3A5F] text-sm font-medium leading-snug"
+                                className="text-[#0B2A5B] text-sm font-medium leading-snug"
                                 style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden' }}
                                 title={s.subject_name}
                               >
@@ -1745,7 +2040,7 @@ export default function WorkloadPage({
                               </div>
                               <div className="mt-1.5 flex flex-wrap gap-1">
                                 {lecH > 0 && (
-                                  <span className="px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-[#EFF6FF] text-[#3C91E6]">Lec</span>
+                                  <span className="px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-[#EFF6FF] text-[#1D5BD6]">Lec</span>
                                 )}
                                 {labH > 0 && (
                                   <span className="px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-[#F5F3FF] text-[#7C3AED]">Lab</span>
@@ -1755,7 +2050,7 @@ export default function WorkloadPage({
                           </td>
                           <td className="px-5 py-4 text-center text-[#64748B] text-sm align-middle">{lecH > 0 ? lecH : '—'}</td>
                           <td className="px-5 py-4 text-center text-[#64748B] text-sm align-middle">{labH > 0 ? labH : '—'}</td>
-                          <td className={`px-5 py-4 text-center font-bold text-base align-middle ${willExceed ? 'text-[#DC2626]' : 'text-[#3C91E6]'}`}>
+                          <td className={`px-5 py-4 text-center font-bold text-base align-middle ${willExceed ? 'text-[#DC2626]' : 'text-[#1D5BD6]'}`}>
                             {wu.toFixed(2)}
                           </td>
                           <td className="px-5 py-4 align-middle">
@@ -1772,9 +2067,9 @@ export default function WorkloadPage({
                                 onClick={() => assignSubject(s.id)}
                                 title="Assign to instructor"
                                 className="flex items-center justify-center w-9 h-9 rounded-full transition-colors shadow-sm"
-                                style={{ backgroundColor: '#3C91E6', color: '#ffffff' }}
+                                style={{ backgroundColor: '#1D5BD6', color: '#ffffff' }}
                                 onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#2E7DD1')}
-                                onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#3C91E6')}
+                                onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#1D5BD6')}
                               >
                                 <Plus className="w-4 h-4" />
                               </button>
@@ -1788,6 +2083,7 @@ export default function WorkloadPage({
               </div>
             )}
         </div>
+      </PageLoadTransition>
 
       {/* -- Remaining Balance Warning Modal -----------------------------------
           Shown when instructor still has remaining load and admin clicks Assign.
@@ -1797,7 +2093,7 @@ export default function WorkloadPage({
         <div className="space-y-4">
           <div className="bg-[#FFFBEB] border border-[#FDE68A] rounded-xl p-4 flex items-start gap-3">
             <AlertTriangle className="w-5 h-5 text-[#D97706] flex-shrink-0 mt-0.5" />
-            <p className="text-[#1E3A5F] text-sm leading-relaxed">
+            <p className="text-[#0B2A5B] text-sm leading-relaxed">
               This instructor still has remaining regular load balance. Do you want to continue adding this subject?
             </p>
           </div>
@@ -1805,14 +2101,14 @@ export default function WorkloadPage({
             <div className="bg-[#F8FAFC] rounded-xl border border-[#E2E8F0] p-4 space-y-2.5">
               <div className="flex justify-between text-sm">
                 <span className="text-[#64748B]">Subject</span>
-                <span className="font-semibold text-[#1E3A5F] text-right ml-4">
+                <span className="font-semibold text-[#0B2A5B] text-right ml-4">
                   {remainingBalanceWarning.subjectCode}
                   {remainingBalanceWarning.subjectName ? ` — ${remainingBalanceWarning.subjectName}` : ''}
                 </span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-[#64748B]">This subject</span>
-                <span className="font-semibold text-[#3C91E6]">+{remainingBalanceWarning.subjectValue.toFixed(2)} {remainingBalanceWarning.unit}</span>
+                <span className="font-semibold text-[#1D5BD6]">+{remainingBalanceWarning.subjectValue.toFixed(2)} {remainingBalanceWarning.unit}</span>
               </div>
               <div className="flex justify-between text-sm border-t border-[#E2E8F0] pt-2.5">
                 <span className="text-[#64748B]">Remaining balance</span>
@@ -1834,9 +2130,9 @@ export default function WorkloadPage({
                 if (w) assignSubject(w.msId, 'regular');
               }}
               className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white transition"
-              style={{ backgroundColor: '#3C91E6', color: '#ffffff' }}
+              style={{ backgroundColor: '#1D5BD6', color: '#ffffff' }}
               onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#2E7DD1')}
-              onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#3C91E6')}
+              onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#1D5BD6')}
             >
               Continue Adding
             </button>
@@ -1852,7 +2148,7 @@ export default function WorkloadPage({
         <div className="space-y-4">
           <div className="bg-[#FEF2F2] border border-[#FECACA] rounded-xl p-4 flex items-start gap-3">
             <AlertTriangle className="w-5 h-5 text-[#DC2626] flex-shrink-0 mt-0.5" />
-            <p className="text-[#1E3A5F] text-sm leading-relaxed">
+            <p className="text-[#0B2A5B] text-sm leading-relaxed">
               This subject will exceed the regular load limit. You may continue adding it, then manually move a subject to overload using the table below.
             </p>
           </div>
@@ -1860,20 +2156,20 @@ export default function WorkloadPage({
             <div className="bg-[#F8FAFC] rounded-xl border border-[#E2E8F0] p-4 space-y-2.5">
               <div className="flex justify-between text-sm">
                 <span className="text-[#64748B]">Subject</span>
-                <span className="font-semibold text-[#1E3A5F] text-right ml-4">
+                <span className="font-semibold text-[#0B2A5B] text-right ml-4">
                   {overloadConfirm.subjectCode}
                   {overloadConfirm.subjectName ? ` — ${overloadConfirm.subjectName}` : ''}
                 </span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-[#64748B]">Load limit</span>
-                <span className="font-semibold text-[#1E3A5F]">
+                <span className="font-semibold text-[#0B2A5B]">
                   {overloadConfirm.loadLimit} {overloadConfirm.unit}
                 </span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-[#64748B]">Current load</span>
-                <span className="font-semibold text-[#1E3A5F]">
+                <span className="font-semibold text-[#0B2A5B]">
                   {overloadConfirm.currentLoad.toFixed(2)} {overloadConfirm.unit}
                 </span>
               </div>
@@ -1929,9 +2225,9 @@ export default function WorkloadPage({
               onClick={confirmMoveToOverload}
               disabled={moveToOverloadProcessing || !canConfirmOverload}
               className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition disabled:opacity-60 flex items-center justify-center gap-2"
-              style={{ backgroundColor: '#3C91E6', color: '#ffffff' }}
+              style={{ backgroundColor: '#1D5BD6', color: '#ffffff' }}
               onMouseEnter={e => { if (!moveToOverloadProcessing && canConfirmOverload) e.currentTarget.style.backgroundColor = '#2E7DD1'; }}
-              onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#3C91E6')}
+              onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#1D5BD6')}
             >
               {moveToOverloadProcessing
                 ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Moving…</>
@@ -1989,18 +2285,18 @@ export default function WorkloadPage({
                   }}
                   className={`w-full text-left px-3.5 py-3 rounded-xl border transition ${
                     active
-                      ? 'border-[#3C91E6] bg-[#EFF6FF]'
+                      ? 'border-[#1D5BD6] bg-[#EFF6FF]'
                       : 'border-[#E2E8F0] bg-white hover:border-[#CBD5E1]'
                   }`}
                 >
                   <div className="flex items-start gap-3">
                     <div className={`w-4 h-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center mt-0.5 ${
-                      active ? 'border-[#3C91E6]' : 'border-[#CBD5E1]'
+                      active ? 'border-[#1D5BD6]' : 'border-[#CBD5E1]'
                     }`}>
-                      {active && <div className="w-1.5 h-1.5 rounded-full bg-[#3C91E6]" />}
+                      {active && <div className="w-1.5 h-1.5 rounded-full bg-[#1D5BD6]" />}
                     </div>
                     <div>
-                      <div className={`text-sm font-medium ${active ? 'text-[#1E3A5F]' : 'text-[#334155]'}`}>{label}</div>
+                      <div className={`text-sm font-medium ${active ? 'text-[#0B2A5B]' : 'text-[#334155]'}`}>{label}</div>
                       <div className="text-[13px] text-[#64748B] mt-0.5 leading-snug">{description}</div>
                     </div>
                   </div>
@@ -2041,13 +2337,13 @@ export default function WorkloadPage({
               <>
                 <div>
                   <div className="flex items-baseline gap-2 flex-wrap">
-                    <span className="text-sm font-semibold text-[#1E3A5F]">{load.subject_code}</span>
+                    <span className="text-sm font-semibold text-[#0B2A5B]">{load.subject_code}</span>
                     {isComponentSpecific && (
                       <span className="text-[13px] text-[#64748B]">{componentLabel}</span>
                     )}
                   </div>
                   <p className="text-[13px] text-[#64748B] mt-0.5">{load.subject_name}</p>
-                  <p className="text-[13px] text-[#1E3A5F] mt-1.5">
+                  <p className="text-[13px] text-[#0B2A5B] mt-1.5">
                     {isComponentSpecific
                       ? <>{componentTotalWU.toFixed(2)} {unit}{isPermanent ? ` (${componentTotalHours.toFixed(2)} hrs)` : ''}. {otherLabel} stays Regular ({otherTotalWU.toFixed(2)} {unit}).</>
                       : <>{subjectTotal.toFixed(2)} {unit}</>}
@@ -2089,11 +2385,11 @@ export default function WorkloadPage({
                                 parseFloat(Math.max(0, Math.min(componentTotalWU, v)).toFixed(2))
                               );
                             }}
-                            className="mt-1 w-full bg-white border border-[#CBD5E1] text-[#1E3A5F] rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3C91E6]/40 focus:border-[#3C91E6]"
+                            className="mt-1 w-full bg-white border border-[#CBD5E1] text-[#0B2A5B] rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D5BD6]/40 focus:border-[#1D5BD6]"
                           />
                           <p className="text-[12px] text-[#94A3B8] mt-1">Up to {(componentTotalWU - 0.01).toFixed(2)}</p>
                         </div>
-                        <p className="text-[13px] text-[#1E3A5F]">
+                        <p className="text-[13px] text-[#0B2A5B]">
                           Regular {compRegularWU.toFixed(2)} {unit}
                           {isPermanent ? ` (${compRegularHours.toFixed(2)} hrs)` : ''}
                           <span className="text-[#94A3B8]"> · </span>
@@ -2119,11 +2415,11 @@ export default function WorkloadPage({
                               const v   = isNaN(raw) ? 0 : raw;
                               setSplitRegularAmount(parseFloat(Math.max(0, Math.min(maxRegularPart, v)).toFixed(2)));
                             }}
-                            className="mt-1 w-full bg-white border border-[#CBD5E1] text-[#1E3A5F] rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3C91E6]/40 focus:border-[#3C91E6]"
+                            className="mt-1 w-full bg-white border border-[#CBD5E1] text-[#0B2A5B] rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D5BD6]/40 focus:border-[#1D5BD6]"
                           />
                           <p className="text-[12px] text-[#94A3B8] mt-1">Up to {maxRegularPart.toFixed(2)}</p>
                         </div>
-                        <p className="text-[13px] text-[#1E3A5F]">
+                        <p className="text-[13px] text-[#0B2A5B]">
                           Regular {splitRegularAmount.toFixed(2)} {unit}
                           <span className="text-[#94A3B8]"> · </span>
                           Overload {Math.max(0, overloadPortion).toFixed(2)} {unit}
@@ -2147,7 +2443,7 @@ export default function WorkloadPage({
                       </p>
                       {isAfterExceeded && afterRegular > summary.regular_load_limit + 0.001 && (
                         <p className="text-[13px] text-[#B45309] mt-1.5 leading-relaxed">
-                          Regular will be {overBy.toFixed(2)} {unit} over the maximum of {summary.regular_load_limit.toFixed(2)}. You can still move this.
+                          Regular will be {overBy.toFixed(2)} {unit} over the maximum of {Math.round(summary.regular_load_limit)}. You can still move this.
                         </p>
                       )}
                       {isAfterExceeded && afterRegular <= summary.regular_load_limit + 0.001 && (
@@ -2169,6 +2465,35 @@ export default function WorkloadPage({
         </div>
       </Modal>
 
+      {/* View Workload Modal — loading fallback: keeps the modal from opening
+          empty/invisible if "View Workload" is clicked before `workload` has
+          finished fetching for the newly-selected faculty. */}
+      {workloadModalOpen && (!workload || !selectedFaculty) && (
+        <Modal
+          open={workloadModalOpen}
+          onClose={() => setWorkloadModalOpen(false)}
+          title="Faculty Workload Form"
+          size="form"
+        >
+          <div className="space-y-4" role="status" aria-live="polite" aria-label="Loading faculty workload">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              {Array.from({ length: 5 }, (_, i) => (
+                <div key={i} className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
+                  <Skeleton className="h-3 w-16 rounded" />
+                  <Skeleton className="h-6 w-12 rounded" />
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <Skeleton className="h-9 w-28 rounded-full" />
+              <Skeleton className="h-9 w-24 rounded-full" />
+              <Skeleton className="h-9 w-24 rounded-full" />
+            </div>
+            <TableSkeleton rows={6} cols={7} />
+          </div>
+        </Modal>
+      )}
+
       {/* View Workload Modal */}
       {workloadModalOpen && workload && selectedFaculty && (() => {
         const s = workload.summary;
@@ -2177,8 +2502,6 @@ export default function WorkloadPage({
         /* Summary totals from the semester-filtered API response are authoritative.
          * Regular table uses semester-filtered workload.loads.
          * Overload/split tables use allWorkloadLoads so cross-semester overloads appear. */
-
-        const totalDeductionUnits = isP ? (s.total_deduction_units || 0) : 0;
 
         // Count only the hours for components that are actually scheduled this semester
         const totalContactHours = workload.loads.reduce((acc, l) => {
@@ -2204,15 +2527,16 @@ export default function WorkloadPage({
         const regularPrintLoads  = workload.loads.filter(l => l.load_category === 'Regular');
         const overloadPrintLoads = termLoads.filter(l => l.load_category === 'Overload');
         const praiseSubjectLoads = termLoads.filter(l => l.load_category === 'Praise');
-        const splitPrintLoads    = termLoads.filter(l =>
-          l.load_category === 'Regular' && (
-            isP
-              ? (parseFloat(String(l.split_overload_units)) || 0) > 0.001
-              : (parseFloat(String(l.split_overload_hours)) || 0) > 0.001
-          )
+        const isSplitRegular = (l: WorkloadLoad) => l.load_category === 'Regular' && (
+          isP
+            ? (parseFloat(String(l.split_overload_units)) || 0) > 0.001
+            : (parseFloat(String(l.split_overload_hours)) || 0) > 0.001
         );
+        const splitPrintLoads    = termLoads.filter(l => isSplitRegular(l) && !l.split_is_praise);
+        /* Only the Lec or Lab moved to Praise — the rest of the subject stays Regular */
+        const praiseSplitLoads   = termLoads.filter(l => isSplitRegular(l) && l.split_is_praise);
         const hasOverloadSection = overloadPrintLoads.length > 0 || splitPrintLoads.length > 0;
-        const hasPraiseSection = (workload.praise ?? []).length > 0 || praiseSubjectLoads.length > 0;
+        const hasPraiseSection = (workload.praise ?? []).length > 0 || praiseSubjectLoads.length > 0 || praiseSplitLoads.length > 0;
         /* Never leave the active section pointing at a hidden empty tab. */
         const effectiveModalTab: 'regular' | 'overload' | 'praise' =
           (workloadModalTab === 'overload' && !hasOverloadSection)
@@ -2339,7 +2663,7 @@ export default function WorkloadPage({
         });
 
         const actionBtn = 'inline-flex items-center justify-center gap-0.5 px-1.5 py-0.5 rounded-sm text-[9px] font-semibold border transition whitespace-nowrap max-lg:min-h-9 max-lg:px-2.5 max-lg:text-[10px] max-lg:w-full';
-        const actionRegular = `${actionBtn} bg-[#E8F4FC] text-[#1E4A7A] border-[#3C91E6]/50 hover:bg-[#D4E9F8]`;
+        const actionRegular = `${actionBtn} bg-[#E8F4FC] text-[#1E4A7A] border-[#1D5BD6]/50 hover:bg-[#D4E9F8]`;
         const actionOverload = `${actionBtn} bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100`;
         const actionPraise = `${actionBtn} bg-violet-50 text-violet-800 border-violet-300 hover:bg-violet-100`;
         const trashBtn = 'inline-flex items-center justify-center p-0.5 rounded-sm text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 transition max-lg:min-h-9 max-lg:min-w-9';
@@ -2398,6 +2722,22 @@ export default function WorkloadPage({
                                     >
                                       <ArrowRight className="w-3 h-3" />
                                       Overload
+                                    </button>
+                                  )}
+                                  {!isSplitRow && (
+                                    <button
+                                      type="button"
+                                      title="Move to Praise Load"
+                                      onClick={() => {
+                                        const lec2 = parseFloat(String(load.lecture_hours)) || 0;
+                                        const lab2 = parseFloat(String(load.laboratory_hours)) || 0;
+                                        setPraiseFromOtherComponent((lec2 > 0 && lab2 > 0) ? row.type : 'full');
+                                        setPraiseFromOtherTarget(load);
+                                      }}
+                                      className={actionPraise}
+                                    >
+                                      <Award className="w-3 h-3" />
+                                      Praise
                                     </button>
                                   )}
                                   <button
@@ -2539,6 +2879,41 @@ export default function WorkloadPage({
               })
             );
           })(),
+          ...praiseSplitLoads.flatMap((load) => {
+            const oc = (load.overload_component || 'full') as 'lec' | 'lab' | 'full';
+            const rows = splitLoad(load, isP).filter(r => oc === 'full' || r.type === oc);
+            const val = isP
+              ? (parseFloat(String(load.split_overload_units)) || 0)
+              : (parseFloat(String(load.split_overload_hours)) || 0);
+            return rows.map((row) => {
+              const lec2 = parseFloat(String(load.lecture_hours)) || 0;
+              const lab2 = parseFloat(String(load.laboratory_hours)) || 0;
+              const hrs = !isP ? val : row.type === 'lab' ? lab2 : lec2;
+              const base = toOfficialRow(load, row, val, hrs, (
+                <div className="flex items-center justify-center gap-0.5 flex-wrap">
+                  <button
+                    type="button"
+                    title="Return to Regular Load"
+                    onClick={() => handleReturnToRegular(load)}
+                    className={actionRegular}
+                  >
+                    <ArrowLeft className="w-3 h-3" />
+                    Regular
+                  </button>
+                  <button
+                    type="button"
+                    title="Move to Overload"
+                    onClick={() => setReturnToOverloadConfirm({ ids: [load.ms_id], total: val })}
+                    className={actionOverload}
+                  >
+                    <ArrowRight className="w-3 h-3" />
+                    Overload
+                  </button>
+                </div>
+              ));
+              return { ...base, key: `${row.key}-split-praise`, description: `${row.description} · Source: Regular` };
+            });
+          }),
           ...(workload.praise ?? []).map((p: {
           id: number; praise_type?: string; description?: string; remarks?: string;
           equivalent_units?: unknown; equivalent_hours?: unknown;
@@ -2570,6 +2945,10 @@ export default function WorkloadPage({
 
         const praiseSubjectHours = praiseSubjectLoads.reduce((sum, l) => {
           return sum + (parseFloat(String(l.lecture_hours)) || 0) + (parseFloat(String(l.laboratory_hours)) || 0);
+        }, 0) + praiseSplitLoads.reduce((sum, l) => {
+          if (!isP) return sum + (parseFloat(String(l.split_overload_hours)) || 0);
+          const oc = l.overload_component;
+          return sum + (parseFloat(String(oc === 'lab' ? l.laboratory_hours : l.lecture_hours)) || 0);
         }, 0);
         const praiseUnitsSum = praiseSubjectVal + (workload.praise ?? []).reduce(
           (sum: number, p: { equivalent_units?: unknown }) => sum + (parseFloat(String(p.equivalent_units)) || 0),
@@ -2589,23 +2968,44 @@ export default function WorkloadPage({
           totalDescription: 'Praise Load',
         };
 
-        const designationText = (() => {
-          const t = (selectedFaculty.designation_type || '').trim();
-          if (!t || /^none$/i.test(t) || /^no designation$/i.test(t)) return 'No Designation';
-          return t;
-        })();
+        /* Deductions split by type — "Special Assignment" gets its own line on the
+         * official form (matching the paper form's separate "Add: Special
+         * Assignment" row); every other type (Designation/Extension/Research-
+         * Extension) rolls up into the combined "Designation" row. Both are
+         * real capacity deductions from instructor_load_deductions — NOT the
+         * unrelated Praise Load records, which stay in their own tab/card and
+         * never reduce Regular Load capacity. */
+        const allDeductions = isP ? (workload.deductions ?? []) : [];
+        const specialAssignmentDeductions = allDeductions.filter(d => d.deduction_type === 'Special Assignment');
+        const designationDeductions = allDeductions.filter(d => d.deduction_type !== 'Special Assignment');
+        const designationUnitsTotal = designationDeductions.reduce(
+          (sum, d) => sum + (parseFloat(String(d.deducted_units)) || 0), 0
+        );
+        const specialAssignmentUnitsTotal = specialAssignmentDeductions.reduce(
+          (sum, d) => sum + (parseFloat(String(d.deducted_units)) || 0), 0
+        );
+        const designationText = designationDeductions.length > 0
+          ? designationDeductions.map(d => d.deduction_type).join(' + ')
+          : 'No Designation';
+
         const officialRegularSummary = {
           unitsText: formatOfficialNumber(totalRegularWU),
           hoursText: formatOfficialNumber(totalRegularHours),
           designation: designationText,
-          specialAssignments: (workload.praise ?? []).map((p: { id?: number; praise_type?: string; description?: string; equivalent_units?: unknown }, i: number) => ({
-            key: String(p.id ?? i),
-            description: String(p.praise_type || p.description || ''),
-            units: formatOfficialNumber(parseFloat(String(p.equivalent_units)) || 0),
+          designationUnitsText: designationUnitsTotal > 0 ? formatOfficialNumber(designationUnitsTotal) : undefined,
+          specialAssignments: specialAssignmentDeductions.map(d => ({
+            key: String(d.id),
+            description: d.description || 'Special Assignment',
+            units: formatOfficialNumber(parseFloat(String(d.deducted_units)) || 0),
           })),
           preparations: String(distinctSubjects),
+          // Total No. of Units = actual teaching + Designation credit + Special
+          // Assignment credit — every visible row above added together, so the
+          // printed total always matches what's actually shown on the form.
           totalUnitsText: formatOfficialNumber(
-            isP ? totalRegularWU + totalDeductionUnits + praiseTotal : totalRegularHours + praiseTotal
+            isP
+              ? totalRegularWU + designationUnitsTotal + specialAssignmentUnitsTotal
+              : totalRegularHours
           ),
         };
 
@@ -2619,9 +3019,9 @@ export default function WorkloadPage({
             loads: kind === 'overload'
               ? [...overloadPrintLoads, ...splitPrintLoads]
               : kind === 'praise'
-                ? praiseSubjectLoads
+                ? [...praiseSubjectLoads, ...praiseSplitLoads]
                 : (workload.loads ?? []),
-            praise: kind === 'praise' ? (workload.praise ?? []) : (kind === 'regular' ? (workload.praise ?? []) : []),
+            praise: kind === 'praise' ? (workload.praise ?? []) : [],
             deductions: kind === 'regular' ? (workload.deductions ?? []) : [],
             semester: listSemester,
             academicYear: listYear,
@@ -2659,7 +3059,7 @@ export default function WorkloadPage({
               setPrintError('');
               setPrintOfferFallback(false);
             }}
-            title="Instructor Workload Form"
+            title="Faculty Workload Form"
             size="form"
           >
             {/* Toolbar */}
@@ -2711,18 +3111,15 @@ export default function WorkloadPage({
               const modalRegVal  = isP ? totalRegularWU : totalRegularHours;
               const modalOlVal   = olVal;
               const modalPraiseVal = praiseSubjectVal + (isP ? praiseTotal : 0);
-              const modalTotal   = modalRegVal + modalOlVal + modalPraiseVal;
-              const modalExceeded = Math.max(0, modalRegVal - s.regular_load_limit);
-              const modalIsExceeded = modalExceeded > 0.001;
               const unitLabel = isP ? 'units' : 'hrs';
-              const limitStr = Number(s.regular_load_limit).toFixed(2);
+              const limitStr = String(Math.round(Number(s.regular_load_limit)));
               const regStr = modalRegVal.toFixed(2);
-              const card = 'bg-white border border-slate-200 rounded-lg p-3.5 min-w-0';
-              const labelCls = 'text-xs text-slate-500 uppercase tracking-wide font-semibold mb-0.5';
-              const valueCls = 'text-lg font-bold text-slate-900 tabular-nums';
-              const mutedCls = 'text-sm font-normal text-slate-500 ml-1';
+              const card = 'bg-white border border-slate-200 rounded-xl p-5 min-w-0';
+              const labelCls = 'text-xs text-slate-500 uppercase tracking-wide font-semibold mb-1.5';
+              const valueCls = 'text-2xl font-bold text-slate-900 tabular-nums';
+              const mutedCls = 'text-base font-normal text-slate-500 ml-1.5';
               return (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
                   <div className={card}>
                     <div className={labelCls}>{isP ? 'Regular Load' : 'Regular Hours'}</div>
                     <div className={valueCls}>
@@ -2744,20 +3141,6 @@ export default function WorkloadPage({
                       <span className={mutedCls}>{unitLabel}</span>
                     </div>
                   </div>
-                  <div className={card}>
-                    <div className={labelCls}>{isP ? 'Actual Assigned' : 'Actual Hours'}</div>
-                    <div className={valueCls}>
-                      {modalTotal.toFixed(2)}
-                      <span className={mutedCls}>{unitLabel}</span>
-                    </div>
-                  </div>
-                  <div className={card}>
-                    <div className={labelCls}>Unplaced Excess</div>
-                    <div className={`text-lg font-bold tabular-nums ${modalIsExceeded ? 'text-red-600' : 'text-slate-900'}`}>
-                      {modalExceeded.toFixed(2)}
-                      <span className={mutedCls}>{unitLabel}</span>
-                    </div>
-                  </div>
                 </div>
               );
             })()}
@@ -2773,7 +3156,7 @@ export default function WorkloadPage({
                     : 'bg-white/5 text-slate-400 hover:text-white hover:bg-white/10'
                 }`}
               >
-                Regular Load
+                Workload
                 <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-white/20">{regularPrintLoads.length}</span>
                               </button>
               {hasOverloadSection && (
@@ -2801,12 +3184,13 @@ export default function WorkloadPage({
                   }`}
                 >
                   Praise Load
-                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-white/20">{(workload?.praise ?? []).length + praiseSubjectLoads.length}</span>
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-white/20">{(workload?.praise ?? []).length + praiseSubjectLoads.length + praiseSplitLoads.length}</span>
                 </button>
               )}
                   </div>
 
             {/* Printable content area */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 sm:p-4">
             <div id="workload-print-area">
               <div className="print-header hidden">
                 <h3 className="font-bold">INSTRUCTOR WORKLOAD FORM</h3>
@@ -2856,6 +3240,7 @@ export default function WorkloadPage({
               </div>
               )}
             </div>
+            </div>
           </Modal>
         );
       })()}
@@ -2894,6 +3279,63 @@ export default function WorkloadPage({
             Selected workload:{' '}
             <span className="font-semibold tabular-nums">
               {(moveToPraiseConfirm?.total ?? 0).toFixed(2)}{' '}
+              {selectedFaculty?.employment_status === 'Permanent' ? 'units' : 'hours'}
+            </span>
+          </p>
+          <p className="text-xs text-slate-500">
+            {praiseFromOtherComponent === 'full'
+              ? 'The subject stays assigned to the instructor. Only the workload classification changes.'
+              : `Only the ${praiseFromOtherComponent === 'lec' ? 'Lecture' : 'Laboratory'} moves to Praise Load — the ${praiseFromOtherComponent === 'lec' ? 'Laboratory' : 'Lecture'} stays in Regular Load.`}
+          </p>
+        </div>
+      </Modal>
+
+      <Modal
+        open={!!praiseFromOtherTarget}
+        onClose={() => { if (!praiseFromOtherProcessing) setPraiseFromOtherTarget(null); }}
+        title="Move to Praise Load"
+        size="sm"
+        footer={
+          <div className="flex gap-3 justify-end">
+            <button
+              type="button"
+              disabled={praiseFromOtherProcessing}
+              onClick={() => setPraiseFromOtherTarget(null)}
+              className="px-4 py-2 rounded-lg text-sm font-medium bg-white/10 hover:bg-white/20 text-white disabled:opacity-50 transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={praiseFromOtherProcessing}
+              onClick={confirmPraiseFromOther}
+              className="px-4 py-2 rounded-lg text-sm font-medium bg-violet-600 hover:bg-violet-700 text-white disabled:opacity-50 transition"
+            >
+              {praiseFromOtherProcessing ? 'Moving…' : 'Move to Praise Load'}
+            </button>
+          </div>
+        }
+      >
+        <div className="text-sm text-slate-300 space-y-2">
+          <p>
+            Classify <span className="text-white font-semibold">
+              {praiseFromOtherTarget?.subject_code}
+              {praiseFromOtherTarget?.subject_name ? ` — ${praiseFromOtherTarget.subject_name}` : ''}
+              {praiseFromOtherComponent === 'lec' ? ' (Lecture)' : praiseFromOtherComponent === 'lab' ? ' (Laboratory)' : ''}
+            </span> as Praise Load?
+          </p>
+          <p className="text-white">
+            Workload:{' '}
+            <span className="font-semibold tabular-nums">
+              {praiseFromOtherTarget
+                ? (praiseFromOtherComponent === 'full'
+                    ? subjectLoadValue(praiseFromOtherTarget, selectedFaculty?.employment_status === 'Permanent')
+                    : praiseFromOtherComponent === 'lec'
+                      ? (parseFloat(String(praiseFromOtherTarget.lecture_hours)) || 0)
+                      : (parseFloat(String(praiseFromOtherTarget.laboratory_hours)) || 0)
+                        * (selectedFaculty?.employment_status === 'Permanent' ? 0.75 : 1)
+                  ).toFixed(2)
+                : '0.00'}{' '}
               {selectedFaculty?.employment_status === 'Permanent' ? 'units' : 'hours'}
             </span>
           </p>
@@ -2983,6 +3425,14 @@ export default function WorkloadPage({
           </div>
         }
       >
+        {deletePraiseSuccess && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-2xl backdrop-blur-md save-success-overlay">
+            <div className="save-success-badge flex flex-col items-center gap-3 px-8 py-7 rounded-2xl bg-[#111827] border border-white/10 shadow-2xl">
+              <TrashDropAnimation className="bg-red-500/15 border-red-500/30" color="#F87171" />
+              <p className="text-base font-semibold text-white">Praise Load removed!</p>
+            </div>
+          </div>
+        )}
         <div className="text-sm text-slate-300 space-y-2">
           <p>Are you sure you want to remove this Praise Load?</p>
           {deletePraiseTarget && (
@@ -3025,12 +3475,12 @@ export default function WorkloadPage({
           <div className="space-y-4">
             {/* Subject info */}
             <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl px-4 py-3">
-              <div className="font-mono font-bold text-sm text-[#1E3A5F] mb-0.5">{removeWorkloadTarget.subject_code}</div>
+              <div className="font-mono font-bold text-sm text-[#0B2A5B] mb-0.5">{removeWorkloadTarget.subject_code}</div>
               <div className="text-sm text-[#64748B]">{removeWorkloadTarget.subject_name}</div>
               <div className="flex items-center gap-3 mt-2 text-[11px] text-[#94A3B8] flex-wrap">
                 <span>{removeWorkloadTarget.program_code} · {removeWorkloadTarget.block_name} · {removeWorkloadTarget.year_level}</span>
                 {(parseFloat(String(removeWorkloadTarget.units)) || 0) > 0 && (
-                  <span className="font-semibold text-[#1E3A5F]">
+                  <span className="font-semibold text-[#0B2A5B]">
                     {(parseFloat(String(removeWorkloadTarget.units)) || 0).toFixed(2)} {isPermanent ? 'units' : 'hrs'}
                   </span>
                 )}
@@ -3092,7 +3542,7 @@ export default function WorkloadPage({
                 onClick={confirmReturnToRegular}
                 disabled={!canConfirm}
                 className="flex-1 py-2 rounded-xl text-sm font-bold transition disabled:opacity-60 flex items-center justify-center gap-2"
-                style={{ backgroundColor: canConfirm ? '#3C91E6' : '#E2E8F0', color: canConfirm ? '#ffffff' : '#94A3B8' }}
+                style={{ backgroundColor: canConfirm ? '#1D5BD6' : '#E2E8F0', color: canConfirm ? '#ffffff' : '#94A3B8' }}
               >
                 {returnToRegularProcessing
                   ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -3128,10 +3578,10 @@ export default function WorkloadPage({
               {/* Subject info */}
               <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl px-4 py-3 space-y-1.5">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-mono font-bold text-sm text-[#1E3A5F]">{load.subject_code}</span>
+                  <span className="font-mono font-bold text-sm text-[#0B2A5B]">{load.subject_code}</span>
                   {isFullOl
-                    ? <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-600 border border-amber-200">Full Overload</span>
-                    : <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-purple-700 border border-purple-200">Split Overload</span>
+                    ? <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-orange-50 text-orange-700 border border-orange-200">Full Overload</span>
+                    : <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-orange-50 text-orange-600 border border-orange-200">Split Overload</span>
                   }
                 </div>
                 <div className="text-sm text-[#64748B]">
@@ -3141,7 +3591,7 @@ export default function WorkloadPage({
                 <div className="grid grid-cols-2 gap-2 pt-1">
                   <div className="bg-white border border-[#E2E8F0] rounded-lg px-2.5 py-1.5">
                     <div className="text-[10px] text-[#94A3B8] mb-0.5">Regular Portion</div>
-                    <div className="text-sm font-bold text-[#1E3A5F]">
+                    <div className="text-sm font-bold text-[#0B2A5B]">
                       {regularUnits.toFixed(2)} <span className="text-[10px] font-normal text-[#94A3B8]">{unit}</span>
                     </div>
                   </div>
@@ -3164,10 +3614,10 @@ export default function WorkloadPage({
                       name="returnMode"
                       checked={returnToRegularMode === 'entire'}
                       onChange={() => { setReturnToRegularMode('entire'); setReturnToRegularAmount(0); }}
-                      className="accent-[#3C91E6]"
+                      className="accent-[#1D5BD6]"
                     />
                     <div>
-                      <div className="text-sm font-semibold text-[#1E3A5F]">
+                      <div className="text-sm font-semibold text-[#0B2A5B]">
                         Return All — {overloadUnits.toFixed(2)} {unit}
                       </div>
                       <div className="text-[11px] text-[#94A3B8]">Move the entire overload portion to Regular Load</div>
@@ -3182,10 +3632,10 @@ export default function WorkloadPage({
                         setReturnToRegularMode('partial');
                         setReturnToRegularAmount(parseFloat(Math.min(overloadUnits, Math.max(0, remaining)).toFixed(2)));
                       }}
-                      className="accent-[#3C91E6] mt-0.5 flex-shrink-0"
+                      className="accent-[#1D5BD6] mt-0.5 flex-shrink-0"
                     />
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-semibold text-[#1E3A5F]">Return Partial Amount</div>
+                      <div className="text-sm font-semibold text-[#0B2A5B]">Return Partial Amount</div>
                       <div className="text-[11px] text-[#94A3B8] mb-2">Specify how many {unit} to move back to Regular</div>
                       {returnToRegularMode === 'partial' && (
                         <div className="flex items-center gap-2">
@@ -3196,7 +3646,7 @@ export default function WorkloadPage({
                             step={0.01}
                             value={returnToRegularAmount > 0 ? returnToRegularAmount : ''}
                             onChange={e => setReturnToRegularAmount(parseFloat(e.target.value) || 0)}
-                            className="w-24 border border-[#E2E8F0] rounded-lg px-2.5 py-1.5 text-sm text-[#1E3A5F] font-semibold focus:outline-none focus:ring-2 focus:ring-[#3C91E6]/30"
+                            className="w-24 border border-[#E2E8F0] rounded-lg px-2.5 py-1.5 text-sm text-[#0B2A5B] font-semibold focus:outline-none focus:ring-2 focus:ring-[#1D5BD6]/30"
                             placeholder="0.00"
                             autoFocus
                           />
@@ -3328,7 +3778,7 @@ export default function WorkloadPage({
                         deductionNone
                           ? 'opacity-40 cursor-not-allowed bg-white/[0.02] border-white/5 text-slate-500'
                           : checked
-                            ? 'bg-[#3C91E6]/10 border-[#3C91E6]/40 text-blue-300'
+                            ? 'bg-[#1D5BD6]/10 border-[#1D5BD6]/40 text-blue-300'
                             : 'bg-white/[0.03] border-white/10 text-slate-400 hover:border-white/20 hover:text-slate-300'
                       }`}>
                         <input
@@ -3344,14 +3794,14 @@ export default function WorkloadPage({
                             );
                             setDesignationError('');
                           }}
-                          className="w-4 h-4 accent-[#3C91E6] flex-shrink-0"
+                          className="w-4 h-4 accent-[#1D5BD6] flex-shrink-0"
                         />
                         <span className="text-sm font-medium flex-1">{opt}</span>
                       </label>
 
                       {/* Expanded fields for checked type */}
                       {checked && !deductionNone && (
-                        <div className="ml-4 mt-2 mb-1 pl-4 border-l-2 border-[#3C91E6]/30 space-y-2">
+                        <div className="ml-4 mt-2 mb-1 pl-4 border-l-2 border-[#1D5BD6]/30 space-y-2">
                           <div>
                             <label className="text-[11px] font-medium text-slate-500 uppercase tracking-wide mb-1 block">
                               Description <span className="normal-case text-slate-600">(optional)</span>
@@ -3363,7 +3813,7 @@ export default function WorkloadPage({
                               onChange={ev => setDeductionEntries(prev =>
                                 prev.map(e => e.type === opt ? { ...e, description: ev.target.value } : e)
                               )}
-                              className="w-full bg-[#0b0f1a] border border-white/10 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#3C91E6]/50 placeholder:text-slate-600"
+                              className="w-full bg-[#0b0f1a] border border-white/10 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#1D5BD6]/50 placeholder:text-slate-600"
                             />
                           </div>
                           <div className="flex items-end gap-3">
@@ -3384,7 +3834,7 @@ export default function WorkloadPage({
                                   );
                                   setDesignationError('');
                                 }}
-                                className="w-28 bg-[#0b0f1a] border border-white/10 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#3C91E6]/50 placeholder:text-slate-600"
+                                className="w-28 bg-[#0b0f1a] border border-white/10 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#1D5BD6]/50 placeholder:text-slate-600"
                               />
                             </div>
                             {entry.units !== '' && !isNaN(parseFloat(entry.units)) && (
@@ -3462,7 +3912,7 @@ export default function WorkloadPage({
                   type="button"
                   onClick={confirmDesignation}
                   disabled={designationLoading || modalDeductionsLoading || !listSemester || !listYear || (!deductionNone && deductionEntries.length === 0)}
-                  className="flex-1 bg-[#3C91E6] text-white py-2.5 rounded-xl text-sm font-bold hover:bg-[#2E7DD1] transition disabled:opacity-60 flex items-center justify-center gap-2"
+                  className="flex-1 bg-[#1D5BD6] text-white py-2.5 rounded-xl text-sm font-bold hover:bg-[#2E7DD1] transition disabled:opacity-60 flex items-center justify-center gap-2"
                 >
                   {designationLoading
                     ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Saving…</>
@@ -3480,7 +3930,7 @@ export default function WorkloadPage({
           {praiseError && (
             <div className="bg-[#FEE2E2] border border-[#FECACA] text-[#DC2626] px-4 py-3 rounded-xl text-sm">{praiseError}</div>
           )}
-          <div className="bg-[#EFF6FF] border border-[#BFDBFE] rounded-xl p-3 text-sm text-[#3C91E6]">
+          <div className="bg-[#EFF6FF] border border-[#BFDBFE] rounded-xl p-3 text-sm text-[#1D5BD6]">
             Praise is for non-teaching assignments only (Research, Extension, Administrative, etc.)
           </div>
           <div>
@@ -3499,7 +3949,7 @@ export default function WorkloadPage({
           <div>
             <label className="block text-sm font-semibold text-[#64748B] mb-1.5">Description</label>
             <textarea value={praiseForm.description} onChange={e => setPraiseForm(f => ({ ...f, description: e.target.value }))}
-              className="w-full border border-[#CBD5E1] bg-white text-[#1E3A5F] rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#3C91E6]/40 focus:border-[#3C91E6] transition-colors h-20 resize-none placeholder:text-[#CBD5E1]" />
+              className="w-full border border-[#CBD5E1] bg-white text-[#0B2A5B] rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D5BD6]/40 focus:border-[#1D5BD6] transition-colors h-20 resize-none placeholder:text-[#CBD5E1]" />
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -3534,7 +3984,7 @@ export default function WorkloadPage({
           <div>
             <label className="block text-sm font-semibold text-[#64748B] mb-1.5">Remarks</label>
             <textarea value={praiseForm.remarks} onChange={e => setPraiseForm(f => ({ ...f, remarks: e.target.value }))}
-              className="w-full border border-[#CBD5E1] bg-white text-[#1E3A5F] rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#3C91E6]/40 focus:border-[#3C91E6] transition-colors h-16 resize-none placeholder:text-[#CBD5E1]" />
+              className="w-full border border-[#CBD5E1] bg-white text-[#0B2A5B] rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D5BD6]/40 focus:border-[#1D5BD6] transition-colors h-16 resize-none placeholder:text-[#CBD5E1]" />
           </div>
           <div className="flex gap-3 pt-1">
             <button type="button" onClick={() => setPraiseModalOpen(false)}
@@ -3543,9 +3993,9 @@ export default function WorkloadPage({
             </button>
             <button type="submit" disabled={praiseLoading}
               className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white disabled:opacity-50 transition"
-              style={{ backgroundColor: '#3C91E6', color: '#ffffff' }}
+              style={{ backgroundColor: '#1D5BD6', color: '#ffffff' }}
               onMouseEnter={e => { if (!praiseLoading) e.currentTarget.style.backgroundColor = '#2E7DD1'; }}
-              onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#3C91E6')}
+              onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#1D5BD6')}
             >
               {praiseLoading ? 'Saving…' : 'Add Praise'}
             </button>

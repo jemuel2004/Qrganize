@@ -1,14 +1,14 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useSchoolYear } from '@/client/context/SchoolYearContext';
-import {
-  CalendarDays, BookOpen, AlertCircle,
-  UserCheck, CheckCircle2,
-} from 'lucide-react';
+import BackButton from '@/client/components/ui/BackButton';
+import WatermarkTitle from '@/client/components/ui/WatermarkTitle';
+import { CalendarDays } from 'lucide-react';
 import { SearchInput, FilterSelect, FilterBar } from '@/components/ui/SearchFilter';
-import { CardSkeleton, Skeleton, TableSkeleton } from '@/client/components/ui/skeletons';
+import { Skeleton, TableSkeleton } from '@/client/components/ui/skeletons';
 import { PageLoadTransition } from '@/client/components/ui/PageLoadTransition';
 import { LOADING_DELAY, PAGE_SKELETON_MIN_MS, useMinLoading } from '@/client/hooks/useMinLoading';
 import Link from 'next/link';
@@ -43,6 +43,12 @@ const YEAR_ORDER  = ['1st Year', '2nd Year', '3rd Year', '4th Year'];
 const SEM_ORDER   = ['1st Semester', '2nd Semester', 'Summer'];
 const YEAR_LEVELS = YEAR_ORDER;
 const STATUSES    = ['Unassigned', 'Assigned', 'Scheduled', 'Completed'];
+
+/* Solid, clearly outlined filter controls — the shared FilterSelect has no
+   border and goes white once filled, which vanished on the white card. */
+const MS_FIELD = 'qr-ms-field';
+const MS_READONLY =
+  'flex items-center gap-2 h-[42px] bg-[#F4F7FC] border border-[#D6E0EF] rounded-xl px-3 select-none';
 const COL_HEADERS = [
   'Course Code', 'Subject Name', 'Hrs', 'Units',
   'Instructor', 'Day / Time', 'Room', 'Status', 'Actions',
@@ -51,17 +57,21 @@ const COL_HEADERS = [
 
 /* ── Status pill — light-theme version of Badge ──────────────────── */
 
-function StatusPill({ status }: { status: string }) {
+function StatusPill({ status, delay = 0 }: { status: string; delay?: number }) {
   const variants: Record<string, { bg: string; text: string; dot: string }> = {
-    Unassigned: { bg: 'bg-[#F1F5F9]', text: 'text-[#64748B]', dot: 'bg-[#94A3B8]' },
-    Assigned:   { bg: 'bg-[#EFF6FF]', text: 'text-[#2563EB]', dot: 'bg-[#3C91E6]' },
+    Unassigned: { bg: 'bg-red-50 border border-red-200', text: 'text-red-600', dot: 'bg-red-500' },
+    Assigned:   { bg: 'bg-[#EFF6FF]', text: 'text-[#164BB5]', dot: 'bg-[#1D5BD6]' },
     Scheduled:  { bg: 'bg-[#DCFCE7]', text: 'text-[#16A34A]', dot: 'bg-[#22C55E]' },
     Completed:  { bg: 'bg-[#F5F3FF]', text: 'text-[#7C3AED]', dot: 'bg-[#8B5CF6]' },
   };
   const v = variants[status] ?? variants.Unassigned;
+  const attention = status === 'Unassigned';
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wide ${v.bg} ${v.text}`}>
-      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${v.dot}`} />
+    <span
+      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wide ${v.bg} ${v.text} ${attention ? 'qr-unassigned-pill' : ''}`}
+      style={attention ? { animationDelay: `${delay}s` } : undefined}
+    >
+      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${v.dot} ${attention ? 'qr-pulse-dot' : ''}`} />
       {status}
     </span>
   );
@@ -92,9 +102,124 @@ function buildGroups(data: Schedule[]) {
     }));
 }
 
+/* ── Block subject table (shared between paged and all-years views) ─ */
+
+function BlockTable({ block }: { block: BlockPage }) {
+  return (
+    <>
+      {/* Year + Block header */}
+      <div className="mb-4 min-w-0">
+        <h2 className="text-base sm:text-lg font-bold text-[#0B2A5B] truncate">
+          {block.year_level} — Block {block.block_name}
+        </h2>
+        <p className="text-sm text-[#64748B] mt-0.5 truncate">
+          {block.semester}
+          <span className="text-[#94A3B8]">
+            {' · '}
+            {block.subjects.length} subject{block.subjects.length !== 1 ? 's' : ''}
+          </span>
+        </p>
+      </div>
+
+      {/* Subject table */}
+      <div className="bg-white rounded-xl border border-[#E2E8F0] overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
+                {COL_HEADERS.map(h => (
+                  <th
+                    key={h}
+                    className="text-left px-4 py-3 text-[10px] font-bold text-[#64748B] uppercase tracking-wider whitespace-nowrap"
+                  >
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#F1F5F9]">
+              {block.subjects.map((s, i) => {
+                // Stagger the attention animations so rows take turns
+                const delay = (i % 8) * 0.45;
+                return (
+                <tr
+                  key={s.id}
+                  className="transition-colors hover:bg-[#F8FAFC] bg-white"
+                >
+                  <td className="px-4 py-3.5 font-mono font-bold text-[#0B2A5B] whitespace-nowrap">
+                    {s.subject_code}
+                  </td>
+                  <td className="px-4 py-3.5 max-w-[200px]">
+                    <span className="line-clamp-2 leading-snug text-[#334155]">
+                      {s.subject_name}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3.5 text-center text-[#64748B] font-medium whitespace-nowrap">
+                    {parseFloat(String(s.total_hours)).toFixed(1)}
+                  </td>
+                  <td className="px-4 py-3.5 text-center font-bold text-[#1D5BD6] whitespace-nowrap">
+                    {parseFloat(String(s.units)).toFixed(2)}
+                  </td>
+                  <td className="px-4 py-3.5 whitespace-nowrap">
+                    {s.faculty_name
+                      ? <span className="text-[#334155] font-medium">{s.faculty_name}</span>
+                      : <span className="text-[#94A3B8] italic text-xs">No instructor</span>}
+                  </td>
+                  <td className="px-4 py-3.5 whitespace-nowrap">
+                    {s.day_pattern
+                      ? (
+                        <span className="text-[#334155] font-medium">
+                          {s.day_pattern}{' '}
+                          {s.start_time?.slice(0, 5)}
+                          {s.end_time ? `–${s.end_time.slice(0, 5)}` : ''}
+                        </span>
+                      )
+                      : <span className="text-[#94A3B8] italic text-xs">Not scheduled</span>}
+                  </td>
+                  <td className="px-4 py-3.5 whitespace-nowrap">
+                    {s.room_name
+                      ? <span className="text-[#334155] font-medium">{s.room_name}</span>
+                      : <span className="text-[#94A3B8] italic text-xs">No room</span>}
+                  </td>
+                  <td className="px-4 py-3.5 whitespace-nowrap">
+                    <StatusPill status={s.status} delay={delay} />
+                  </td>
+                  <td className="px-4 py-3.5 whitespace-nowrap">
+                    <div className="flex gap-1.5">
+                      {s.status === 'Unassigned' && (
+                        <Link
+                          href={`/workload?assign=${s.id}`}
+                          className="qr-assign-btn px-3 py-1.5 text-xs rounded-lg font-semibold"
+                          style={{ animationDelay: `${delay}s, ${delay}s` }}
+                        >
+                          Assign
+                        </Link>
+                      )}
+                      {s.status === 'Assigned' && (
+                        <Link
+                          href={`/scheduling?ms=${s.id}`}
+                          className="px-3 py-1.5 text-xs bg-[#DCFCE7] text-[#16A34A] border border-[#BBF7D0] rounded-lg hover:bg-[#BBF7D0] font-semibold transition-colors"
+                        >
+                          Schedule
+                        </Link>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
+  );
+}
+
 /* ── Page component ──────────────────────────────────────────────── */
 
 export default function MasterSchedulePage() {
+  const searchParams = useSearchParams();
   const { schoolYear: globalYear, semester: globalSemester } = useSchoolYear();
 
   const [schedules, setSchedules] = useState<Schedule[]>([]);
@@ -123,7 +248,11 @@ export default function MasterSchedulePage() {
         const progData = await progRes.json().catch(() => ({}));
         if (cancelled) return;
         setPrograms(progData.programs || []);
-        if (meData.user?.role === 'department_chair') {
+
+        const paramProgramId = searchParams.get('program_id');
+        const paramStatus = searchParams.get('status');
+
+        if (meData.user?.role === 'program_chair') {
           setIsChair(true);
           const pid = meData.user.program_id != null ? Number(meData.user.program_id) : null;
           if (pid == null) {
@@ -132,8 +261,18 @@ export default function MasterSchedulePage() {
           } else {
             setChairProgramId(pid);
             setChairNoProgram(false);
-            setFilters(f => ({ ...f, program_id: String(pid) }));
+            setFilters(f => ({
+              ...f,
+              program_id: String(pid),
+              status: paramStatus && STATUSES.includes(paramStatus) ? paramStatus : f.status,
+            }));
           }
+        } else if (paramProgramId) {
+          setFilters(f => ({
+            ...f,
+            program_id: paramProgramId,
+            status: paramStatus && STATUSES.includes(paramStatus) ? paramStatus : f.status,
+          }));
         }
       } catch { /* ignore */ }
       finally {
@@ -141,6 +280,7 @@ export default function MasterSchedulePage() {
       }
     })();
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- read initial query params once on mount only
   }, []);
 
   useEffect(() => {
@@ -170,7 +310,7 @@ export default function MasterSchedulePage() {
   const showPageSkeleton = useMinLoading(booting, LOADING_DELAY);
   const showScheduleSkeleton = useMinLoading(
     !showPageSkeleton && loading && programSelected,
-    schedules.length === 0 ? PAGE_SKELETON_MIN_MS : 0,
+    PAGE_SKELETON_MIN_MS,
   );
   const lockedProgram = isChair
     ? programs.find(p => p.id === chairProgramId) ?? null
@@ -203,6 +343,7 @@ export default function MasterSchedulePage() {
     ),
   );
   const selectedProgram = programs.find(p => String(p.id) === filters.program_id);
+  const isAllYears = !filters.year_level;
 
   /* Reset to first block page when filters / term / result size change */
   useEffect(() => {
@@ -255,24 +396,20 @@ export default function MasterSchedulePage() {
 
   const STAT_CARDS = [
     {
-      label: 'Total Subjects', value: stats.total,
-      Icon: BookOpen,
-      iconBg: 'bg-[#EFF6FF]', iconCls: 'text-[#3C91E6]', valueCls: 'text-[#1E3A5F]',
+      label: 'Unassigned', value: stats.unassigned,
+      tone: {
+        value: 'text-red-600',
+        idle: 'bg-red-50 border-red-200 hover:border-red-300',
+        active: 'bg-red-100 border-red-400 ring-2 ring-red-200',
+      },
     },
     {
-      label: 'Unassigned',     value: stats.unassigned,
-      Icon: AlertCircle,
-      iconBg: 'bg-[#F8FAFC]', iconCls: 'text-[#94A3B8]', valueCls: 'text-[#64748B]',
-    },
-    {
-      label: 'Assigned',       value: stats.assigned,
-      Icon: UserCheck,
-      iconBg: 'bg-[#EFF6FF]', iconCls: 'text-[#3C91E6]', valueCls: 'text-[#3C91E6]',
-    },
-    {
-      label: 'Scheduled',      value: stats.scheduled,
-      Icon: CheckCircle2,
-      iconBg: 'bg-[#DCFCE7]', iconCls: 'text-[#16A34A]', valueCls: 'text-[#16A34A]',
+      label: 'Assigned', value: stats.assigned,
+      tone: {
+        value: 'text-[#1D5BD6]',
+        idle: 'bg-[#EFF6FF] border-[#BFDBFE] hover:border-[#93C5FD]',
+        active: 'bg-[#DBEAFE] border-[#1D5BD6] ring-2 ring-[#1D5BD6]/25',
+      },
     },
   ];
 
@@ -292,21 +429,14 @@ export default function MasterSchedulePage() {
 
       {/* Filter card: 5 controls + search */}
       <div className="bg-white rounded-2xl border border-[#E2E8F0] shadow-sm px-4 sm:px-5 py-4 space-y-3">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
-          <Skeleton className="h-[42px] w-full rounded-xl xl:col-span-2" />
-          <Skeleton className="h-[42px] w-full rounded-xl" />
-          <Skeleton className="h-[42px] w-full rounded-xl" />
-          <Skeleton className="h-[42px] w-full rounded-xl" />
-          <Skeleton className="h-[42px] w-full rounded-xl" />
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-[42px] w-full rounded-xl" />)}
         </div>
-        <Skeleton className="h-[42px] w-full rounded-full" />
       </div>
+      <Skeleton className="h-[42px] w-full rounded-full" />
 
       {/* Content area */}
       <div className="bg-white rounded-2xl border border-[#E2E8F0] shadow-sm p-4 sm:p-6 space-y-4">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {Array.from({ length: 4 }, (_, i) => <CardSkeleton key={i} className="h-[88px]" />)}
-        </div>
         <TableSkeleton rows={8} cols={6} />
       </div>
     </div>
@@ -317,31 +447,10 @@ export default function MasterSchedulePage() {
       <PageLoadTransition showSkeleton={showPageSkeleton} skeleton={pageSkeleton}>
 
       {/* ── Page header ──────────────────────────────────────────── */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-[#1E3A5F]">Master Schedule</h1>
-          <p className="text-[#64748B] text-sm mt-0.5">
-            View and manage all subject assignments across blocks
-          </p>
-        </div>
-
-        <div className="flex gap-2.5 flex-shrink-0">
-          <Link
-            href="/workload"
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors shadow-sm"
-            style={{ backgroundColor: '#3C91E6', color: '#ffffff' }}
-            onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#2E7DD1')}
-            onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#3C91E6')}
-          >
-            Assign Workload
-          </Link>
-          {/* Green success action */}
-          <Link
-            href="/scheduling"
-            className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors shadow-sm"
-          >
-            Schedule Subjects
-          </Link>
+      <div className="mb-8">
+        <BackButton />
+        <div className="mt-4 sm:mt-7 mb-2">
+          <WatermarkTitle>Master Schedule</WatermarkTitle>
         </div>
       </div>
 
@@ -352,11 +461,13 @@ export default function MasterSchedulePage() {
             No program is assigned to your Department Chair account. Please contact the administrator.
           </div>
         )}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
+        {/* Row 1: Program · Year Level · Semester
+            Row 2: School Year · Status · Unassigned / Assigned counts */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
 
           {/* Program — locked for Department Chair */}
           {isChair ? (
-            <div className="xl:col-span-2 flex items-center gap-2 bg-slate-50 border border-slate-100 rounded-xl px-3 py-2.5 select-none">
+            <div className={MS_READONLY}>
               <span className="text-sm text-slate-600 font-medium truncate">
                 {lockedProgram
                   ? `${lockedProgram.code} — ${lockedProgram.name}`
@@ -367,8 +478,8 @@ export default function MasterSchedulePage() {
             <FilterSelect
               value={filters.program_id}
               onChange={v => setFilter('program_id', v)}
-              className="xl:col-span-2"
               label="Program"
+              className={MS_FIELD}
             >
               <option value="">— Select Program —</option>
               {programs.map(p => (
@@ -383,21 +494,22 @@ export default function MasterSchedulePage() {
             onChange={v => setFilter('year_level', v)}
             disabled={!programSelected}
             label="Year Level"
+            className={MS_FIELD}
           >
             <option value="">All Year Levels</option>
             {YEAR_LEVELS.map(y => <option key={y} value={y}>{y}</option>)}
           </FilterSelect>
 
           {/* Semester — read-only */}
-          <div className="flex items-center gap-2 bg-slate-50 border border-slate-100 rounded-xl px-3 py-2.5 select-none">
-            <CalendarDays className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
-            <span className="text-sm text-slate-600 font-medium truncate">{globalSemester || '—'}</span>
+          <div className={MS_READONLY}>
+            <CalendarDays className="w-4 h-4 text-[#1D5BD6] flex-shrink-0" />
+            <span className="text-sm text-[#0B2A5B] font-semibold truncate">{globalSemester || '—'}</span>
           </div>
 
-          {/* Academic Year — read-only */}
-          <div className="flex items-center gap-2 bg-slate-50 border border-slate-100 rounded-xl px-3 py-2.5 select-none">
-            <CalendarDays className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
-            <span className="text-sm text-slate-600 font-medium truncate">{globalYear || '—'}</span>
+          {/* School Year — read-only */}
+          <div className={MS_READONLY}>
+            <CalendarDays className="w-4 h-4 text-[#1D5BD6] flex-shrink-0" />
+            <span className="text-sm text-[#0B2A5B] font-semibold truncate">{globalYear || '—'}</span>
           </div>
 
           {/* Status */}
@@ -406,22 +518,49 @@ export default function MasterSchedulePage() {
             onChange={v => setFilter('status', v)}
             disabled={!programSelected}
             label="Status"
+            className={MS_FIELD}
           >
             <option value="">All Statuses</option>
             {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
           </FilterSelect>
 
+          {/* Count tiles — click to filter by that status (click again to clear).
+              Colour = meaning: red = unassigned (needs an instructor), blue = assigned. */}
+          <div className="grid grid-cols-2 gap-2">
+            {STAT_CARDS.map(({ label, value, tone }) => {
+              const active = filters.status === label;
+              return (
+                <button
+                  key={label}
+                  type="button"
+                  disabled={!programSelected}
+                  onClick={() => setFilter('status', active ? '' : label)}
+                  aria-pressed={active}
+                  title={active ? 'Show all statuses' : `Show ${label} only`}
+                  className={`flex items-center justify-center gap-1.5 h-[42px] rounded-xl border px-2 transition-all duration-150 active:scale-[0.97] disabled:opacity-60 disabled:cursor-not-allowed ${
+                    active ? tone.active : tone.idle
+                  } ${label === 'Unassigned' && programSelected && value > 0 && !active ? 'qr-attn-tile' : ''}`}
+                >
+                  <span className={`text-base font-bold leading-none tabular-nums ${tone.value}`}>{programSelected ? value : '–'}</span>
+                  <span className="text-xs font-semibold text-[#475569]">{label}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
+      </FilterBar>
 
-        {/* Search bar */}
+      {/* Search — compact pill, right-aligned under the filter card
+          (full width on phones) */}
+      <div className="flex justify-end mb-5">
         <SearchInput
           value={filters.search}
           onChange={v => setFilter('search', v)}
-          placeholder="Search by subject code, name, instructor, or block…"
+          placeholder="Search subject, instructor, or block…"
           disabled={!programSelected}
-          className="mt-3"
+          className="w-full sm:w-[22rem] lg:w-[26rem] !bg-white border border-[#D6E0EF] shadow-[0_1px_3px_rgba(11,42,91,0.06)] hover:border-[#9DB8E8] focus-within:border-[#1D5BD6]"
         />
-      </FilterBar>
+      </div>
 
       {/* ── Empty state ───────────────────────────────────────────── */}
       {!programSelected && (
@@ -434,36 +573,9 @@ export default function MasterSchedulePage() {
       {programSelected && (
         <PageLoadTransition
           showSkeleton={showScheduleSkeleton}
-          skeleton={
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                {Array.from({ length: 4 }, (_, i) => <CardSkeleton key={i} className="h-[88px]" />)}
-              </div>
-              <TableSkeleton rows={8} cols={6} />
-            </div>
-          }
+          skeleton={<TableSkeleton rows={8} cols={6} />}
         >
         <>
-          {/* Summary cards */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
-            {STAT_CARDS.map(({ label, value, Icon, iconBg, iconCls, valueCls }) => (
-              <div
-                key={label}
-                className="bg-white rounded-xl border border-[#E2E8F0] p-5 hover:border-[#BFDBFE] transition-colors"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className={`text-3xl font-bold ${valueCls}`}>{value}</div>
-                    <div className="text-sm font-medium text-[#64748B] mt-1">{label}</div>
-                  </div>
-                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${iconBg}`}>
-                    <Icon className={`w-5 h-5 ${iconCls}`} />
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-
           {/* No results */}
           {filtered.length === 0 && (
             <div className="bg-white rounded-2xl border border-[#E2E8F0] shadow-sm py-12 text-center">
@@ -471,8 +583,26 @@ export default function MasterSchedulePage() {
             </div>
           )}
 
-          {/* Single block page */}
-          {currentBlock && (
+          {/* All Year Levels selected — list every block, no pagination */}
+          {isAllYears && blockPages.length > 0 && (
+            <div className="mb-4 space-y-6 min-w-0">
+              {blockPages.map(block => (
+                <motion.div
+                  key={`${block.year_level}|${block.semester}|${block.block_name}`}
+                  className="min-w-0"
+                  initial={reduceMotion ? false : { opacity: 0, y: 16 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true, amount: 0.15, margin: '0px 0px -60px 0px' }}
+                  transition={{ duration: 0.65, ease: BLOCK_PAGE_EASE }}
+                >
+                  <BlockTable block={block} />
+                </motion.div>
+              ))}
+            </div>
+          )}
+
+          {/* Specific year level — single block page, paginated by block */}
+          {!isAllYears && currentBlock && (
             <div className="mb-4 min-w-0">
               {/* Animated block header + schedule only — pager stays stable below */}
               <div className="min-w-0 overflow-x-hidden">
@@ -494,111 +624,7 @@ export default function MasterSchedulePage() {
                     transition={blockPageTransition}
                     className="min-w-0"
                   >
-                    {/* Year + Block header */}
-                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-3 mb-4 min-w-0">
-                      <div className="min-w-0">
-                        <h2 className="text-base sm:text-lg font-bold text-[#1E3A5F] truncate">
-                          {currentBlock.year_level} — Block {currentBlock.block_name}
-                        </h2>
-                        <p className="text-sm text-[#64748B] mt-0.5 truncate">
-                          {currentBlock.semester}
-                          <span className="text-[#94A3B8]">
-                            {' · '}
-                            {currentBlock.subjects.length} subject{currentBlock.subjects.length !== 1 ? 's' : ''}
-                          </span>
-                        </p>
-                      </div>
-                      <span className="inline-flex self-start items-center px-3 py-1.5 rounded-lg bg-[#EFF6FF] text-[#3C91E6] border border-[#BFDBFE] text-sm font-bold uppercase tracking-wide flex-shrink-0">
-                        Block {currentBlock.block_name}
-                      </span>
-                    </div>
-
-                    {/* Subject table */}
-                    <div className="bg-white rounded-xl border border-[#E2E8F0] overflow-hidden">
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
-                              {COL_HEADERS.map(h => (
-                                <th
-                                  key={h}
-                                  className="text-left px-4 py-3 text-[10px] font-bold text-[#64748B] uppercase tracking-wider whitespace-nowrap"
-                                >
-                                  {h}
-                                </th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-[#F1F5F9]">
-                            {currentBlock.subjects.map((s) => (
-                              <tr
-                                key={s.id}
-                                className="transition-colors hover:bg-[#F8FAFC] bg-white"
-                              >
-                                <td className="px-4 py-3.5 font-mono font-bold text-[#1E3A5F] whitespace-nowrap">
-                                  {s.subject_code}
-                                </td>
-                                <td className="px-4 py-3.5 max-w-[200px]">
-                                  <span className="line-clamp-2 leading-snug text-[#334155]">
-                                    {s.subject_name}
-                                  </span>
-                                </td>
-                                <td className="px-4 py-3.5 text-center text-[#64748B] font-medium whitespace-nowrap">
-                                  {parseFloat(String(s.total_hours)).toFixed(1)}
-                                </td>
-                                <td className="px-4 py-3.5 text-center font-bold text-[#3C91E6] whitespace-nowrap">
-                                  {parseFloat(String(s.units)).toFixed(2)}
-                                </td>
-                                <td className="px-4 py-3.5 whitespace-nowrap">
-                                  {s.faculty_name
-                                    ? <span className="text-[#334155] font-medium">{s.faculty_name}</span>
-                                    : <span className="text-[#94A3B8] italic text-xs">No instructor</span>}
-                                </td>
-                                <td className="px-4 py-3.5 whitespace-nowrap">
-                                  {s.day_pattern
-                                    ? (
-                                      <span className="text-[#334155] font-medium">
-                                        {s.day_pattern}{' '}
-                                        {s.start_time?.slice(0, 5)}
-                                        {s.end_time ? `–${s.end_time.slice(0, 5)}` : ''}
-                                      </span>
-                                    )
-                                    : <span className="text-[#94A3B8] italic text-xs">Not scheduled</span>}
-                                </td>
-                                <td className="px-4 py-3.5 whitespace-nowrap">
-                                  {s.room_name
-                                    ? <span className="text-[#334155] font-medium">{s.room_name}</span>
-                                    : <span className="text-[#94A3B8] italic text-xs">No room</span>}
-                                </td>
-                                <td className="px-4 py-3.5 whitespace-nowrap">
-                                  <StatusPill status={s.status} />
-                                </td>
-                                <td className="px-4 py-3.5 whitespace-nowrap">
-                                  <div className="flex gap-1.5">
-                                    {s.status === 'Unassigned' && (
-                                      <Link
-                                        href={`/workload?assign=${s.id}`}
-                                        className="px-3 py-1.5 text-xs bg-[#EFF6FF] text-[#3C91E6] border border-[#BFDBFE] rounded-lg hover:bg-[#DBEAFE] font-semibold transition-colors"
-                                      >
-                                        Assign
-                                      </Link>
-                                    )}
-                                    {s.status === 'Assigned' && (
-                                      <Link
-                                        href={`/scheduling?ms=${s.id}`}
-                                        className="px-3 py-1.5 text-xs bg-[#DCFCE7] text-[#16A34A] border border-[#BBF7D0] rounded-lg hover:bg-[#BBF7D0] font-semibold transition-colors"
-                                      >
-                                        Schedule
-                                      </Link>
-                                    )}
-                                  </div>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
+                    <BlockTable block={currentBlock} />
                   </motion.div>
                 </AnimatePresence>
               </div>
@@ -614,7 +640,7 @@ export default function MasterSchedulePage() {
                         animate={{ opacity: 1, y: 0 }}
                         exit={reduceMotion ? undefined : { opacity: 0, y: -4 }}
                         transition={pageLabelTransition}
-                        className="font-medium text-[#1E3A5F] truncate"
+                        className="font-medium text-[#0B2A5B] truncate"
                       >
                         {currentBlock.year_level} — Block {currentBlock.block_name}
                       </motion.p>
@@ -637,7 +663,7 @@ export default function MasterSchedulePage() {
                           animate={{ opacity: 1, y: 0 }}
                           exit={reduceMotion ? undefined : { opacity: 0, y: -6 }}
                           transition={pageLabelTransition}
-                          className="inline-block text-sm font-medium text-[#1E3A5F] tabular-nums px-1 whitespace-nowrap"
+                          className="inline-block text-sm font-medium text-[#0B2A5B] tabular-nums px-1 whitespace-nowrap"
                         >
                           Page {safePageIndex + 1} of {totalBlockPages}
                         </motion.span>

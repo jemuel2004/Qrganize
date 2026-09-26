@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUser } from '@/server/auth';
 import { getChairAssignedProgramId } from '@/server/programScope';
 import {
@@ -10,14 +10,14 @@ import {
 export async function GET(req: NextRequest) {
   try {
     const auth = await getAuthUser(req) as { role?: string; id?: number } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const full = await computeWorkloadMonitoring();
     await syncWorkloadMonitoringNotifications(true, full);
 
-    if (auth.role === 'department_chair') {
+    if (auth.role === 'program_chair') {
       const userId = Number(auth.id);
       const programId = userId ? await getChairAssignedProgramId(userId) : null;
       const scoped = filterSnapshotForProgram(full, programId);

@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Search, X, ChevronDown, Calendar } from 'lucide-react';
+import { Search, X, ChevronDown, Calendar, Lock } from 'lucide-react';
 
 /* ─────────────────────────────────────────────────────────────────────────────
    QRganize Design System — Search & Filter Tokens  (Facebook-inspired)
@@ -38,8 +38,8 @@ const SF_SELECT =
  * Includes appearance-none so native <select> arrows never stack with FilterSelect's chevron.
  */
 export const SF_DISABLED =
-  'w-full bg-slate-100 rounded-xl px-3 py-2.5 text-sm text-slate-500 ' +
-  'cursor-not-allowed select-none border-0 outline-none appearance-none';
+  'w-full bg-slate-50 rounded-xl px-3 py-2.5 text-sm text-slate-400 ' +
+  'cursor-not-allowed select-none border border-dashed border-slate-200 outline-none appearance-none opacity-70';
 
 /**
  * Read-only display field with optional icon.
@@ -87,7 +87,7 @@ export function SearchInput({
       className={[
         'flex items-center gap-2.5 rounded-2xl px-4 py-2.5 transition-all duration-200',
         disabled
-          ? 'bg-slate-100 cursor-not-allowed'
+          ? 'bg-slate-50 border border-dashed border-slate-200 opacity-70 cursor-not-allowed'
           : filled
             /* Has text → white, stays white on hover/focus */
             ? 'bg-white shadow-[0_1px_3px_rgba(0,0,0,0.05)] hover:bg-slate-50 focus-within:shadow-[0_2px_12px_rgba(0,0,0,0.09)]'
@@ -177,10 +177,17 @@ export function FilterSelect({
       >
         {children}
       </select>
-      <ChevronDown
-        aria-hidden="true"
-        className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400"
-      />
+      {disabled ? (
+        <Lock
+          aria-hidden="true"
+          className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-300"
+        />
+      ) : (
+        <ChevronDown
+          aria-hidden="true"
+          className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400"
+        />
+      )}
     </div>
   );
 }

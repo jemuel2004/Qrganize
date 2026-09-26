@@ -1,4 +1,4 @@
-import { SignJWT, jwtVerify } from 'jose';
+﻿import { SignJWT, jwtVerify } from 'jose';
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
@@ -210,25 +210,34 @@ export async function adminLoginResponse(
   return response;
 }
 
+/**
+ * Shared by both chair-style roles authenticated through the single
+ * "Administrator / Chair" login option. `role` is the account's actual
+ * DB role (never client-supplied) — Department Chair gets the admin-style
+ * home page since it now has near-admin access; Program Chair keeps the
+ * existing program-scoped /dept-chair experience unchanged.
+ */
 export async function chairLoginResponse(
   user: { id: number; username: string; program_id?: number | null },
+  role: 'department_chair' | 'program_chair',
   options?: LoginIssueOptions
 ) {
   const av = await getAuthVersion('user', user.id);
   const programId = user.program_id ?? null;
+  const redirect = role === 'department_chair' ? '/dashboard' : '/dept-chair';
   const token = await signToken({
     id: user.id,
     username: user.username,
-    role: 'department_chair',
+    role,
     program_id: programId,
     av,
   });
   const response = NextResponse.json({
-    success: true, role: 'department_chair', redirect: '/dept-chair',
+    success: true, role, redirect,
     user: {
       id: user.id,
       username: user.username,
-      role: 'department_chair',
+      role,
       program_id: programId,
     },
   });

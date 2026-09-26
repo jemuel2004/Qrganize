@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUser } from '@/server/auth';
 import { query } from '@/server/db';
 import { DEPT_CHAIR_ACCOUNT_SELECT, ensureUsersSchema } from '@/server/ensure-users-schema';
@@ -78,7 +78,7 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
     }
 
     const existing = await query(
-      `SELECT id, email, google_verified FROM users WHERE id = $1 AND role = 'department_chair'`,
+      `SELECT id, email, google_verified FROM users WHERE id = $1 AND role = 'program_chair'`,
       [uid]
     );
     if (existing.rows.length === 0) return NextResponse.json({ error: 'Account not found.' }, { status: 404 });
@@ -135,7 +135,7 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
          google_picture = CASE WHEN lower(trim(email)) IS DISTINCT FROM lower(trim($2::varchar)) THEN NULL ELSE google_picture END,
          password_hash = COALESCE($4, password_hash),
          updated_at = NOW()
-       WHERE id = $5 AND role = 'department_chair'`,
+       WHERE id = $5 AND role = 'program_chair'`,
       [usernameCheck.username, nextEmail, program.id, hash, uid]
     );
 
@@ -168,7 +168,7 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
     if ('is_active' in body) {
       const result = await query(
         `UPDATE users SET is_active = $1, updated_at = NOW()
-         WHERE id = $2 AND role = 'department_chair'
+         WHERE id = $2 AND role = 'program_chair'
          RETURNING id`,
         [Boolean(body.is_active), uid]
       );
@@ -186,7 +186,7 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
       const hash = await bcrypt.hash(new_password, 12);
       const result = await query(
         `UPDATE users SET password_hash = $1, updated_at = NOW()
-         WHERE id = $2 AND role = 'department_chair'
+         WHERE id = $2 AND role = 'program_chair'
          RETURNING id`,
         [hash, uid]
       );
@@ -217,7 +217,7 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
     }
 
     const existing = await query(
-      `SELECT id, profile_picture FROM users WHERE id = $1 AND role = 'department_chair'`,
+      `SELECT id, profile_picture FROM users WHERE id = $1 AND role = 'program_chair'`,
       [uid]
     );
     if (existing.rows.length === 0) {
@@ -226,7 +226,7 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
     const { profile_picture } = existing.rows[0] as { profile_picture: string | null };
 
     const result = await query(
-      `DELETE FROM users WHERE id = $1 AND role = 'department_chair' RETURNING id`,
+      `DELETE FROM users WHERE id = $1 AND role = 'program_chair' RETURNING id`,
       [uid]
     );
     if (result.rows.length === 0) {
@@ -245,7 +245,7 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
     }
 
     await query(
-      `DELETE FROM notifications WHERE recipient_id = $1 AND recipient_role = 'department_chair'`,
+      `DELETE FROM notifications WHERE recipient_id = $1 AND recipient_role = 'program_chair'`,
       [uid]
     ).catch(err => {
       console.warn('[DELETE dept-chair-account] notifications cleanup skipped:', (err as Error).message);

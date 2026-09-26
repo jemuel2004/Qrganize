@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useVisibilityAwareInterval } from '@/client/hooks/useVisibilityAwareInterval';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/client/hooks/useMinLoading';
 import { PageLoadTransition } from '@/client/components/ui/PageLoadTransition';
+import BackButton from '@/client/components/ui/BackButton';
 import { TableSkeleton } from '@/client/components/ui/skeletons';
 import {
   CalendarDays, MapPin, Users, Clock,
@@ -102,7 +103,7 @@ function badgeConfig(status: ScanStatus): BadgeConfig | null {
     case 'no-room':
       return { label: 'No Room Assigned', icon: <MapPin className="w-3 h-3" />, classes: 'bg-[#F8FAFC] text-[#64748B] border-[#E2E8F0]' };
     case 'not-yet':
-      return { label: 'Not Yet Available', icon: <Hourglass className="w-3 h-3" />, classes: 'bg-[#EFF6FF] text-[#3C91E6] border-[#BFDBFE]' };
+      return { label: 'Not Yet Available', icon: <Hourglass className="w-3 h-3" />, classes: 'bg-[#EFF6FF] text-[#1D5BD6] border-[#BFDBFE]' };
     case 'available':
       return { label: 'Available to Scan', icon: <QrCode className="w-3 h-3" />, classes: 'bg-emerald-50 text-emerald-700 border-emerald-200', pulse: true };
     case 'in-use-self':
@@ -208,8 +209,8 @@ function DayClassRow({
   return (
     <div className="bg-white rounded-2xl border border-[#E2E8F0] shadow-[0_1px_3px_rgba(0,0,0,0.06)] px-5 py-4">
       <div className="flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-5">
-        <div className="flex items-center gap-2 text-sm font-semibold text-[#1E3A5F] flex-shrink-0 tabular-nums">
-          <Clock className="w-4 h-4 text-[#3C91E6]" />
+        <div className="flex items-center gap-2 text-sm font-semibold text-[#0B2A5B] flex-shrink-0 tabular-nums">
+          <Clock className="w-4 h-4 text-[#1D5BD6]" />
           {fmt12(sess.start_time)} – {fmt12(sess.end_time)}
         </div>
 
@@ -223,12 +224,12 @@ function DayClassRow({
           <p className="text-sm text-[#0F172A] font-medium mt-0.5">{item.subject_name}</p>
           <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs text-[#475569]">
             <span className="flex items-center gap-1.5">
-              <Users className="w-3 h-3 text-[#3C91E6]" />
+              <Users className="w-3 h-3 text-[#1D5BD6]" />
               {item.program_code} • {item.year_level} • Block {item.block_name}
             </span>
             {sess.room_name ? (
               <span className="flex items-center gap-1.5">
-                <MapPin className="w-3 h-3 text-[#3C91E6]" />
+                <MapPin className="w-3 h-3 text-[#1D5BD6]" />
                 {sess.room_name}
               </span>
             ) : (
@@ -333,16 +334,14 @@ export default function ScheduleClient() {
 
       <div className="flex items-start justify-between gap-4 mb-6">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold text-[#1E3A5F]">My Schedule</h1>
-          <p className="text-[#64748B] text-sm mt-1">
-            View your classes for the selected day.
-          </p>
+          <BackButton />
+          <h1 className="text-2xl font-bold text-[#0B2A5B]">My Schedule</h1>
         </div>
         <button
           type="button"
           onClick={() => load()}
           disabled={loading}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-sm font-semibold text-[#64748B] hover:text-[#1E3A5F] hover:bg-white border border-[#E2E8F0] transition-colors disabled:opacity-50 flex-shrink-0"
+          className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-sm font-semibold text-[#64748B] hover:text-[#0B2A5B] hover:bg-white border border-[#E2E8F0] transition-colors disabled:opacity-50 flex-shrink-0"
         >
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           Refresh
@@ -367,13 +366,13 @@ export default function ScheduleClient() {
                 onClick={() => setSelectedDay(day)}
                 className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-semibold border transition-colors ${
                   active
-                    ? 'bg-[#3C91E6] text-white border-[#3C91E6] shadow-sm'
-                    : 'bg-white text-[#64748B] border-[#E2E8F0] hover:text-[#1E3A5F] hover:border-[#CBD5E1]'
+                    ? 'bg-[#1D5BD6] text-white border-[#1D5BD6] shadow-sm'
+                    : 'bg-white text-[#64748B] border-[#E2E8F0] hover:text-[#0B2A5B] hover:border-[#CBD5E1]'
                 }`}
               >
                 {day}
                 {isToday && !active && (
-                  <span className="text-[10px] font-bold uppercase tracking-wide text-[#3C91E6]">Today</span>
+                  <span className="text-[10px] font-bold uppercase tracking-wide text-[#1D5BD6]">Today</span>
                 )}
               </button>
             );
@@ -385,13 +384,13 @@ export default function ScheduleClient() {
         <div className={`grid gap-4 mb-5 ${isViewingToday ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
           <div className="bg-white rounded-2xl border border-[#E2E8F0] shadow-[0_1px_3px_rgba(0,0,0,0.06)] p-5 flex items-start gap-3.5">
             <div className="w-10 h-10 rounded-xl bg-[#EFF6FF] flex items-center justify-center flex-shrink-0">
-              <CalendarDays className="w-5 h-5 text-[#3C91E6]" />
+              <CalendarDays className="w-5 h-5 text-[#1D5BD6]" />
             </div>
             <div>
               <div className="text-xs font-semibold text-[#64748B] uppercase tracking-wide mb-1">
                 {classCountLabel}
               </div>
-              <div className="text-2xl font-bold tabular-nums leading-none text-[#1E3A5F]">
+              <div className="text-2xl font-bold tabular-nums leading-none text-[#0B2A5B]">
                 {dayClasses.length}
               </div>
             </div>
@@ -399,13 +398,13 @@ export default function ScheduleClient() {
           {isViewingToday && (
             <div className="bg-white rounded-2xl border border-[#E2E8F0] shadow-[0_1px_3px_rgba(0,0,0,0.06)] p-5 flex items-start gap-3.5">
               <div className="w-10 h-10 rounded-xl bg-[#EFF6FF] flex items-center justify-center flex-shrink-0">
-                <QrCode className="w-5 h-5 text-[#3C91E6]" />
+                <QrCode className="w-5 h-5 text-[#1D5BD6]" />
               </div>
               <div>
                 <div className="text-xs font-semibold text-[#64748B] uppercase tracking-wide mb-1">
                   Scan Available
                 </div>
-                <div className="text-2xl font-bold tabular-nums leading-none text-[#1E3A5F]">
+                <div className="text-2xl font-bold tabular-nums leading-none text-[#0B2A5B]">
                   {availableCount}
                 </div>
               </div>
@@ -421,10 +420,10 @@ export default function ScheduleClient() {
       {schedules.length === 0 ? (
         <div className="bg-white border border-[#E2E8F0] rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.06)] p-12 flex flex-col items-center gap-4 text-center">
           <div className="w-14 h-14 rounded-2xl bg-[#EFF6FF] border border-[#BFDBFE] flex items-center justify-center">
-            <CalendarDays className="w-7 h-7 text-[#3C91E6]" />
+            <CalendarDays className="w-7 h-7 text-[#1D5BD6]" />
           </div>
           <div>
-            <p className="text-[#1E3A5F] font-bold text-lg mb-1">No subjects assigned yet</p>
+            <p className="text-[#0B2A5B] font-bold text-lg mb-1">No subjects assigned yet</p>
             <p className="text-[#64748B] text-sm max-w-sm">
               Your schedule will appear here once the administrator assigns you subjects.
             </p>
@@ -436,7 +435,7 @@ export default function ScheduleClient() {
             <CalendarDays className="w-7 h-7 text-[#94A3B8]" />
           </div>
           <div>
-            <p className="text-[#1E3A5F] font-bold text-lg mb-1">
+            <p className="text-[#0B2A5B] font-bold text-lg mb-1">
               No classes scheduled for {selectedDay}
             </p>
             <p className="text-[#64748B] text-sm">

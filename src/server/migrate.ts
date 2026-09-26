@@ -1,4 +1,4 @@
-import { query } from './db';
+﻿import { query } from './db';
 import fs from 'fs';
 import path from 'path';
 import bcrypt from 'bcryptjs';
@@ -86,7 +86,7 @@ async function v1_initialSchema() {
   const chairHash = await bcrypt.hash('chair123', 10);
   await query(`
     INSERT INTO users (username, email, password_hash, role)
-    VALUES ($1, $2, $3, 'department_chair')
+    VALUES ($1, $2, $3, 'program_chair')
     ON CONFLICT (username) DO NOTHING
   `, ['deptchair', 'deptchair@school.edu', chairHash]);
 
@@ -406,7 +406,7 @@ async function v16_roomChangeTimestamps() {
 
 async function v17_usersIsActive() {
   // Add is_active to the users table so administrators can activate /
-  // deactivate department_chair accounts.
+  // deactivate program_chair accounts.
   await query(`
     ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE
   `);
@@ -794,6 +794,31 @@ async function v38_overloadReviewNotificationUnique() {
   `);
 }
 
+async function v39_facultyPrioritySubjects() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS faculty_priority_subjects (
+      id            SERIAL PRIMARY KEY,
+      faculty_id    INTEGER NOT NULL REFERENCES faculty(id) ON DELETE CASCADE,
+      subject_code  VARCHAR(50) NOT NULL,
+      subject_name  VARCHAR(255) NOT NULL DEFAULT '',
+      created_at    TIMESTAMP DEFAULT NOW(),
+      UNIQUE(faculty_id, subject_code)
+    )
+  `).catch(e => console.warn('[v39]', (e as Error).message));
+}
+
+/**
+ * Role restructure: the old "Department Chair" role/behavior (program-scoped
+ * access, own /dept-chair dashboard) is renamed to "program_chair". A brand
+ * new "department_chair" role is introduced with near-admin access. Existing
+ * accounts stored as role='department_chair' keep their exact current
+ * permissions — they become 'program_chair' so nothing changes for them.
+ */
+async function v40_renameDeptChairToProgramChair() {
+  await query(`UPDATE users SET role = 'program_chair' WHERE role = 'department_chair'`)
+    .catch(e => console.warn('[v40]', (e as Error).message));
+}
+
 // ─── migration registry ───────────────────────────────────────────────────────
 
 const MIGRATIONS: Array<{ version: number; name: string; fn: () => Promise<void> }> = [
@@ -835,6 +860,8 @@ const MIGRATIONS: Array<{ version: number; name: string; fn: () => Promise<void>
   { version: 36, name: 'blocks.curriculum_version old/new',      fn: v36_blockCurriculumVersion },
   { version: 37, name: 'workload monitoring notification unique', fn: v37_monitoringNotificationUnique },
   { version: 38, name: 'overload review notification unique', fn: v38_overloadReviewNotificationUnique },
+  { version: 39, name: 'faculty_priority_subjects table',        fn: v39_facultyPrioritySubjects },
+  { version: 40, name: 'rename department_chair role to program_chair', fn: v40_renameDeptChairToProgramChair },
 ];
 
 // ─── public entry point ───────────────────────────────────────────────────────

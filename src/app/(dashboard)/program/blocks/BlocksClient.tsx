@@ -1,16 +1,20 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useToast } from '@/client/context/ToastContext';
 import { useSchoolYear } from '@/client/context/SchoolYearContext';
 import Modal from '@/client/components/ui/Modal';
+import BackButton from '@/client/components/ui/BackButton';
+import WatermarkTitle from '@/client/components/ui/WatermarkTitle';
+import TrashDropAnimation from '@/client/components/ui/TrashDropAnimation';
 import { PageLoadTransition } from '@/client/components/ui/PageLoadTransition';
 import { CardSkeleton, ListSkeleton, Skeleton } from '@/client/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/client/hooks/useMinLoading';
 import {
-  Plus, Pencil, Trash2, Eye, BookOpen, CheckCircle,
-  AlertTriangle, Users, X, GraduationCap, ChevronRight,
+  Pencil, Trash2, Eye, BookOpen, CheckCircle,
+  AlertTriangle, Users, X, ChevronRight, Plus,
 } from 'lucide-react';
 import { SearchInput, FilterSelect, FilterBar } from '@/components/ui/SearchFilter';
 import Link from 'next/link';
@@ -79,6 +83,39 @@ function buildGroups(items: Block[]): BlockGroup[] {
   });
 }
 
+/**
+ * Single source of truth for "which block letter comes next" — must always
+ * filter by curriculum_version too, since Block A–J can exist under the Old
+ * curriculum while New curriculum for the same Program/Year/Sem/AY is empty
+ * (or vice versa). Every caller that needs this must go through here so the
+ * dropdown's initial value and the "Next available" hint never disagree.
+ */
+function computeNextBlockName(
+  blocksList: Block[],
+  programId: string,
+  curriculumVersion: CurriculumVersion | '',
+  yearLevel: string,
+  semester: string,
+  academicYear: string,
+): string | undefined {
+  const existing = new Set(
+    blocksList
+      .filter(b =>
+        String(b.program_id) === programId &&
+        blockCurriculumVersion(b.curriculum_version) === curriculumVersion &&
+        b.year_level    === yearLevel &&
+        b.semester      === semester &&
+        b.academic_year === academicYear
+      )
+      .map(b => b.block_name.toUpperCase())
+  );
+  return BLOCK_NAMES.find(n => {
+    if (existing.has(n)) return false;
+    const i = BLOCK_NAMES.indexOf(n);
+    return i === 0 || existing.has(BLOCK_NAMES[i - 1]);
+  });
+}
+
 export default function BlocksPage() {
   const toast = useToast();
   const router = useRouter();
@@ -96,20 +133,26 @@ export default function BlocksPage() {
   const [blockOrderError,   setBlockOrderError]   = useState<{ required: string; requested: string } | null>(null);
   const [noCurriculumInfo,  setNoCurriculumInfo]  = useState<{ program_code: string; year_level: string; semester: string; curriculum_label?: string } | null>(null);
   const [loading,        setLoading]        = useState(false);
+  const [saveSuccess,    setSaveSuccess]    = useState(false);
   const [listLoading,    setListLoading]    = useState(false);
   const [deletingId,     setDeletingId]     = useState<number | null>(null);
+  const [deleteTarget,   setDeleteTarget]   = useState<{ id: number; name: string } | null>(null);
+  const [deleteSuccess,  setDeleteSuccess]  = useState(false);
+  // Create mode: consecutive block letters to create in one save (e.g. A, B, C)
+  const [selectedBlocks, setSelectedBlocks] = useState<string[]>([]);
+  const [createdCount,   setCreatedCount]   = useState(0);
   const [modalKey,       setModalKey]       = useState(0);
   const [search,         setSearch]         = useState('');
   const [programFilter,  setProgramFilter]  = useState('');
   const [yearFilter,     setYearFilter]     = useState('');
   const [previewSubjects,  setPreviewSubjects]   = useState<CurriculumPreview[]>([]);
   const [previewLoading,   setPreviewLoading]    = useState(false);
-  const [userRole,         setUserRole]          = useState<'admin' | 'department_chair' | null>(null);
+  const [userRole,         setUserRole]          = useState<'admin' | 'program_chair' | null>(null);
   const [chairProgramId,   setChairProgramId]    = useState<number | null>(null);
   const [chairNoProgram,   setChairNoProgram]    = useState(false);
   const [roleReady,        setRoleReady]         = useState(false);
 
-  const isChair = userRole === 'department_chair';
+  const isChair = userRole === 'program_chair';
   const lockedProgram = isChair
     ? programs.find(p => p.id === chairProgramId) ?? programs[0] ?? null
     : null;
@@ -131,8 +174,8 @@ export default function BlocksPage() {
         const list: Program[] = progData.programs || [];
         setPrograms(list);
 
-        if (role === 'department_chair') {
-          setUserRole('department_chair');
+        if (role === 'program_chair') {
+          setUserRole('program_chair');
           if (assignedPid == null || list.length === 0) {
             setChairProgramId(null);
             setChairNoProgram(true);
@@ -160,7 +203,7 @@ export default function BlocksPage() {
     if (!roleReady) return;
     const pid = searchParams.get('programId');
     if (!pid) return;
-    if (userRole === 'department_chair') {
+    if (userRole === 'program_chair') {
       if (chairProgramId != null && Number(pid) !== chairProgramId) return;
       return;
     }
@@ -190,7 +233,7 @@ export default function BlocksPage() {
   }, [programFilter]);
 
   useEffect(() => {
-    if (!programFilter || !yearFilter) {
+    if (!programFilter) {
       setBlocks([]);
       setListLoading(false);
       return;
@@ -210,29 +253,32 @@ export default function BlocksPage() {
       });
 
     return () => controller.abort();
-  }, [programFilter, yearFilter]);
+  // Fetches every block for the program (across all year levels) — needed so the
+  // Create Block modal can enforce one curriculum per Program + Year Level even
+  // before the page-level Year Level filter is set.
+  }, [programFilter]);
+
+  // Auto-lock the curriculum to whatever's already established for this Program +
+  // Year Level combo, so the user can't pick a conflicting curriculum for it.
+  useEffect(() => {
+    if (editId) return;
+    if (!form.program_id || !form.year_level) return;
+    const existingBlock = blocks.find(b =>
+      String(b.program_id) === form.program_id && b.year_level === form.year_level
+    );
+    if (!existingBlock) return;
+    const established = blockCurriculumVersion(existingBlock.curriculum_version);
+    setForm(f => (f.curriculum_version === established ? f : { ...f, curriculum_version: established }));
+  }, [editId, form.program_id, form.year_level, blocks]);
 
   useEffect(() => {
     if (editId) return;
     if (!form.program_id || !form.curriculum_version || !form.year_level || !form.semester || !form.academic_year) return;
-    const existing = new Set(
-      blocks
-        .filter(b =>
-          String(b.program_id) === form.program_id &&
-          blockCurriculumVersion(b.curriculum_version) === form.curriculum_version &&
-          b.year_level    === form.year_level  &&
-          b.semester      === form.semester    &&
-          b.academic_year === form.academic_year
-        )
-        .map(b => b.block_name.toUpperCase())
+    const next = computeNextBlockName(
+      blocks, form.program_id, form.curriculum_version, form.year_level, form.semester, form.academic_year,
     );
-    const creatable = (n: string) => {
-      if (existing.has(n)) return false;
-      const i = BLOCK_NAMES.indexOf(n);
-      return i === 0 || existing.has(BLOCK_NAMES[i - 1]);
-    };
-    const next = BLOCK_NAMES.find(n => creatable(n));
     if (next) setForm(f => ({ ...f, block_name: next }));
+    setSelectedBlocks(next ? [next] : []);
   }, [form.program_id, form.curriculum_version, form.year_level, form.semester, form.academic_year, blocks, editId]);
 
   useEffect(() => {
@@ -263,9 +309,11 @@ export default function BlocksPage() {
 
   async function reloadBlocks() {
     if (!programFilter) { setBlocks([]); return; }
+    setListLoading(true);
     const params = new URLSearchParams({ program_id: programFilter });
     const data = await fetch('/api/blocks?' + params).then(r => r.json()).catch(() => ({ blocks: [] }));
     setBlocks(data.blocks || []);
+    setListLoading(false);
   }
 
   function openAdd() {
@@ -275,32 +323,36 @@ export default function BlocksPage() {
 
     const academicYear = globalYear || emptyForm.academic_year;
 
-    // Compute the next available block name synchronously from the current blocks
-    // state. The auto-select useEffect cannot be relied on here because it only
-    // fires when its deps change — if program/year/semester/academic_year are
-    // identical to the previous open (e.g. user creates Block A then opens the
-    // modal again), the effect is skipped and block_name would incorrectly revert
-    // to 'A'. Computing it eagerly here guarantees the dropdown always opens on
-    // the correct next block.
-    const existing = new Set(
-      blocks
-        .filter(b =>
-          String(b.program_id) === programFilter &&
-          b.year_level    === yearFilter      &&
-          b.semester      === globalSemester  &&
-          b.academic_year === academicYear
-        )
-        .map(b => b.block_name.toUpperCase())
+    // Curriculum version is locked to whatever's already established for this
+    // Program + Year Level (same rule as `establishedCurriculum` below) — resolve
+    // it up front rather than leaving it blank and waiting for a later effect to
+    // fix it, so the very first render already has the right value.
+    const establishedBlock = blocks.find(b =>
+      String(b.program_id) === programFilter && b.year_level === yearFilter
     );
-    const nextBlock = BLOCK_NAMES.find(n => {
-      if (existing.has(n)) return false;
-      const i = BLOCK_NAMES.indexOf(n);
-      return i === 0 || existing.has(BLOCK_NAMES[i - 1]);
-    }) ?? emptyForm.block_name;
+    const resolvedCurriculumVersion = establishedBlock
+      ? blockCurriculumVersion(establishedBlock.curriculum_version)
+      : ('' as const);
+
+    // Compute the next available block name synchronously from the current blocks
+    // state, filtered by curriculum_version too — otherwise Block A–J occupied
+    // under the Old curriculum would wrongly count as "taken" for a brand-new
+    // New-curriculum block set. The auto-select useEffect cannot be relied on
+    // here because it only fires when its deps change — if program/year/semester
+    // /academic_year are identical to the previous open (e.g. user creates
+    // Block A then opens the modal again), the effect is skipped and block_name
+    // would incorrectly retain a stale value. Computing it eagerly here
+    // guarantees the dropdown always opens on the correct next block.
+    const computedNext = computeNextBlockName(
+      blocks, programFilter, resolvedCurriculumVersion, yearFilter, globalSemester, academicYear,
+    );
+    const nextBlock = computedNext ?? emptyForm.block_name;
+    setSelectedBlocks(computedNext ? [computedNext] : []);
 
     setForm({
       ...emptyForm,
       program_id:   programFilter,
+      curriculum_version: resolvedCurriculumVersion,
       year_level:   yearFilter,
       semester:     globalSemester,
       academic_year: academicYear,
@@ -308,7 +360,7 @@ export default function BlocksPage() {
     });
     setEditId(null);
     setError(''); setBlockExistsError(false); setBlockOrderError(null);
-    setNoCurriculumInfo(null);
+    setNoCurriculumInfo(null); setSaveSuccess(false);
     setModalOpen(true);
   }
 
@@ -323,6 +375,7 @@ export default function BlocksPage() {
     setEditId(b.id);
     setError(''); setBlockExistsError(false); setBlockOrderError(null);
     setNoCurriculumInfo(null); setPreviewSubjects([]); setPreviewLoading(false);
+    setSaveSuccess(false);
     setModalOpen(true);
   }
 
@@ -332,7 +385,8 @@ export default function BlocksPage() {
     const url    = editId ? `/api/blocks/${editId}` : '/api/blocks';
     const method = editId ? 'PUT' : 'POST';
     try {
-      const res  = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+      const payload = editId ? form : { ...form, block_names: selectedBlocks };
+      const res  = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json();
       if (!res.ok) {
         if (data.error === 'NO_CURRICULUM') {
@@ -346,14 +400,28 @@ export default function BlocksPage() {
           setBlockExistsError(true); setError(data.detail || 'This block already exists.');
         } else if (data.error === 'BLOCK_ORDER') {
           setBlockOrderError({ required: data.required_block, requested: data.requested_block });
+        } else if (data.error === 'CURRICULUM_LOCKED') {
+          setError(data.detail || 'This Program and Year Level already has an established curriculum.');
         } else {
           setError(data.error || data.detail || 'Unable to create block. Please try again.');
         }
         return;
       }
       await reloadBlocks();   // refresh block list BEFORE closing so openAdd() sees fresh data
-      setModalOpen(false);
-      toast.success(editId ? 'Block updated successfully.' : 'Block created successfully.');
+      const count = editId ? 1 : (data.blocks?.length ?? 1);
+      setCreatedCount(count);
+      setLoading(false);
+      setSaveSuccess(true);
+      setTimeout(() => {
+        setSaveSuccess(false);
+        setModalOpen(false);
+        toast.success(
+          editId ? 'Block updated successfully.'
+          : count > 1 ? `${count} blocks created successfully.`
+          : 'Block created successfully.',
+        );
+      }, 1300);
+      return;
     } catch {
       setError('Connection error. Please check your network and try again.');
       toast.error('Connection error. Please try again.');
@@ -363,25 +431,23 @@ export default function BlocksPage() {
   }
 
   async function handleDelete(id: number, blockName: string, groupBlockList: Block[]) {
-    if (blockName.toUpperCase() === 'A') {
-      toast.error('Block A cannot be deleted. It is required by all other blocks.');
-      return;
-    }
+    // Every role — Admin and Department Chair alike — is restricted to deleting
+    // the last block first, to avoid orphaning the block sequence. Block A is
+    // only special in that it's alphabetically first, so it's "last" (and thus
+    // deletable) only when it's the sole remaining block in the group.
     const sorted    = [...groupBlockList].sort((a, b) => a.block_name.localeCompare(b.block_name));
     const lastBlock = sorted[sorted.length - 1];
     if (lastBlock.id !== id) {
       toast.error(`Only Block ${lastBlock.block_name} (the last block) can be deleted first.`);
       return;
     }
-    if (!confirm(
-      'Delete this block?\n\n' +
-      'This will permanently remove the block and all associated data:\n' +
-      '• Loaded subjects (block subjects)\n' +
-      '• Master schedule entries\n' +
-      '• Instructor load assignments\n\n' +
-      'This action cannot be undone. You can re-create the block afterwards.'
-    )) return;
+    setDeleteSuccess(false);
+    setDeleteTarget({ id, name: blockName });
+  }
 
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    const { id } = deleteTarget;
     setDeletingId(id);
     try {
       const res = await fetch(`/api/blocks/${id}`, {
@@ -396,8 +462,14 @@ export default function BlocksPage() {
         toast.error(msg);
         return;
       }
-      toast.delete('Block deleted successfully.');
+      // Trash-can animation plays over the dialog, then it closes
+      setDeleteSuccess(true);
       reloadBlocks();
+      setTimeout(() => {
+        setDeleteTarget(null);
+        setDeleteSuccess(false);
+        toast.delete('Block deleted successfully.');
+      }, 1300);
     } catch {
       toast.error('Network error. Please check your connection and try again.');
     } finally {
@@ -409,6 +481,17 @@ export default function BlocksPage() {
 
   const selectedProgram = programs.find(p => String(p.id) === form.program_id);
   const canPreview      = !!(form.program_id && form.curriculum_version && form.year_level && form.semester);
+
+  // Curriculum must stay consistent across every block under the same Program +
+  // Year Level — once one exists, later blocks for that combo are locked to it.
+  const establishedCurriculum: CurriculumVersion | null = (() => {
+    if (!form.program_id || !form.year_level) return null;
+    const existingBlock = blocks.find(b =>
+      String(b.program_id) === form.program_id && b.year_level === form.year_level
+    );
+    return existingBlock ? blockCurriculumVersion(existingBlock.curriculum_version) : null;
+  })();
+  const curriculumLocked = !editId && !!establishedCurriculum;
 
   const existingBlockNames = new Set(
     blocks
@@ -429,10 +512,30 @@ export default function BlocksPage() {
   }
 
   const nextCreatableBlock = BLOCK_NAMES.find(b => isBlockCreatable(b));
+  const startIdx = nextCreatableBlock ? BLOCK_NAMES.indexOf(nextCreatableBlock) : -1;
 
-  // Use the shared YEAR_LEVELS catalog (same as the create/edit modal).
-  // Do NOT derive options from `blocks` — fetch is gated on yearFilter, so that
-  // would leave the Year Level dropdown empty until a year is already selected.
+  // Selection is always a consecutive run from the next available block, so the
+  // A → B → C order can't be broken: "+" appends the next letter, and only the
+  // last chip can be removed (at least one block always stays).
+  const nextToAdd = startIdx < 0 ? undefined
+    : BLOCK_NAMES[startIdx + selectedBlocks.length];
+  const canAddBlock = !!nextToAdd && !existingBlockNames.has(nextToAdd);
+
+  function addNextBlock() {
+    if (!canAddBlock || !nextToAdd) return;
+    setSelectedBlocks(prev => [...prev, nextToAdd]);
+    setBlockExistsError(false); setBlockOrderError(null); setError('');
+  }
+  function removeLastBlock() {
+    setSelectedBlocks(prev => (prev.length > 1 ? prev.slice(0, -1) : prev));
+    setBlockExistsError(false); setBlockOrderError(null); setError('');
+  }
+  const selectionLabel = selectedBlocks.length === 0 ? ''
+    : selectedBlocks.length === 1 ? `Block ${selectedBlocks[0]}`
+    : `Block ${selectedBlocks[0]} – ${selectedBlocks[selectedBlocks.length - 1]}`;
+
+  // Use the shared YEAR_LEVELS catalog (same as the create/edit modal) rather than
+  // deriving options from `blocks`, so every year level is selectable up front.
   const yearOptions = YEAR_LEVELS.filter(y => !!y && YEAR_ORDER[y] != null);
 
   const filtered = blocks.filter(b => {
@@ -472,7 +575,7 @@ export default function BlocksPage() {
     return { label: 'Needs Scheduling', color: 'blue' as const, next: '/scheduling' };
   }
 
-  const modalFieldCls = 'w-full border border-[#E2E8F0] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3C91E6]/40 focus:border-[#3C91E6] bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
+  const modalFieldCls = 'w-full border border-[#E2E8F0] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D5BD6]/40 focus:border-[#1D5BD6] bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
 
   // ── Block list content (extracted to avoid nested-return JSX parsing issues) ──
 
@@ -492,6 +595,12 @@ export default function BlocksPage() {
     : !globalSemester ? 'Set an active semester in Settings to view blocks.'
     : !globalYear ? 'Set an active school year in Settings to view blocks.'
     : null;
+
+  const reduceMotion = useReducedMotion();
+  const resultsKey = `${programFilter}|${yearFilter}|${globalSemester}|${globalYear}`;
+  const resultsTransition = reduceMotion
+    ? { duration: 0 }
+    : { duration: 0.42, ease: [0.16, 1, 0.3, 1] as const };
 
   const readinessStyles: Record<string, string> = {
     green: 'bg-[#ECFDF5] text-emerald-700 border border-[#A7F3D0]',
@@ -552,12 +661,9 @@ export default function BlocksPage() {
       <PageLoadTransition showSkeleton={showPageSkeleton} skeleton={pageSkeleton}>
 
       {/* Page Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between mb-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between mb-2">
         <div className="min-w-0">
-          <h1 className="text-xl sm:text-2xl font-bold" style={{ color: '#1E3A5F' }}>Block Creation</h1>
-          <p className="text-sm mt-0.5" style={{ color: '#64748B' }}>
-            Create student blocks — subjects load automatically from Curriculum Setup
-          </p>
+          <BackButton />
         </div>
         <button
           type="button"
@@ -571,10 +677,13 @@ export default function BlocksPage() {
           className={`inline-flex items-center justify-center gap-2 px-5 min-h-11 rounded-xl font-semibold text-sm transition shadow-sm w-full sm:w-auto flex-shrink-0 ${
             canCreateBlock ? 'hover:opacity-90' : 'bg-slate-100 text-slate-400 border border-[#E2E8F0] cursor-not-allowed'
           }`}
-          style={canCreateBlock ? { backgroundColor: '#3C91E6', color: '#ffffff' } : {}}
+          style={canCreateBlock ? { backgroundColor: '#1D5BD6', color: '#ffffff' } : {}}
         >
-          <Plus className="w-4 h-4" /> Create Block
+          Create Block
         </button>
+      </div>
+      <div className="mt-4 sm:mt-7 mb-10">
+        <WatermarkTitle>Block Creation</WatermarkTitle>
       </div>
 
       {chairNoProgram && roleReady && (
@@ -679,19 +788,19 @@ export default function BlocksPage() {
       {allFiltersSet && totalBlocks > 0 && !showListSkeleton && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-5">
           <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 text-center">
-            <div className="text-2xl sm:text-3xl font-bold mb-1 text-[#1E3A5F]">{totalBlocks}</div>
+            <div className="text-2xl sm:text-3xl font-bold mb-1 text-[#0B2A5B]">{totalBlocks}</div>
             <div className="text-sm text-[#64748B]">Total Blocks</div>
           </div>
           <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 text-center">
-            <div className="text-2xl sm:text-3xl font-bold mb-1 text-[#1E3A5F]">{totalReady}</div>
+            <div className="text-2xl sm:text-3xl font-bold mb-1 text-[#0B2A5B]">{totalReady}</div>
             <div className="text-sm text-[#64748B]">Class Program Ready</div>
           </div>
           <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 text-center">
-            <div className="text-2xl sm:text-3xl font-bold mb-1 text-[#1E3A5F]">{totalInProgress}</div>
+            <div className="text-2xl sm:text-3xl font-bold mb-1 text-[#0B2A5B]">{totalInProgress}</div>
             <div className="text-sm text-[#64748B]">In Progress</div>
           </div>
           <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 text-center">
-            <div className="text-2xl sm:text-3xl font-bold mb-1 text-[#1E3A5F]">{totalNoSubjects}</div>
+            <div className="text-2xl sm:text-3xl font-bold mb-1 text-[#0B2A5B]">{totalNoSubjects}</div>
             <div className="text-sm text-[#64748B]">No Subjects Loaded</div>
           </div>
         </div>
@@ -711,65 +820,73 @@ export default function BlocksPage() {
         }
       >
 
+      <AnimatePresence mode="wait" initial={false}>
       {/* Main Content — missing filter prompt */}
       {filterPrompt && (
-        <div className="bg-white border border-[#E2E8F0] rounded-2xl py-14 text-center shadow-sm">
+        <motion.div
+          key="filter-prompt"
+          initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={reduceMotion ? undefined : { opacity: 0, y: -8 }}
+          transition={resultsTransition}
+          className="bg-white border border-[#E2E8F0] rounded-2xl py-14 text-center shadow-sm"
+        >
           <p className="text-sm" style={{ color: '#64748B' }}>{filterPrompt}</p>
-        </div>
+        </motion.div>
       )}
 
       {/* Main Content — no blocks found */}
       {!filterPrompt && groups.length === 0 && (
-        <div className="bg-white border border-[#E2E8F0] rounded-2xl flex flex-col items-center justify-center py-20 text-center shadow-sm">
-          <div className="w-14 h-14 rounded-full flex items-center justify-center mb-4 bg-[#F8FAFC]">
-            <GraduationCap className="w-7 h-7" style={{ color: '#94A3B8' }} />
-          </div>
-          <p className="font-semibold text-base" style={{ color: '#1E3A5F' }}>No blocks found</p>
+        <motion.div
+          key={`${resultsKey}|${search}|empty`}
+          initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={reduceMotion ? undefined : { opacity: 0, y: -8 }}
+          transition={resultsTransition}
+          className="bg-white border border-[#E2E8F0] rounded-2xl flex flex-col items-center justify-center py-20 text-center shadow-sm"
+        >
+          <p className="font-semibold text-base" style={{ color: '#0B2A5B' }}>No blocks found</p>
           {search ? (
             <p className="text-sm mt-1 mb-5" style={{ color: '#64748B' }}>No blocks match your search.</p>
           ) : (
-            <p className="text-sm mt-1 mb-5" style={{ color: '#64748B' }}>No blocks created for this combination yet.</p>
+            <p className="text-sm mt-1" style={{ color: '#64748B' }}>No blocks created for this combination yet.</p>
           )}
-          {search ? (
+          {search && (
             <button
               onClick={() => setSearch('')}
-              className="flex items-center gap-2 border border-[#E2E8F0] px-5 py-2.5 rounded-xl hover:bg-[#F8FAFC] transition text-sm font-medium"
+              className="mt-4 border border-[#E2E8F0] px-5 py-2.5 rounded-xl hover:bg-[#F8FAFC] transition text-sm font-medium"
               style={{ color: '#64748B' }}
             >
-              <X className="w-4 h-4" /> Clear search
-            </button>
-          ) : (
-            <button
-              onClick={openAdd}
-              className="flex items-center gap-2 text-white px-5 py-2.5 rounded-xl transition font-semibold text-sm shadow-sm hover:opacity-90"
-              style={{ backgroundColor: '#3C91E6' }}
-            >
-              <Plus className="w-4 h-4" /> Create First Block
+              Clear search
             </button>
           )}
-        </div>
+        </motion.div>
       )}
 
       {/* Main Content — groups list */}
       {!filterPrompt && groups.length > 0 && (
-        <div className="space-y-6">
+        <motion.div
+          key={resultsKey}
+          initial={reduceMotion ? false : { opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={reduceMotion ? undefined : { opacity: 0, y: -10 }}
+          transition={resultsTransition}
+          className="space-y-6"
+        >
           {groups.map(group => (
             <div key={group.key} className="bg-white rounded-xl border border-[#E2E8F0] overflow-hidden">
 
               {/* Group header — calm surface + blue accent, not a saturated bar */}
-              <div className="px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 bg-[#F8FAFC] border-b border-[#E2E8F0]">
-                <div className="min-w-0 flex items-start gap-3">
-                  <span className="mt-1 w-1 self-stretch min-h-[2.25rem] rounded-full bg-[#3C91E6] flex-shrink-0" aria-hidden />
-                  <div className="min-w-0">
-                    <div className="font-bold text-base leading-tight text-[#1E3A5F] break-words">
-                      {group.program} — {group.programName}
-                    </div>
-                    <div className="text-sm mt-0.5 font-medium text-[#64748B]">
-                      {group.yearLevel} &nbsp;·&nbsp; {group.semester} &nbsp;·&nbsp; {curriculumVersionLabel(group.curriculumVersion)}
-                    </div>
+              <div className="bg-[#1D5BD6] px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="font-bold text-base text-white leading-tight break-words">
+                    {group.program} — {group.programName}
+                  </div>
+                  <div className="text-sm mt-0.5 font-medium text-white/85">
+                    {group.yearLevel} &nbsp;·&nbsp; {group.semester} &nbsp;·&nbsp; {curriculumVersionLabel(group.curriculumVersion)}
                   </div>
                 </div>
-                <span className="self-start bg-[#EFF6FF] text-[#2563EB] border border-[#BFDBFE] text-xs font-semibold px-3 py-1 rounded-full flex-shrink-0">
+                <span className="self-start bg-white/20 text-white text-xs font-semibold px-3 py-1 rounded-full flex-shrink-0">
                   {group.blocks.length} block{group.blocks.length !== 1 ? 's' : ''}
                 </span>
               </div>
@@ -792,20 +909,19 @@ export default function BlocksPage() {
                       const ready             = blockReadiness(b);
                       const sortedGroupBlocks = [...group.blocks].sort((a, x) => a.block_name.localeCompare(x.block_name));
                       const isLastBlock       = sortedGroupBlocks[sortedGroupBlocks.length - 1].id === b.id;
-                      const isBlockA          = b.block_name.toUpperCase() === 'A';
-                      const canDelete         = isLastBlock && !isBlockA;
-                      const readinessColor    = ready.color === 'blue' ? '#3C91E6' : undefined;
+                      const canDelete         = isLastBlock;
+                      const readinessColor    = ready.color === 'blue' ? '#1D5BD6' : undefined;
                       const lastBlockName     = sortedGroupBlocks[sortedGroupBlocks.length - 1].block_name;
 
                       return (
                         <tr key={b.id} className="hover:bg-[#F8FAFC] transition-colors">
                           <td className="px-4 sm:px-6 py-4 align-middle whitespace-nowrap">
                             <div className="flex items-center gap-3">
-                              <div className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-base flex-shrink-0 bg-[#EFF6FF]" style={{ color: '#3C91E6' }}>
+                              <div className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-base flex-shrink-0 bg-[#EFF6FF]" style={{ color: '#1D5BD6' }}>
                                 {b.block_name}
                               </div>
                               <div>
-                                <div className="font-bold" style={{ color: '#1E3A5F' }}>Block {b.block_name}</div>
+                                <div className="font-bold" style={{ color: '#0B2A5B' }}>Block {b.block_name}</div>
                                 <div className="text-xs" style={{ color: '#94A3B8' }}>{b.academic_year}</div>
                               </div>
                             </div>
@@ -832,7 +948,7 @@ export default function BlocksPage() {
                                   </span>
                                 )}
                                 {b.assigned_count > 0 && (
-                                  <span className="inline-flex items-center gap-1 bg-[#EFF6FF] border border-[#BFDBFE] text-xs font-semibold px-2 py-0.5 rounded-full whitespace-nowrap" style={{ color: '#3C91E6' }}>
+                                  <span className="inline-flex items-center gap-1 bg-[#EFF6FF] border border-[#BFDBFE] text-xs font-semibold px-2 py-0.5 rounded-full whitespace-nowrap" style={{ color: '#1D5BD6' }}>
                                     <Users className="w-3 h-3" /> {b.assigned_count} Assigned
                                   </span>
                                 )}
@@ -877,7 +993,7 @@ export default function BlocksPage() {
                                 type="button"
                                 onClick={() => openEdit(b)}
                                 className="inline-flex items-center justify-center gap-1.5 px-3 min-h-11 text-sm font-semibold bg-[#EFF6FF] hover:bg-[#DBEAFE] border border-[#BFDBFE] rounded-xl transition"
-                                style={{ color: '#3C91E6' }}
+                                style={{ color: '#1D5BD6' }}
                               >
                                 <Pencil className="w-4 h-4" /> Edit
                               </button>
@@ -887,7 +1003,11 @@ export default function BlocksPage() {
                                 disabled={!canDelete || deletingId !== null}
                                 className={`inline-flex items-center justify-center min-h-11 min-w-11 rounded-xl transition ${canDelete && deletingId === null ? 'hover:bg-red-50' : 'opacity-30 cursor-not-allowed'}`}
                                 style={{ color: '#EF4444' }}
-                                title={isBlockA ? 'Block A cannot be deleted' : !isLastBlock ? `Delete Block ${lastBlockName} first` : deletingId === b.id ? 'Deleting…' : 'Delete block'}
+                                title={
+                                  deletingId === b.id ? 'Deleting…'
+                                  : !isLastBlock ? `Delete Block ${lastBlockName} first`
+                                  : 'Delete block'
+                                }
                               >
                                 {deletingId === b.id
                                   ? <span className="w-4 h-4 border-2 border-red-400 border-t-transparent rounded-full animate-spin inline-block" />
@@ -908,14 +1028,37 @@ export default function BlocksPage() {
           <div className="text-xs text-right pr-1" style={{ color: '#94A3B8' }}>
             Showing {filtered.length} block{filtered.length !== 1 ? 's' : ''} in {groups.length} group{groups.length !== 1 ? 's' : ''}
           </div>
-        </div>
+        </motion.div>
       )}
+      </AnimatePresence>
 
       </PageLoadTransition>
       </PageLoadTransition>
 
       {/* Create / Edit Modal */}
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editId ? 'Edit Block' : 'Create New Block'}>
+      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editId ? 'Edit Block' : 'Create New Block'} headerAccent>
+        {saveSuccess && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-2xl backdrop-blur-md save-success-overlay">
+            <div className="save-success-badge flex flex-col items-center gap-3 px-8 py-7 rounded-2xl bg-[#111827] border border-white/10 shadow-2xl">
+              <svg width="72" height="72" viewBox="0 0 52 52">
+                <circle
+                  className="save-success-circle"
+                  cx="26" cy="26" r="24"
+                  fill="none" stroke="#22C55E" strokeWidth="3"
+                />
+                <path
+                  className="save-success-check"
+                  fill="none" stroke="#22C55E" strokeWidth="3.5"
+                  strokeLinecap="round" strokeLinejoin="round"
+                  d="M14.5 27 22 34.5 38 17"
+                />
+              </svg>
+              <p className="text-base font-semibold text-white">
+                {editId ? 'Block updated!' : createdCount > 1 ? `${createdCount} blocks created!` : 'Block created!'}
+              </p>
+            </div>
+          </div>
+        )}
         <form onSubmit={handleSubmit} className="space-y-5">
 
           {noCurriculumInfo && (
@@ -941,17 +1084,13 @@ export default function BlocksPage() {
             </div>
           )}
 
-          {/* Step 1 */}
+          {/* Program & Curriculum */}
           <div>
-            <div className="flex items-center gap-2 mb-3">
-              <span className="w-7 h-7 rounded-full text-white text-sm flex items-center justify-center font-bold flex-shrink-0" style={{ backgroundColor: '#3C91E6' }}>1</span>
-              <span className="font-semibold text-sm" style={{ color: '#1E3A5F' }}>Select Program, Curriculum, Year Level &amp; Semester</span>
-            </div>
             <div className="space-y-3">
               <div>
                 <label className="block text-sm font-medium mb-1" style={{ color: '#64748B' }}>Program *</label>
                 {isChair || editId ? (
-                  <div className={`${modalFieldCls} bg-slate-50 cursor-default select-none`} style={{ color: '#1E3A5F' }}>
+                  <div className={`${modalFieldCls} bg-slate-50 cursor-default select-none`} style={{ color: '#0B2A5B' }}>
                     {selectedProgram
                       ? `${selectedProgram.code} — ${selectedProgram.name}`
                       : lockedProgram
@@ -964,7 +1103,7 @@ export default function BlocksPage() {
                     onChange={e => setForm(f => ({ ...f, program_id: e.target.value }))}
                     required
                     className={modalFieldCls}
-                    style={{ color: '#1E3A5F' }}
+                    style={{ color: '#0B2A5B' }}
                   >
                     <option value="">— Select Program —</option>
                     {programs.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
@@ -973,8 +1112,8 @@ export default function BlocksPage() {
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1" style={{ color: '#64748B' }}>Curriculum *</label>
-                {editId ? (
-                  <div className={`${modalFieldCls} bg-slate-50 cursor-default select-none`} style={{ color: '#1E3A5F' }}>
+                {editId || curriculumLocked ? (
+                  <div className={`${modalFieldCls} bg-slate-50 cursor-default select-none`} style={{ color: '#0B2A5B' }}>
                     {form.curriculum_version ? curriculumVersionLabel(form.curriculum_version) : '—'}
                   </div>
                 ) : (
@@ -986,13 +1125,21 @@ export default function BlocksPage() {
                     }))}
                     required
                     className={modalFieldCls}
-                    style={{ color: '#1E3A5F' }}
+                    style={{ color: '#0B2A5B' }}
                   >
                     <option value="">— Select Curriculum —</option>
                     {(['new', 'old'] as const).map(v => (
                       <option key={v} value={v}>{curriculumVersionLabel(v)}</option>
                     ))}
                   </select>
+                )}
+                {curriculumLocked && (
+                  <p className="text-[11px] mt-1" style={{ color: '#94A3B8' }}>
+                    Locked — {selectedProgram?.code} {form.year_level} already uses{' '}
+                    <span className="font-semibold" style={{ color: '#64748B' }}>
+                      {curriculumVersionLabel(form.curriculum_version as CurriculumVersion)}
+                    </span>. All blocks under this Program and Year Level must use the same curriculum.
+                  </p>
                 )}
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -1004,7 +1151,7 @@ export default function BlocksPage() {
                     required
                     disabled={!!editId}
                     className={modalFieldCls}
-                    style={{ color: '#1E3A5F' }}
+                    style={{ color: '#0B2A5B' }}
                   >
                     <option value="">— Select —</option>
                     {YEAR_LEVELS.map(y => <option key={y} value={y}>{y}</option>)}
@@ -1018,7 +1165,7 @@ export default function BlocksPage() {
                     required
                     disabled={!!editId}
                     className={modalFieldCls}
-                    style={{ color: '#1E3A5F' }}
+                    style={{ color: '#0B2A5B' }}
                   >
                     <option value="">— Select —</option>
                     {SEMESTERS.map(s => <option key={s} value={s}>{s}</option>)}
@@ -1031,21 +1178,31 @@ export default function BlocksPage() {
           {/* Subject Preview */}
           {!editId && (
             <div className="border border-[#E2E8F0] rounded-xl overflow-hidden">
-              <div className="px-4 py-2.5 border-b border-[#F1F5F9] flex items-center gap-2" style={{ backgroundColor: '#F8FAFC' }}>
-                <span className="w-7 h-7 rounded-full text-white text-sm flex items-center justify-center font-bold flex-shrink-0" style={{ backgroundColor: '#3C91E6' }}>2</span>
-                <span className="font-semibold text-sm" style={{ color: '#1E3A5F' }}>Subjects that will be loaded into this block</span>
-              </div>
+              {canPreview ? (
+                <div className="bg-[#1D5BD6] px-4 py-3">
+                  <div className="font-bold text-sm text-white leading-tight break-words">
+                    {selectedProgram?.code} — {selectedProgram?.name}
+                  </div>
+                  <div className="text-xs mt-0.5 font-medium text-white/85">
+                    {form.year_level} &nbsp;·&nbsp; {form.semester} &nbsp;·&nbsp; {curriculumVersionLabel(form.curriculum_version as CurriculumVersion)}
+                  </div>
+                </div>
+              ) : (
+                <div className="px-4 py-2.5 border-b border-[#F1F5F9]" style={{ backgroundColor: '#F8FAFC' }}>
+                  <span className="font-semibold text-sm" style={{ color: '#0B2A5B' }}>Subjects that will be loaded into this block</span>
+                </div>
+              )}
               {!canPreview ? (
                 <div className="px-4 py-5 text-center text-sm" style={{ color: '#94A3B8' }}>
                   Select Program, Curriculum, Year Level, and Semester above to preview subjects.
                 </div>
               ) : previewLoading ? (
                 <div className="px-4 py-5 flex justify-center">
-                  <div className="w-6 h-6 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#3C91E6', borderTopColor: 'transparent' }} />
+                  <div className="w-6 h-6 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#1D5BD6', borderTopColor: 'transparent' }} />
                 </div>
               ) : previewSubjects.length === 0 ? (
                 <div className="px-4 py-5 text-center">
-                  <AlertTriangle className="w-8 h-8 text-amber-500 mx-auto mb-2" />
+                  <AlertTriangle className="w-5 h-5 text-amber-500 mx-auto mb-2" />
                   <p className="text-sm font-medium text-amber-700">No curriculum subjects found for</p>
                   <p className="text-sm text-amber-600 font-semibold mt-1">
                     {selectedProgram?.code} — {form.curriculum_version ? curriculumVersionLabel(form.curriculum_version) : ''} — {form.year_level}, {form.semester}
@@ -1054,15 +1211,14 @@ export default function BlocksPage() {
                     href="/program/curriculum"
                     onClick={() => setModalOpen(false)}
                     className="inline-flex items-center gap-1.5 mt-3 text-sm font-medium hover:underline"
-                    style={{ color: '#3C91E6' }}
+                    style={{ color: '#1D5BD6' }}
                   >
                     <BookOpen className="w-4 h-4" /> Set up curriculum subjects first
                   </Link>
                 </div>
               ) : (
                 <>
-                  <div className="px-4 py-2 bg-[#ECFDF5] border-b border-[#F1F5F9] flex items-center gap-2 text-sm text-emerald-700">
-                    <CheckCircle className="w-4 h-4" />
+                  <div className="px-4 py-2 bg-[#ECFDF5] border-b border-[#F1F5F9] text-sm text-emerald-700">
                     <strong>{previewSubjects.length} subject{previewSubjects.length !== 1 ? 's' : ''}</strong>
                     {' '}will be automatically added from {selectedProgram?.code} {form.curriculum_version ? curriculumVersionLabel(form.curriculum_version) : 'curriculum'}.
                   </div>
@@ -1078,12 +1234,12 @@ export default function BlocksPage() {
                       <tbody className="divide-y divide-[#F1F5F9]">
                         {previewSubjects.map(s => (
                           <tr key={s.id} className="hover:bg-[#F8FAFC]">
-                            <td className="px-3 py-2 font-mono font-semibold" style={{ color: '#1E3A5F' }}>{s.subject_code}</td>
+                            <td className="px-3 py-2 font-mono font-semibold" style={{ color: '#0B2A5B' }}>{s.subject_code}</td>
                             <td className="px-3 py-2" style={{ color: '#64748B' }}>{s.subject_name}</td>
                             <td className="px-3 py-2 text-center" style={{ color: '#64748B' }}>{s.lecture_hours}</td>
                             <td className="px-3 py-2 text-center" style={{ color: '#64748B' }}>{s.laboratory_hours}</td>
                             <td className="px-3 py-2 text-center" style={{ color: '#64748B' }}>{parseFloat(String(s.total_hours)).toFixed(1)}</td>
-                            <td className="px-3 py-2 text-center font-bold" style={{ color: '#3C91E6' }}>{parseFloat(String(s.units)).toFixed(2)}</td>
+                            <td className="px-3 py-2 text-center font-bold" style={{ color: '#1D5BD6' }}>{parseFloat(String(s.units)).toFixed(2)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1096,13 +1252,7 @@ export default function BlocksPage() {
 
           {/* Block Details */}
           <div>
-            <div className="flex items-center gap-2 mb-3">
-              <span className="w-7 h-7 rounded-full text-white text-sm flex items-center justify-center font-bold flex-shrink-0" style={{ backgroundColor: '#3C91E6' }}>
-                {editId ? '2' : '3'}
-              </span>
-              <span className="font-semibold text-sm" style={{ color: '#1E3A5F' }}>Block Details</span>
-            </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className={`grid gap-3 ${editId ? 'grid-cols-3' : 'grid-cols-2'}`}>
               <div>
                 <label className="block text-sm font-medium mb-1" style={{ color: '#64748B' }}>Academic Year *</label>
                 <input
@@ -1112,9 +1262,10 @@ export default function BlocksPage() {
                   required
                   placeholder="2025-2026"
                   className={modalFieldCls}
-                  style={{ color: '#1E3A5F' }}
+                  style={{ color: '#0B2A5B' }}
                 />
               </div>
+              {editId && (
               <div>
                 <label className="block text-sm font-medium mb-1" style={{ color: '#64748B' }}>Block Name *</label>
                 <select
@@ -1122,7 +1273,7 @@ export default function BlocksPage() {
                   onChange={e => { setForm(f => ({ ...f, block_name: e.target.value })); setBlockExistsError(false); setBlockOrderError(null); setError(''); }}
                   required
                   className={modalFieldCls}
-                  style={{ color: '#1E3A5F' }}
+                  style={{ color: '#0B2A5B' }}
                 >
                   {BLOCK_NAMES.map(b => {
                     if (editId) return <option key={b} value={b}>Block {b}</option>;
@@ -1147,8 +1298,11 @@ export default function BlocksPage() {
                   <p className="text-[11px] text-amber-600 mt-1 font-medium">All block names (A–Z) have already been created for this combination.</p>
                 )}
               </div>
+              )}
               <div>
-                <label className="block text-sm font-medium mb-1" style={{ color: '#64748B' }}>No. of Students *</label>
+                <label className="block text-sm font-medium mb-1" style={{ color: '#64748B' }}>
+                  {editId ? 'No. of Students *' : 'Students per Block *'}
+                </label>
                 <input
                   type="number"
                   min="1"
@@ -1156,10 +1310,84 @@ export default function BlocksPage() {
                   onChange={e => { const v = parseInt(e.target.value); if (!isNaN(v) && v > 0) setForm(f => ({ ...f, number_of_students: v })); }}
                   required
                   className={modalFieldCls}
-                  style={{ color: '#1E3A5F' }}
+                  style={{ color: '#0B2A5B' }}
                 />
               </div>
             </div>
+
+            {/* Multi-select: create several consecutive blocks in one save */}
+            {!editId && (
+              <div className="mt-4">
+                <div className="flex items-baseline justify-between gap-2 mb-1.5">
+                  <label className="block text-sm font-medium" style={{ color: '#64748B' }}>Blocks to Create *</label>
+                  {selectedBlocks.length > 0 && (
+                    <span className="text-xs font-semibold" style={{ color: '#1D5BD6' }}>
+                      {selectedBlocks.length} selected · {selectionLabel}
+                    </span>
+                  )}
+                </div>
+                {nextCreatableBlock ? (
+                  <>
+                    <motion.div layout className="flex flex-wrap items-center gap-2" role="group" aria-label="Blocks to create">
+                      <AnimatePresence initial={false}>
+                        {selectedBlocks.map((b, i) => {
+                          const isLast = i === selectedBlocks.length - 1;
+                          const removable = isLast && selectedBlocks.length > 1;
+                          return (
+                            <motion.div
+                              key={b}
+                              layout
+                              initial={reduceMotion ? false : { opacity: 0, scale: 0.6, x: -8 }}
+                              animate={{ opacity: 1, scale: 1, x: 0 }}
+                              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.6 }}
+                              transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 500, damping: 30 }}
+                              className="relative inline-flex items-center gap-1.5 h-11 pl-3.5 pr-2 rounded-xl bg-[#EFF6FF] border border-[#BFDBFE]"
+                            >
+                              <span className="w-7 h-7 rounded-lg bg-[#1D5BD6] text-white text-sm font-bold flex items-center justify-center">{b}</span>
+                              <span className="text-sm font-semibold pr-1" style={{ color: '#0B2A5B' }}>Block {b}</span>
+                              {removable && (
+                                <button
+                                  type="button"
+                                  onClick={removeLastBlock}
+                                  className="w-6 h-6 rounded-md flex items-center justify-center text-[#64748B] hover:text-red-500 hover:bg-red-50 transition-colors"
+                                  aria-label={`Remove Block ${b}`}
+                                  title={`Remove Block ${b}`}
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </motion.div>
+                          );
+                        })}
+                      </AnimatePresence>
+
+                      {canAddBlock && (
+                        <motion.button
+                          layout
+                          type="button"
+                          onClick={addNextBlock}
+                          whileTap={reduceMotion ? undefined : { scale: 0.9 }}
+                          transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 500, damping: 30 }}
+                          className="inline-flex items-center gap-1.5 h-11 px-3.5 rounded-xl border border-dashed border-[#93C5FD] text-sm font-semibold hover:bg-[#EFF6FF] hover:border-[#1D5BD6] transition-colors"
+                          style={{ color: '#1D5BD6' }}
+                          aria-label={`Add Block ${nextToAdd}`}
+                          title={`Add Block ${nextToAdd}`}
+                        >
+                          <Plus className="w-4 h-4" /> Block {nextToAdd}
+                        </motion.button>
+                      )}
+                    </motion.div>
+                    <p className="text-[11px] mt-1.5" style={{ color: '#94A3B8' }}>
+                      Click <span className="font-semibold" style={{ color: '#64748B' }}>+</span> to add the next block. All blocks are saved together.
+                    </p>
+                  </>
+                ) : BLOCK_NAMES.every(b => existingBlockNames.has(b)) ? (
+                  <p className="text-[11px] text-amber-600 font-medium">All block names (A–Z) have already been created for this combination.</p>
+                ) : (
+                  <p className="text-[11px]" style={{ color: '#94A3B8' }}>Select Program, Curriculum, Year Level, and Semester first.</p>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Error banners */}
@@ -1179,7 +1407,7 @@ export default function BlocksPage() {
               <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
               <div>
                 <p className="text-amber-800 font-semibold text-sm">This block already exists.</p>
-                <p className="text-amber-700 text-sm mt-0.5">Try choosing a different Block Name (e.g., Block B) or a different Academic Year.</p>
+                <p className="text-amber-700 text-sm mt-0.5">{error || 'Try choosing a different Block Name (e.g., Block B) or a different Academic Year.'}</p>
               </div>
             </div>
           )}
@@ -1201,24 +1429,89 @@ export default function BlocksPage() {
             </button>
             <button
               type="submit"
-              disabled={loading || (!editId && canPreview && previewSubjects.length === 0) || previewLoading || (!editId && !isBlockCreatable(form.block_name))}
+              disabled={loading || (!editId && canPreview && previewSubjects.length === 0) || previewLoading || (!editId && (selectedBlocks.length === 0 || !isBlockCreatable(selectedBlocks[0])))}
               className="flex-1 text-white py-2.5 rounded-xl disabled:opacity-50 transition text-sm font-semibold flex items-center justify-center gap-2 hover:opacity-90"
-              style={{ backgroundColor: '#3C91E6' }}
+              style={{ backgroundColor: '#1D5BD6' }}
             >
               {loading ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  Creating block…
+                  {editId ? 'Updating block…' : selectedBlocks.length > 1 ? `Creating ${selectedBlocks.length} blocks…` : 'Creating block…'}
                 </>
               ) : editId ? (
                 'Update Block'
               ) : (
-                `Create Block${previewSubjects.length > 0 ? ` · ${previewSubjects.length} subjects` : ''}`
+                `${selectedBlocks.length > 1 ? `Create ${selectedBlocks.length} Blocks` : 'Create Block'}${previewSubjects.length > 0 ? ` · ${previewSubjects.length} subjects${selectedBlocks.length > 1 ? ' each' : ''}` : ''}`
               )}
             </button>
           </div>
 
         </form>
+      </Modal>
+
+      {/* Delete Confirmation Modal */}
+      <Modal
+        open={!!deleteTarget}
+        onClose={() => { if (deletingId === null && !deleteSuccess) setDeleteTarget(null); }}
+        title="Delete Block"
+      >
+        {deleteSuccess && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-2xl backdrop-blur-md save-success-overlay">
+            <div className="save-success-badge flex flex-col items-center gap-3 px-8 py-7 rounded-2xl bg-white border border-[#E2E8F0] shadow-2xl">
+              <TrashDropAnimation className="bg-red-50 border-red-200" />
+              <p className="text-base font-semibold" style={{ color: '#0B2A5B' }}>Block {deleteTarget?.name} deleted!</p>
+            </div>
+          </div>
+        )}
+        {deleteTarget && (
+          <div className="space-y-5">
+            <div className="flex flex-col items-center text-center gap-3 pt-1">
+              <div className="w-16 h-16 rounded-2xl bg-red-50 border border-red-200 flex items-center justify-center">
+                <Trash2 className="w-8 h-8 text-red-500" />
+              </div>
+              <div>
+                <p className="text-base font-bold" style={{ color: '#0B2A5B' }}>Delete Block {deleteTarget.name}?</p>
+                <p className="text-sm mt-1" style={{ color: '#64748B' }}>This action cannot be undone. You can re-create the block afterwards.</p>
+              </div>
+            </div>
+
+            <div className="bg-red-50 border border-red-200 rounded-xl px-5 py-4 space-y-2">
+              <p className="text-xs font-bold text-red-600 uppercase tracking-wide mb-2">The following will be permanently removed:</p>
+              {[
+                'Loaded subjects (block subjects)',
+                'Master schedule entries',
+                'Instructor load assignments',
+              ].map(item => (
+                <div key={item} className="flex items-center gap-2.5 text-sm text-red-700">
+                  <Trash2 className="w-3.5 h-3.5 flex-shrink-0 text-red-500" />
+                  {item}
+                </div>
+              ))}
+            </div>
+
+            <div className="flex gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                disabled={deletingId !== null}
+                className="flex-1 border border-[#E2E8F0] py-2.5 rounded-xl hover:bg-[#F8FAFC] transition text-sm font-medium disabled:opacity-50"
+                style={{ color: '#64748B' }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDelete}
+                disabled={deletingId !== null}
+                className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl transition text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-60"
+              >
+                {deletingId !== null
+                  ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Deleting…</>
+                  : <><Trash2 className="w-4 h-4" /> Delete Block {deleteTarget.name}</>}
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

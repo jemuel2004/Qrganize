@@ -266,7 +266,7 @@ export default function OtpPreferencePanel({
       ? ''
       : 'rounded-2xl border border-[#E2E8F0] bg-white shadow-sm overflow-hidden';
 
-  const titleCls = dark ? 'text-slate-100' : 'text-[#1E3A5F]';
+  const titleCls = dark ? 'text-slate-100' : 'text-[#0B2A5B]';
   const mutedCls = dark ? 'text-slate-400' : 'text-[#64748B]';
   const subtleCls = dark ? 'text-slate-500' : 'text-[#94A3B8]';
   const borderCls = dark ? 'border-white/10' : 'border-[#E2E8F0]';
@@ -280,11 +280,11 @@ export default function OtpPreferencePanel({
     ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
     : 'bg-emerald-50 border-emerald-200 text-emerald-700';
   const inputCls = dark
-    ? 'w-full rounded-xl border border-white/10 bg-white/5 px-3.5 py-2.5 pr-10 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#3C91E6]'
-    : 'w-full rounded-xl border border-[#CBD5E1] bg-white px-3.5 py-2.5 pr-10 text-sm text-[#1E3A5F] placeholder-[#CBD5E1] focus:outline-none focus:ring-2 focus:ring-[#3C91E6] focus:border-[#3C91E6]';
+    ? 'w-full rounded-xl border border-white/10 bg-white/5 px-3.5 py-2.5 pr-10 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#1D5BD6]'
+    : 'w-full rounded-xl border border-[#CBD5E1] bg-white px-3.5 py-2.5 pr-10 text-sm text-[#0B2A5B] placeholder-[#CBD5E1] focus:outline-none focus:ring-2 focus:ring-[#1D5BD6] focus:border-[#1D5BD6]';
   const otpInputCls = dark
-    ? 'w-full max-w-full rounded-xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm tracking-[0.35em] text-center text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#3C91E6]'
-    : 'w-full max-w-full rounded-xl border border-[#CBD5E1] bg-white px-3.5 py-2.5 text-sm tracking-[0.35em] text-center text-[#1E3A5F] placeholder-[#CBD5E1] focus:outline-none focus:ring-2 focus:ring-[#3C91E6] focus:border-[#3C91E6]';
+    ? 'w-full max-w-full rounded-xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm tracking-[0.35em] text-center text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#1D5BD6]'
+    : 'w-full max-w-full rounded-xl border border-[#CBD5E1] bg-white px-3.5 py-2.5 text-sm tracking-[0.35em] text-center text-[#0B2A5B] placeholder-[#CBD5E1] focus:outline-none focus:ring-2 focus:ring-[#1D5BD6] focus:border-[#1D5BD6]';
 
   if (loading) {
     return (
@@ -407,7 +407,7 @@ export default function OtpPreferencePanel({
                 type="button"
                 disabled={busy || !password.trim() || cooldown.active}
                 onClick={() => void continueWithPassword()}
-                className="inline-flex min-h-11 items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold bg-[#3C91E6] hover:bg-[#2563EB] disabled:opacity-50 text-white"
+                className="inline-flex min-h-11 items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold bg-[#1D5BD6] hover:bg-[#164BB5] disabled:opacity-50 text-white"
               >
                 {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                 Continue
@@ -453,7 +453,7 @@ export default function OtpPreferencePanel({
                 disabled={busy || cooldown.active}
                 onClick={() => void resendCode()}
                 className={`text-sm font-semibold ${
-                  cooldown.active ? subtleCls : 'text-[#3C91E6] hover:text-[#2563EB]'
+                  cooldown.active ? subtleCls : 'text-[#1D5BD6] hover:text-[#164BB5]'
                 } disabled:opacity-50`}
               >
                 {cooldown.active ? `Resend in ${cooldown.seconds}s` : 'Resend code'}

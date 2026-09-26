@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import { query, transaction } from '@/server/db';
 import { getAuthUser } from '@/server/auth';
 import { ensureCurriculumFields } from '@/server/migrateCurriculum';
@@ -9,6 +9,7 @@ import {
   parseCurriculumVersion,
 } from '@/lib/curriculumVersion';
 import { normalizeComparableText } from '@/lib/curriculumImport';
+import { getChairAssignedProgramId } from '@/server/programScope';
 
 interface ImportRow {
   program_id: number;
@@ -61,9 +62,17 @@ function sameRecord(row: {
 
 export async function POST(req: NextRequest) {
   try {
-    const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    const auth = await getAuthUser(req) as { id?: number; role?: string } | null;
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    let chairProgramId: number | null = null;
+    if (auth.role === 'program_chair') {
+      chairProgramId = auth.id ? await getChairAssignedProgramId(Number(auth.id)) : null;
+      if (chairProgramId == null) {
+        return NextResponse.json({ error: 'No program is assigned to your Program Chair account.' }, { status: 403 });
+      }
     }
 
     await ensureCurriculumFields();
@@ -122,6 +131,10 @@ export async function POST(req: NextRequest) {
 
       if (!Number.isInteger(programId) || programId <= 0) {
         errors.push(`${subjectCode}: invalid program`);
+        continue;
+      }
+      if (chairProgramId != null && programId !== chairProgramId) {
+        errors.push(`${subjectCode}: you can only import subjects for your assigned program`);
         continue;
       }
       if (!yearLevel || !semester) {

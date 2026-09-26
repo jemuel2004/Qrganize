@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useInstructorProfile } from '@/client/context/InstructorProfileContext';
 import { useScrollLock } from '@/client/hooks/useScrollLock';
+import BackButton from '@/client/components/ui/BackButton';
 import Link from 'next/link';
 import {
   QrCode, CheckCircle, XCircle, AlertTriangle, Clock,
@@ -90,18 +91,6 @@ const STATUS_UI: Record<StatusKey, {
     icon: <XCircle className="w-9 h-9 text-[#DC2626]" />,
     label: 'Connection Problem', labelColor: 'text-[#DC2626]',
   },
-};
-
-const DOT_COLOR: Partial<Record<StatusKey, string>> = {
-  'In-Use': 'bg-[#10B981]',
-  'Valid': 'bg-[#10B981]',
-  'Pending': 'bg-[#F59E0B]',
-  'Late': 'bg-[#CA8A04]',
-  'Overuse': 'bg-[#DC2626]',
-  'Blocked': 'bg-[#DC2626]',
-  'Unauthorized': 'bg-[#DC2626]',
-  'Invalid': 'bg-[#94A3B8]',
-  'Error': 'bg-[#DC2626]',
 };
 
 function fmt5(t: string | null | undefined) { return t ? String(t).slice(0, 5) : '—'; }
@@ -326,7 +315,7 @@ function ScanResultDialog({
     p.tone === 'success' ? 'bg-[#ECFDF5] text-[#059669]'
     : p.tone === 'warning' ? 'bg-[#FFFBEB] text-[#D97706]'
     : p.tone === 'danger' ? 'bg-[#FEF2F2] text-[#DC2626]'
-    : p.tone === 'info' ? 'bg-[#EFF6FF] text-[#3C91E6]'
+    : p.tone === 'info' ? 'bg-[#EFF6FF] text-[#1D5BD6]'
     : 'bg-[#F1F5F9] text-[#64748B]';
 
   const Icon =
@@ -343,7 +332,7 @@ function ScanResultDialog({
         ? 'bg-[#D97706] hover:bg-[#B45309] text-white'
         : p.tone === 'danger'
           ? 'bg-[#DC2626] hover:bg-[#B91C1C] text-white'
-          : 'bg-[#3C91E6] hover:bg-[#2E7DD1] text-white';
+          : 'bg-[#1D5BD6] hover:bg-[#2E7DD1] text-white';
 
   return createPortal(
     <div
@@ -368,7 +357,7 @@ function ScanResultDialog({
           <Icon className="w-7 h-7" aria-hidden="true" />
         </div>
 
-        <h2 id={titleId} className="mt-4 text-xl font-bold text-[#1E3A5F]">
+        <h2 id={titleId} className="mt-4 text-xl font-bold text-[#0B2A5B]">
           {p.title}
         </h2>
 
@@ -420,7 +409,6 @@ function ScanResultDialog({
 export default function ScanClient() {
   const { facultyId } = useInstructorProfile();
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
-  const [recentScans, setRecentScans] = useState<ScanResult[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [showProcessing, setShowProcessing] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
@@ -533,11 +521,6 @@ export default function ScanClient() {
       setScanResult(data);
       setModalOpen(true);
 
-      /* Do not duplicate Recent Scans for already-occupied re-reads */
-      if (!data.already_occupied) {
-        setRecentScans(prev => [data, ...prev.slice(0, 9)]);
-      }
-
       /*
        * Successful / Already Checked In / Late (In-Use): stop camera completely.
        * Closing the modal must NOT restart it — user presses Start Camera again.
@@ -630,10 +613,8 @@ export default function ScanClient() {
     <div className="min-h-full bg-[#F8FAFC] p-4 sm:p-6 lg:p-8 overflow-x-hidden min-w-0">
 
       <div className="mb-5 sm:mb-6">
-        <h1 className="text-2xl font-bold text-[#1E3A5F]">Scan Room QR Code</h1>
-        <p className="text-[#64748B] text-sm mt-1">
-          Use your camera to scan a room QR code and check in
-        </p>
+        <BackButton />
+        <h1 className="text-2xl font-bold text-[#0B2A5B]">Scan Room QR Code</h1>
       </div>
 
       {!facultyId && (
@@ -653,9 +634,9 @@ export default function ScanClient() {
           <div className={cardClass}>
             <div className="px-5 py-3.5 border-b border-[#E2E8F0] flex items-center gap-2">
               <div className="w-7 h-7 rounded-lg bg-[#EFF6FF] flex items-center justify-center">
-                <Camera className="w-3.5 h-3.5 text-[#3C91E6]" />
+                <Camera className="w-3.5 h-3.5 text-[#1D5BD6]" />
               </div>
-              <span className="text-sm font-semibold text-[#1E3A5F]">Camera Scanner</span>
+              <span className="text-sm font-semibold text-[#0B2A5B]">Camera Scanner</span>
             </div>
             <div className="p-5 relative">
               <div className="relative">
@@ -666,9 +647,9 @@ export default function ScanClient() {
                   {!cameraOn && (
                     <div className="text-center py-12 px-4">
                       <div className="w-14 h-14 rounded-2xl bg-white border border-[#E2E8F0] flex items-center justify-center mx-auto mb-3">
-                        <QrCode className="w-7 h-7 text-[#3C91E6]" />
+                        <QrCode className="w-7 h-7 text-[#1D5BD6]" />
                       </div>
-                      <p className="text-[#1E3A5F] text-sm font-semibold">Camera is off</p>
+                      <p className="text-[#0B2A5B] text-sm font-semibold">Camera is off</p>
                       <p className="text-[#94A3B8] text-xs mt-1">Press the button below to start scanning</p>
                     </div>
                   )}
@@ -711,7 +692,7 @@ export default function ScanClient() {
                 className={`w-full mt-3 py-2.5 min-h-11 rounded-xl font-semibold text-sm transition flex items-center justify-center gap-2 disabled:opacity-40 ${
                   cameraOn
                     ? 'bg-white text-[#DC2626] border border-[#FECACA] hover:bg-[#FEF2F2] active:bg-[#FEF2F2]'
-                    : 'bg-[#3C91E6] text-white hover:bg-[#2E7DD1] active:bg-[#2670BD] border border-transparent shadow-sm'
+                    : 'bg-[#1D5BD6] text-white hover:bg-[#2E7DD1] active:bg-[#2670BD] border border-transparent shadow-sm'
                 }`}
               >
                 {cameraLoading
@@ -722,34 +703,6 @@ export default function ScanClient() {
               </button>
             </div>
           </div>
-
-          <div className={cardClass}>
-            <div className="px-5 py-3.5 border-b border-[#E2E8F0]">
-              <span className="text-sm font-semibold text-[#1E3A5F]">How QR Scanning Works</span>
-            </div>
-            <ul className="p-5 space-y-3 text-sm text-[#475569]">
-              <li className="flex items-start gap-2.5">
-                <CheckCircle className="w-4 h-4 text-[#059669] flex-shrink-0 mt-0.5" />
-                <span><strong className="text-[#1E3A5F]">In-Use</strong> — Available lecture room with no class: one scan occupies the room immediately.</span>
-              </li>
-              <li className="flex items-start gap-2.5">
-                <Timer className="w-4 h-4 text-[#D97706] flex-shrink-0 mt-0.5" />
-                <span><strong className="text-[#1E3A5F]">Pending</strong> — Only after a Room Request. Scan once at the room within 15 minutes to confirm.</span>
-              </li>
-              <li className="flex items-start gap-2.5">
-                <AlertTriangle className="w-4 h-4 text-[#CA8A04] flex-shrink-0 mt-0.5" />
-                <span><strong className="text-[#1E3A5F]">Late</strong> — You checked in after the scheduled start time.</span>
-              </li>
-              <li className="flex items-start gap-2.5">
-                <XCircle className="w-4 h-4 text-[#DC2626] flex-shrink-0 mt-0.5" />
-                <span><strong className="text-[#1E3A5F]">Blocked</strong> — Room is already occupied or reserved by another instructor.</span>
-              </li>
-              <li className="flex items-start gap-2.5">
-                <ShieldX className="w-4 h-4 text-[#DC2626] flex-shrink-0 mt-0.5" />
-                <span><strong className="text-[#1E3A5F]">Unauthorized</strong> — This room is assigned to a different instructor at this time.</span>
-              </li>
-            </ul>
-          </div>
         </div>
         </PageLoadTransition>
 
@@ -759,35 +712,11 @@ export default function ScanClient() {
           ) : (
             <div className={`${cardClass} p-12 flex flex-col items-center justify-center text-center`}>
               <div className="w-14 h-14 rounded-2xl bg-[#EFF6FF] border border-[#BFDBFE] flex items-center justify-center mb-3">
-                <QrCode className="w-7 h-7 text-[#3C91E6]" />
+                <QrCode className="w-7 h-7 text-[#1D5BD6]" />
               </div>
-              <p className="text-[#1E3A5F] text-sm font-semibold">No scan yet</p>
+              <p className="text-[#0B2A5B] text-sm font-semibold">No scan yet</p>
             </div>
           )}
-
-          <div className={cardClass}>
-            <div className="px-5 py-3.5 border-b border-[#E2E8F0]">
-              <span className="text-sm font-semibold text-[#1E3A5F]">Recent Scans</span>
-            </div>
-            {recentScans.length === 0 ? (
-              <div className="py-10 text-center text-[#94A3B8] text-sm">No recent scans this session</div>
-            ) : (
-              <div className="divide-y divide-[#F1F5F9] max-h-72 overflow-y-auto">
-                {recentScans.map((scan, i) => (
-                  <div key={`${scan.status}-${scan.room?.id ?? 'x'}-${scan.scan_time}-${i}`} className="flex items-center justify-between px-5 py-3.5">
-                    <div className="min-w-0">
-                      <p className="text-sm text-[#1E3A5F] font-medium truncate">{scan.room?.name || 'Unknown Room'}</p>
-                      <p className="text-xs text-[#94A3B8] mt-0.5">{formatScanClock(scan.scan_time)}</p>
-                    </div>
-                    <div className="flex items-center gap-2 flex-shrink-0 ml-3">
-                      <div className={`w-2 h-2 rounded-full ${DOT_COLOR[scan.status] ?? 'bg-[#94A3B8]'}`} />
-                      <span className="text-xs font-semibold text-[#64748B]">{scan.status}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
       </div>
 
@@ -829,7 +758,7 @@ function ScanResultCard({ result }: { result: ScanResult }) {
               This is for a submitted Room Request. Go to the room and scan its QR code
               within {result.expires_in_mins ?? 15} minutes to confirm occupancy.
             </p>
-            <Link href="/instructor/room-requests" className="text-xs text-[#3C91E6] hover:underline font-semibold mt-1.5 inline-block">
+            <Link href="/instructor/room-requests" className="text-xs text-[#1D5BD6] hover:underline font-semibold mt-1.5 inline-block">
               View Room Requests →
             </Link>
           </div>
@@ -851,11 +780,11 @@ function ScanResultCard({ result }: { result: ScanResult }) {
       {result.room && (
         <div className="bg-white border border-[#E2E8F0] rounded-xl p-3.5 mb-3 flex items-center gap-3">
           <div className="w-9 h-9 rounded-lg bg-[#EFF6FF] flex items-center justify-center flex-shrink-0">
-            <MapPin className="w-4 h-4 text-[#3C91E6]" />
+            <MapPin className="w-4 h-4 text-[#1D5BD6]" />
           </div>
           <div className="min-w-0">
             <p className="text-[10px] text-[#94A3B8] uppercase tracking-wide font-semibold">Room</p>
-            <p className="font-semibold text-[#1E3A5F]">{result.room.name}</p>
+            <p className="font-semibold text-[#0B2A5B]">{result.room.name}</p>
             <p className="text-xs text-[#64748B]">{result.room.type}</p>
           </div>
         </div>
@@ -864,13 +793,13 @@ function ScanResultCard({ result }: { result: ScanResult }) {
       {result.schedule && (
         <div className="bg-white border border-[#E2E8F0] rounded-xl p-3.5 mb-3">
           <p className="text-[10px] text-[#94A3B8] uppercase tracking-wide font-semibold mb-1">Scheduled Class</p>
-          <p className="font-semibold text-[#1E3A5F] break-words">{result.schedule.subject_name}</p>
+          <p className="font-semibold text-[#0B2A5B] break-words">{result.schedule.subject_name}</p>
           {result.schedule.block_name && (
             <p className="text-xs text-[#64748B] mt-0.5">Block {result.schedule.block_name}</p>
           )}
           {(result.schedule.session_start || result.schedule.session_end) && (
             <p className="text-xs text-[#64748B] flex items-center gap-1 mt-1.5">
-              <Clock className="w-3 h-3 text-[#3C91E6]" />
+              <Clock className="w-3 h-3 text-[#1D5BD6]" />
               {fmt5(result.schedule.session_start)} – {fmt5(result.schedule.session_end)}
             </p>
           )}
@@ -888,7 +817,7 @@ function ScanResultCard({ result }: { result: ScanResult }) {
       {result.status === 'Blocked' && result.occupancy && (
         <div className="bg-white border border-[#E2E8F0] rounded-xl p-3.5 mb-3">
           <p className="text-[10px] text-[#94A3B8] uppercase tracking-wide font-semibold mb-1">Currently Held By</p>
-          <p className="text-sm font-semibold text-[#1E3A5F]">{result.occupancy.faculty_name}</p>
+          <p className="text-sm font-semibold text-[#0B2A5B]">{result.occupancy.faculty_name}</p>
           <p className="text-xs text-[#64748B]">Status: {result.occupancy.status}</p>
         </div>
       )}

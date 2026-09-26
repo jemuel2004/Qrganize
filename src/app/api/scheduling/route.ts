@@ -1,6 +1,8 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import { query, transaction } from '@/server/db';
 import { getAuthUser } from '@/server/auth';
+import { getChairAssignedProgramId } from '@/server/programScope';
+import { findScheduleConflicts, validateSessions, type ScheduleConflict } from '@/server/scheduleConflicts';
 
 /* Run once per cold start — avoids DDL + migration overhead on every POST */
 let schedSchemaReady   = false;
@@ -29,8 +31,15 @@ async function ensureSchedMigration() {
 // the raw curriculum table.
 export async function GET(req: NextRequest) {
   try {
-    const auth = await getAuthUser(req);
+    const auth = await getAuthUser(req) as { id?: number; role?: string } | null;
     if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    let programFilter: number | null = null;
+    if (auth.role === 'program_chair') {
+      programFilter = auth.id ? await getChairAssignedProgramId(Number(auth.id)) : null;
+      if (programFilter == null) return NextResponse.json({ schedules: [] });
+    }
+
     const result = await query(`
       SELECT * FROM (
         SELECT DISTINCT ON (ms.block_subject_id)
@@ -60,10 +69,11 @@ export async function GET(req: NextRequest) {
         JOIN faculty         f  ON ms.faculty_id      = f.id
         WHERE ms.status = 'Assigned'
           AND ms.faculty_id IS NOT NULL
+          AND ($1::int IS NULL OR p.id = $1::int)
         ORDER BY ms.block_subject_id, ms.id DESC
       ) sub
       ORDER BY program_code, year_level, semester, block_name, subject_code
-    `);
+    `, [programFilter]);
 
     return NextResponse.json({ schedules: result.rows });
   } catch (error) {
@@ -89,8 +99,8 @@ const LAB_ROOM_TYPES = ['Laboratory', 'Computer Lab'];
 
 export async function POST(req: NextRequest) {
   try {
-    const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    const auth = await getAuthUser(req) as { id?: number; role?: string } | null;
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -105,7 +115,7 @@ export async function POST(req: NextRequest) {
     // Get schedule and subject details
     const schedResult = await query(`
       SELECT ms.*, c.total_hours, c.lecture_hours, c.laboratory_hours, c.units,
-        ms.faculty_id, b.semester, b.academic_year, b.id as block_id,
+        ms.faculty_id, b.semester, b.academic_year, b.id as block_id, b.program_id,
         bs.block_id as bs_block_id
       FROM master_schedule ms
       JOIN block_subjects bs ON ms.block_subject_id = bs.id
@@ -117,7 +127,19 @@ export async function POST(req: NextRequest) {
     if (schedResult.rows.length === 0) return NextResponse.json({ error: 'Schedule not found' }, { status: 404 });
     const sched = schedResult.rows[0];
 
+    if (auth.role === 'program_chair') {
+      const chairProgramId = auth.id ? await getChairAssignedProgramId(Number(auth.id)) : null;
+      if (chairProgramId == null || Number(sched.program_id) !== chairProgramId) {
+        return NextResponse.json({ error: 'Schedule not found' }, { status: 404 });
+      }
+    }
+
     if (!sched.faculty_id) return NextResponse.json({ error: 'Please assign an instructor first' }, { status: 400 });
+
+    // Reject malformed sessions (unknown day, bad time, 0 hours) — they would
+    // match nothing and slip past every conflict check.
+    const invalidSessions = validateSessions(sessions);
+    if (invalidSessions) return NextResponse.json({ error: invalidSessions }, { status: 400 });
 
     const lecHours = parseFloat(sched.lecture_hours) || 0;
     const labHours = parseFloat(sched.laboratory_hours) || 0;
@@ -164,85 +186,26 @@ export async function POST(req: NextRequest) {
     // When a room IS provided, validate it matches the session type.
     for (const session of sessions) {
       const sessionRoomId = session.room_id || null;
-      const sessionType: string = session.type || (isLabOnly ? 'lab' : 'lec');
-
-      if (sessionType === 'lab' && sessionRoomId) {
-        const roomResult = await query('SELECT room_type FROM rooms WHERE id=$1', [sessionRoomId]);
-        if (roomResult.rows.length > 0 && !LAB_ROOM_TYPES.includes(roomResult.rows[0].room_type)) {
-          return NextResponse.json({ error: 'Lab sessions must use a Laboratory or Computer Lab room' }, { status: 400 });
-        }
+      if (!sessionRoomId) continue;
+      const sessionType: string = session.type || component || (isLabOnly ? 'lab' : 'lec');
+      const roomResult = await query('SELECT room_type, status FROM rooms WHERE id=$1', [sessionRoomId]);
+      if (roomResult.rows.length === 0) {
+        return NextResponse.json({ error: 'The selected room no longer exists.' }, { status: 400 });
       }
-
-      if (sessionType === 'lec' && sessionRoomId) {
-        const roomResult = await query('SELECT room_type FROM rooms WHERE id=$1', [sessionRoomId]);
-        if (roomResult.rows.length > 0 && LAB_ROOM_TYPES.includes(roomResult.rows[0].room_type)) {
-          return NextResponse.json({ error: 'Lecture sessions cannot use a laboratory room' }, { status: 400 });
-        }
+      if (roomResult.rows[0].status && roomResult.rows[0].status !== 'Active') {
+        return NextResponse.json({ error: 'The selected room is not active.' }, { status: 400 });
+      }
+      const isLabRoom = LAB_ROOM_TYPES.includes(roomResult.rows[0].room_type);
+      if (sessionType === 'lab' && !isLabRoom) {
+        return NextResponse.json({ error: 'Lab sessions must use a Laboratory or Computer Lab room' }, { status: 400 });
+      }
+      if (sessionType === 'lec' && isLabRoom) {
+        return NextResponse.json({ error: 'Lecture sessions cannot use a laboratory room' }, { status: 400 });
       }
     }
 
     // Component being saved — exclude only these sessions on re-save; sibling Lec/Lab must still conflict.
     const schedulingType: string = component || (isLabOnly ? 'lab' : 'lec');
-
-    // ── Conflict checking (runs outside transaction — read-only) ────────────
-    for (const session of sessions) {
-      const sessionStartTime = session.start_time;
-      const sessionHoursMinutes = Math.round(parseFloat(String(session.hours)) * 60);
-      const sessionEndTime = addMinutesToTime(sessionStartTime, sessionHoursMinutes);
-      const sessionRoomId = session.room_id || null;
-
-      // Instructor conflict — same instructor + same day + overlapping time,
-      // including Lecture vs Laboratory of the same Major subject (shared master_schedule_id).
-      const instructorConflict = await query(`
-        SELECT ss.id FROM schedule_sessions ss
-        JOIN master_schedule ms2 ON ss.master_schedule_id = ms2.id
-        WHERE ms2.faculty_id = $1
-        AND ms2.faculty_id IS NOT NULL
-        AND ms2.status IN ('Assigned', 'Scheduled')
-        AND ss.day_of_week = $2
-        AND (ms2.id != $3 OR ss.type IS DISTINCT FROM $6)
-        AND ss.start_time < $5::time AND ss.end_time > $4::time
-      `, [sched.faculty_id, session.day, master_schedule_id, sessionStartTime, sessionEndTime, schedulingType]);
-
-      if (instructorConflict.rows.length > 0) {
-        return NextResponse.json({ error: `Schedule conflict: instructor already has another class on ${session.day} at that time.` }, { status: 409 });
-      }
-
-      // Block conflict — ignore orphaned sessions (no faculty / inactive status)
-      const blockConflict = await query(`
-        SELECT ss.id FROM schedule_sessions ss
-        JOIN master_schedule ms2 ON ss.master_schedule_id = ms2.id
-        JOIN block_subjects bs2 ON ms2.block_subject_id = bs2.id
-        WHERE bs2.block_id = $1
-        AND ms2.faculty_id IS NOT NULL
-        AND ms2.status IN ('Assigned', 'Scheduled')
-        AND ss.day_of_week = $2
-        AND (ms2.id != $3 OR ss.type IS DISTINCT FROM $6)
-        AND ss.start_time < $5::time AND ss.end_time > $4::time
-      `, [sched.bs_block_id, session.day, master_schedule_id, sessionStartTime, sessionEndTime, schedulingType]);
-
-      if (blockConflict.rows.length > 0) {
-        return NextResponse.json({ error: `Schedule conflict: block already has another subject on ${session.day} at that time.` }, { status: 409 });
-      }
-
-      // Room conflict (per-session room_id)
-      if (sessionRoomId) {
-        const roomConflict = await query(`
-          SELECT ss.id FROM schedule_sessions ss
-          JOIN master_schedule ms2 ON ss.master_schedule_id = ms2.id
-          WHERE ss.room_id = $1
-          AND ms2.faculty_id IS NOT NULL
-          AND ms2.status IN ('Assigned', 'Scheduled')
-          AND ss.day_of_week = $2
-          AND (ss.master_schedule_id != $3 OR ss.type IS DISTINCT FROM $6)
-          AND ss.start_time < $5::time AND ss.end_time > $4::time
-        `, [sessionRoomId, session.day, master_schedule_id, sessionStartTime, sessionEndTime, schedulingType]);
-
-        if (roomConflict.rows.length > 0) {
-          return NextResponse.json({ error: `Schedule conflict: room is already in use on ${session.day} at that time.` }, { status: 409 });
-        }
-      }
-    }
 
     // ── Compute master_schedule time fields ─────────────────────────────────
     const firstLecSession = sessions.find((s: { type?: string }) => (s.type || 'lec') === 'lec') || sessions[0];
@@ -273,7 +236,27 @@ export async function POST(req: NextRequest) {
     // back entirely instead of leaving the schedule in a partial state.
     // For Lec+Lab subjects, only sessions of the current component type are
     // deleted so the other component's sessions are preserved independently.
-    await transaction(async (client) => {
+    const outcome = await transaction(async (client) => {
+      // One schedule save at a time: without this, two admins saving at the
+      // same moment could both pass the conflict check and double-book an
+      // instructor, room or block. Released automatically at COMMIT/ROLLBACK.
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext('qrganize:schedule-save'))`);
+
+      // Conflict check inside the lock — same rules as /check-conflicts
+      const conflicts = await findScheduleConflicts(
+        (text, params) => client.query(text, params),
+        {
+          masterScheduleId: Number(master_schedule_id),
+          facultyId: Number(sched.faculty_id),
+          blockId: Number(sched.bs_block_id),
+          semester: sched.semester || '',
+          academicYear: sched.academic_year || '',
+          editingType: schedulingType === 'lab' ? 'lab' : 'lec',
+          sessions,
+        },
+      );
+      if (conflicts.length > 0) return { conflicts };
+
       await client.query(
         'DELETE FROM schedule_sessions WHERE master_schedule_id=$1 AND type=$2',
         [master_schedule_id, schedulingType]
@@ -316,7 +299,15 @@ export async function POST(req: NextRequest) {
          WHERE id=(SELECT block_subject_id FROM master_schedule WHERE id=$2)`,
         [newStatus, master_schedule_id]
       );
+      return { conflicts: [] as ScheduleConflict[] };
     });
+
+    if (outcome.conflicts.length > 0) {
+      return NextResponse.json({
+        error: `Schedule conflict: ${outcome.conflicts[0].message}`,
+        conflicts: outcome.conflicts,
+      }, { status: 409 });
+    }
 
     return NextResponse.json({ success: true, message: 'Schedule saved successfully' });
   } catch (error) {
@@ -327,8 +318,8 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
-    const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'department_chair'].includes(auth.role ?? '')) {
+    const auth = await getAuthUser(req) as { id?: number; role?: string } | null;
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -348,15 +339,22 @@ export async function DELETE(req: NextRequest) {
     }
 
     const check = await query(
-      `SELECT ms.id, ms.status, c.lecture_hours, c.laboratory_hours
+      `SELECT ms.id, ms.status, c.lecture_hours, c.laboratory_hours, b.program_id
        FROM master_schedule ms
        JOIN block_subjects bs ON ms.block_subject_id = bs.id
        JOIN curriculums c ON bs.curriculum_id = c.id
+       JOIN blocks b ON bs.block_id = b.id
        WHERE ms.id = $1`,
       [id]
     );
     if (check.rows.length === 0) {
       return NextResponse.json({ error: 'Schedule not found' }, { status: 404 });
+    }
+    if (auth.role === 'program_chair') {
+      const chairProgramId = auth.id ? await getChairAssignedProgramId(Number(auth.id)) : null;
+      if (chairProgramId == null || Number(check.rows[0].program_id) !== chairProgramId) {
+        return NextResponse.json({ error: 'Schedule not found' }, { status: 404 });
+      }
     }
 
     const lecHours = parseFloat(String(check.rows[0].lecture_hours)) || 0;

@@ -17,10 +17,15 @@ export async function PATCH(req: NextRequest) {
         UPDATE notifications SET is_read = true
         WHERE  recipient_role = 'admin' AND is_read = false
       `, []);
-    } else if (authUser.role === 'department_chair' && authUser.id) {
+    } else if (authUser.role === 'department_chair') {
       await query(`
         UPDATE notifications SET is_read = true
-        WHERE  recipient_role = 'department_chair'
+        WHERE  recipient_role = 'department_chair' AND is_read = false
+      `, []);
+    } else if (authUser.role === 'program_chair' && authUser.id) {
+      await query(`
+        UPDATE notifications SET is_read = true
+        WHERE  recipient_role = 'program_chair'
           AND  recipient_id   = $1
           AND  is_read        = false
       `, [authUser.id]);

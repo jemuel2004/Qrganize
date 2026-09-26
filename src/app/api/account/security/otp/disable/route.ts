@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import { getAuthUser, getDisableOtpChallengeId } from '@/server/auth';
 import { query } from '@/server/db';
@@ -26,7 +26,7 @@ function resolveAccount(
   auth: AuthPayload
 ): { accountKind: OtpAccountKind; accountId: number; role: string } | null {
   if (!auth.role || !auth.id) return null;
-  if (auth.role === 'admin' || auth.role === 'department_chair') {
+  if (auth.role === 'admin' || auth.role === 'department_chair' || auth.role === 'program_chair') {
     return { accountKind: 'user', accountId: Number(auth.id), role: auth.role };
   }
   if (auth.role === 'instructor') {

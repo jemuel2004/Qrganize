@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useInstructorProfile } from '@/client/context/InstructorProfileContext';
 import { useScrollLock } from '@/client/hooks/useScrollLock';
+import BackButton from '@/client/components/ui/BackButton';
 import { useInstructorTheme, type InstructorTheme } from '@/client/context/InstructorThemeContext';
 import { ProfilePictureUpload } from '@/client/components/ui/ProfilePictureUpload';
 import TrustedDevicesPanel from '@/client/components/security/TrustedDevicesPanel';
@@ -62,8 +63,8 @@ function AccordionCard({
         aria-expanded={open}
         className="w-full flex items-center gap-4 px-6 py-5 text-left hover:bg-white/[0.03] transition-colors"
       >
-        <div className="flex-shrink-0 w-11 h-11 bg-[#3074B8]/15 rounded-xl flex items-center justify-center">
-          <Icon className="w-5 h-5 text-[#3074B8]" />
+        <div className="flex-shrink-0 w-11 h-11 bg-[#12408F]/15 rounded-xl flex items-center justify-center">
+          <Icon className="w-5 h-5 text-[#12408F]" />
         </div>
         <div className="flex-1 min-w-0">
           <p className="text-[15px] font-bold text-white leading-tight">{title}</p>
@@ -107,8 +108,8 @@ function SecurityRow({
       disabled={disabled}
       className="w-full flex items-center gap-4 px-4 py-3.5 text-left rounded-xl hover:bg-white/[0.04] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
     >
-      <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-[#3074B8]/15 flex items-center justify-center">
-        <Icon className="w-4 h-4 text-[#3074B8]" />
+      <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-[#12408F]/15 flex items-center justify-center">
+        <Icon className="w-4 h-4 text-[#12408F]" />
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold text-white">{title}</p>
@@ -188,7 +189,7 @@ function PwField({
           onChange={e => onChange(e.target.value)}
           placeholder={placeholder}
           autoComplete={autoComplete}
-          className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 pr-12 text-sm text-white placeholder:text-slate-600 focus:border-[#3074B8] focus:outline-none transition-colors"
+          className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 pr-12 text-sm text-white placeholder:text-slate-600 focus:border-[#12408F] focus:outline-none transition-colors"
         />
         <button
           type="button"
@@ -226,7 +227,7 @@ function ThemePreviewMini({ dark }: { dark: boolean }) {
   const line2 = dark ? '#1a2742' : '#F1F5F9';
   return (
     <div style={{ background: bg, display: 'flex', height: '100%', overflow: 'hidden' }}>
-      <div style={{ width: 20, background: '#3074B8', flexShrink: 0, padding: '6px 3px', display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <div style={{ width: 20, background: '#12408F', flexShrink: 0, padding: '6px 3px', display: 'flex', flexDirection: 'column', gap: 3 }}>
         <div style={{ width: 14, height: 14, background: 'rgba(255,255,255,0.25)', borderRadius: 3 }} />
         {[0,1,2].map(i => <div key={i} style={{ width: 14, height: 4, background: 'rgba(255,255,255,0.18)', borderRadius: 2 }} />)}
       </div>
@@ -235,7 +236,7 @@ function ThemePreviewMini({ dark }: { dark: boolean }) {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 2 }}>
           {[0,1,2].map(i => (
             <div key={i} style={{ height: 18, background: card, borderRadius: 3, padding: '3px 3px' }}>
-              <div style={{ width: '60%', height: 2.5, background: '#3074B8', borderRadius: 1.5, opacity: 0.55 }} />
+              <div style={{ width: '60%', height: 2.5, background: '#12408F', borderRadius: 1.5, opacity: 0.55 }} />
               <div style={{ width: '40%', height: 4, background: line, borderRadius: 1.5, marginTop: 3 }} />
             </div>
           ))}
@@ -264,7 +265,7 @@ function ThemeCard({ id, label, desc, selected, onClick }: {
       onClick={onClick}
       className={`relative flex flex-col gap-3 p-3 rounded-xl border-2 text-left transition-all duration-200 ${
         selected
-          ? 'border-[#3074B8] bg-[#3074B8]/10'
+          ? 'border-[#12408F] bg-[#12408F]/10'
           : 'border-white/10 bg-white/5 hover:border-white/25 hover:bg-white/[0.08]'
       }`}
     >
@@ -285,7 +286,7 @@ function ThemeCard({ id, label, desc, selected, onClick }: {
           <p className="text-[11px] text-slate-400 mt-0.5">{desc}</p>
         </div>
         {selected && (
-          <div className="flex-shrink-0 w-5 h-5 bg-[#3074B8] rounded-full flex items-center justify-center">
+          <div className="flex-shrink-0 w-5 h-5 bg-[#12408F] rounded-full flex items-center justify-center">
             <Check className="w-3 h-3 text-white" />
           </div>
         )}
@@ -532,8 +533,8 @@ export default function ProfileClient() {
       />
 
       <div className="mb-7">
+        <BackButton variant="dark" />
         <h1 className="text-2xl font-black text-white">Settings</h1>
-        <p className="text-slate-400 text-sm mt-1">Manage your profile and account preferences.</p>
       </div>
 
       <PageLoadTransition
@@ -597,10 +598,10 @@ export default function ProfileClient() {
             </div>
 
             <div className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-xl px-4 py-3">
-              <div className="w-8 h-8 bg-[#3074B8]/15 rounded-lg flex items-center justify-center flex-shrink-0">
-                {theme === 'light'  && <Sun               className="w-4 h-4 text-[#3074B8]" />}
-                {theme === 'dark'   && <Moon              className="w-4 h-4 text-[#3074B8]" />}
-                {theme === 'system' && <MonitorSmartphone className="w-4 h-4 text-[#3074B8]" />}
+              <div className="w-8 h-8 bg-[#12408F]/15 rounded-lg flex items-center justify-center flex-shrink-0">
+                {theme === 'light'  && <Sun               className="w-4 h-4 text-[#12408F]" />}
+                {theme === 'dark'   && <Moon              className="w-4 h-4 text-[#12408F]" />}
+                {theme === 'system' && <MonitorSmartphone className="w-4 h-4 text-[#12408F]" />}
               </div>
               <p className="text-[11px] text-slate-400">
                 <span className="font-bold text-slate-300">
@@ -813,7 +814,7 @@ export default function ProfileClient() {
                   onChange={e => setPwForm(f => ({ ...f, confirm: e.target.value }))}
                   autoComplete="new-password"
                   className={`w-full bg-white/5 border rounded-xl px-4 py-3 pr-12 text-sm text-white focus:outline-none transition-colors ${
-                    matchFail ? 'border-red-500/50' : matchOk ? 'border-emerald-500/40' : 'border-white/10 focus:border-[#3074B8]'
+                    matchFail ? 'border-red-500/50' : matchOk ? 'border-emerald-500/40' : 'border-white/10 focus:border-[#12408F]'
                   }`}
                 />
                 <button
@@ -844,7 +845,7 @@ export default function ProfileClient() {
             <button
               type="submit"
               disabled={!canSubmitPw(pwForm.current, pwForm.newPw, pwForm.confirm) || pwLoading}
-              className="w-full h-11 rounded-xl bg-[#3074B8] hover:bg-[#3C91E6] disabled:opacity-40 text-white text-sm font-bold transition-colors flex items-center justify-center gap-2"
+              className="w-full h-11 rounded-xl bg-[#12408F] hover:bg-[#1D5BD6] disabled:opacity-40 text-white text-sm font-bold transition-colors flex items-center justify-center gap-2"
             >
               {pwLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
               {pwLoading ? 'Saving…' : 'Change Password'}

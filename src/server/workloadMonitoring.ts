@@ -1,4 +1,4 @@
-import { query } from '@/server/db';
+﻿import { query } from '@/server/db';
 import { getActiveAcademicPeriod } from '@/server/activeAcademicPeriod';
 import { loadFacultyLoadSummaries } from '@/server/facultyLoadSummaries';
 import { fetchBlocksWithAssignmentCounts } from '@/server/blockAssignmentCounts';
@@ -286,7 +286,7 @@ export async function computeWorkloadMonitoring(): Promise<WorkloadMonitoringSna
 }
 
 async function upsertAlert(params: {
-  recipientRole: 'admin' | 'department_chair';
+  recipientRole: 'admin' | 'department_chair' | 'program_chair';
   recipientId: number;
   type: string;
   title: string;
@@ -315,7 +315,7 @@ async function upsertAlert(params: {
 }
 
 async function pruneAlerts(
-  recipientRole: 'admin' | 'department_chair',
+  recipientRole: 'admin' | 'department_chair' | 'program_chair',
   recipientId: number,
   keep: { type: string; module: string; id: number }[]
 ) {
@@ -343,7 +343,7 @@ async function pruneAlerts(
 }
 
 async function syncRecipient(
-  recipientRole: 'admin' | 'department_chair',
+  recipientRole: 'admin' | 'department_chair' | 'program_chair',
   recipientId: number,
   snapshot: WorkloadMonitoringSnapshot
 ) {
@@ -406,17 +406,18 @@ export async function syncWorkloadMonitoringNotifications(
     const full = snapshot ?? await computeWorkloadMonitoring();
 
     await syncRecipient('admin', 0, full);
+    await syncRecipient('department_chair', 0, full);
 
     const chairs = await query(`
       SELECT id, program_id
       FROM users
-      WHERE role = 'department_chair' AND COALESCE(is_active, true) = true
+      WHERE role = 'program_chair' AND COALESCE(is_active, true) = true
     `);
 
     for (const chair of chairs.rows as { id: number; program_id: number | null }[]) {
       const pid = chair.program_id == null ? null : Number(chair.program_id);
       const scoped = filterSnapshotForProgram(full, pid);
-      await syncRecipient('department_chair', Number(chair.id), scoped);
+      await syncRecipient('program_chair', Number(chair.id), scoped);
     }
   } catch (e) {
     console.error('[syncWorkloadMonitoringNotifications]', e);

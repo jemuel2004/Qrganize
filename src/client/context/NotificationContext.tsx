@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import React, {
   createContext, useCallback, useContext,
@@ -19,7 +19,7 @@ export interface AppNotification {
   related_id: number | null;
 }
 
-export type NotificationRole = 'admin' | 'department_chair' | 'instructor';
+export type NotificationRole = 'admin' | 'department_chair' | 'program_chair' | 'instructor';
 
 interface NotificationContextValue {
   notifications: AppNotification[];
@@ -87,7 +87,7 @@ export function NotificationProvider({ children, role }: Props) {
           prev.length     === incoming.length &&
           prev[0]?.id     === incoming[0]?.id &&
           prev[0]?.is_read === incoming[0]?.is_read
-        ) return prev;   // same reference → no re-render
+        ) return prev;   // same reference â†’ no re-render
         return incoming;
       });
       setUnreadCount(prev => (prev === incomingUnread ? prev : incomingUnread));

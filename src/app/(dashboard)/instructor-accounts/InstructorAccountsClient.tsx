@@ -3,6 +3,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast } from '@/client/context/ToastContext';
 import Modal from '@/client/components/ui/Modal';
+import BackButton from '@/client/components/ui/BackButton';
+import TrashDropAnimation from '@/client/components/ui/TrashDropAnimation';
 import { PageLoadTransition } from '@/client/components/ui/PageLoadTransition';
 import { TableSkeleton } from '@/client/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/client/hooks/useMinLoading';
@@ -12,6 +14,7 @@ import {
   Upload, Camera, ChevronDown,
 } from 'lucide-react';
 import { SearchInput, FilterSelect } from '@/components/ui/SearchFilter';
+import SubjectMultiSelect, { type PrioritySubject } from '@/client/components/ui/SubjectMultiSelect';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -37,6 +40,8 @@ interface InstructorAccount {
   program_code: string | null;
   program_name: string | null;
   profile_picture: string | null;
+  specialization?: string | null;
+  priority_subjects?: PrioritySubject[];
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -57,6 +62,7 @@ const emptyForm = {
   first_name: '', last_name: '', middle_name: '',
   program_id: '', position: 'Instructor I',
   username: '', email: '', password: '', confirmPassword: '',
+  priority_subjects: [] as PrioritySubject[],
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -98,7 +104,7 @@ function Avatar({ account, size = 10 }: { account: InstructorAccount; size?: num
     return <img src={url} alt={account.name} className={cls} style={{ width: px, height: px }} onError={() => setErr(true)} />;
   }
   return (
-    <div className={`w-${size} h-${size} rounded-full bg-[#3C91E6]/20 border border-[#3C91E6]/30 flex items-center justify-center flex-shrink-0 text-[#3C91E6] font-bold`}
+    <div className={`w-${size} h-${size} rounded-full bg-[#1D5BD6]/20 border border-[#1D5BD6]/30 flex items-center justify-center flex-shrink-0 text-[#1D5BD6] font-bold`}
       style={{ width: px, height: px, fontSize: px / 3.5 }}>
       {initials(account.name) || <User className="w-4 h-4" />}
     </div>
@@ -122,7 +128,7 @@ function PositionSelect({ value, onChange, error }: { value: string; onChange: (
       <button
         type="button"
         onClick={() => setOpen(p => !p)}
-        className={`w-full flex items-center justify-between bg-[#0b0f1a] border rounded-xl px-4 py-3 text-sm text-white text-left transition focus:outline-none focus:ring-1 focus:ring-[#3C91E6]/50
+        className={`w-full flex items-center justify-between bg-[#0b0f1a] border rounded-xl px-4 py-3 text-sm text-white text-left transition focus:outline-none focus:ring-1 focus:ring-[#1D5BD6]/50
           ${error ? 'border-red-500/60' : 'border-white/10 hover:border-white/20'}`}
       >
         <span className={value ? 'text-white' : 'text-slate-500'}>{value || 'Select position…'}</span>
@@ -135,7 +141,7 @@ function PositionSelect({ value, onChange, error }: { value: string; onChange: (
               <button key={p} type="button"
                 onClick={() => { onChange(p); setOpen(false); }}
                 className={`w-full px-4 py-2.5 text-left text-sm transition-colors hover:bg-white/[0.06]
-                  ${value === p ? 'text-[#3C91E6] font-semibold bg-[#3C91E6]/10' : 'text-slate-300'}`}
+                  ${value === p ? 'text-[#1D5BD6] font-semibold bg-[#1D5BD6]/10' : 'text-slate-300'}`}
               >
                 {p}
               </button>
@@ -162,7 +168,7 @@ function PasswordInput({
           onChange={e => onChange(e.target.value)}
           placeholder={placeholder}
           autoComplete="new-password"
-          className={`w-full bg-[#0b0f1a] border rounded-xl px-4 py-3 pr-12 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-[#3C91E6]/50 transition
+          className={`w-full bg-[#0b0f1a] border rounded-xl px-4 py-3 pr-12 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-[#1D5BD6]/50 transition
             ${error ? 'border-red-500/60' : 'border-white/10 hover:border-white/20'}`}
         />
         <button
@@ -193,7 +199,7 @@ function FormField({ label, id, type = 'text', value, onChange, placeholder, err
         value={value}
         onChange={e => onChange(e.target.value)}
         placeholder={placeholder}
-        className={`w-full bg-[#0b0f1a] border rounded-xl px-4 py-3 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-[#3C91E6]/50 transition
+        className={`w-full bg-[#0b0f1a] border rounded-xl px-4 py-3 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-[#1D5BD6]/50 transition
           ${error ? 'border-red-500/60' : 'border-white/10 hover:border-white/20'}`}
       />
       {hint && <p className="text-xs text-slate-500 mt-1">{hint}</p>}
@@ -212,6 +218,7 @@ export default function InstructorAccountsClient() {
   const [filterStatus, setFilterStatus]     = useState('');
   const [filterPosition, setFilterPosition] = useState('');
   const showSkeleton = useMinLoading(loading && accounts.length === 0, LOADING_DELAY);
+  const [showSaveSkeleton, setShowSaveSkeleton] = useState(false);
 
   // Modal state
   const [modalOpen, setModalOpen]   = useState(false);
@@ -220,11 +227,15 @@ export default function InstructorAccountsClient() {
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [formLoading, setFormLoading] = useState(false);
   const [formMsg, setFormMsg] = useState('');
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
   // Delete modal
   const [deleteTarget, setDeleteTarget] = useState<InstructorAccount | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState('');
+  const [deleteSuccess, setDeleteSuccess] = useState(false);
+  const [showDeleteSkeleton, setShowDeleteSkeleton] = useState(false);
+  const tableSkeletonVisible = showSkeleton || showSaveSkeleton || showDeleteSkeleton;
 
   // Reset password modal
   const [resetTarget, setResetTarget] = useState<InstructorAccount | null>(null);
@@ -272,6 +283,19 @@ export default function InstructorAccountsClient() {
       .catch(() => {});
   }, []);
 
+  /* Subjects to Handle — pulled from the full curriculum across all programs
+     (not scoped to whichever program this instructor belongs to). */
+  const [subjectOptions, setSubjectOptions] = useState<PrioritySubject[]>([]);
+  const [subjectOptionsLoading, setSubjectOptionsLoading] = useState(false);
+  useEffect(() => {
+    if (!modalOpen) return;
+    setSubjectOptionsLoading(true);
+    fetch('/api/curriculum/subjects')
+      .then(r => r.ok ? r.json() : { subjects: [] })
+      .then(d => setSubjectOptions(d.subjects || []))
+      .finally(() => setSubjectOptionsLoading(false));
+  }, [modalOpen]);
+
   // ── Form helpers ──────────────────────────────────────────────────────────
 
   function openCreate() {
@@ -295,6 +319,7 @@ export default function InstructorAccountsClient() {
       email:          a.email,
       password:       '',
       confirmPassword: '',
+      priority_subjects: a.priority_subjects ?? [],
     });
     setFormErrors({});
     setFormMsg('');
@@ -305,6 +330,10 @@ export default function InstructorAccountsClient() {
   function setField(key: keyof typeof emptyForm, val: string) {
     setForm(p => ({ ...p, [key]: val }));
     setFormErrors(p => { const n = { ...p }; delete n[key]; return n; });
+  }
+
+  function setPrioritySubjectsField(next: PrioritySubject[]) {
+    setForm(p => ({ ...p, priority_subjects: next }));
   }
 
   function validateForm(): boolean {
@@ -349,6 +378,7 @@ export default function InstructorAccountsClient() {
       username:    form.username.trim(),
       email:       form.email.trim(),
       password:    form.password || undefined,
+      priority_subjects: form.priority_subjects,
     };
 
     try {
@@ -362,11 +392,19 @@ export default function InstructorAccountsClient() {
         else setFormMsg(data?.error ?? 'Failed to save.');
         return;
       }
-      const data   = await res.json();
+      await res.json();
 
-      setModalOpen(false);
-      toast.success(editTarget ? 'Account updated successfully.' : 'Instructor account created successfully.');
+      setFormLoading(false);
+      setSaveSuccess(true);
+      setShowSaveSkeleton(true);
       loadAccounts();
+      setTimeout(() => {
+        setSaveSuccess(false);
+        setShowSaveSkeleton(false);
+        setModalOpen(false);
+        toast.success(editTarget ? 'Account updated successfully.' : 'Instructor account created successfully.');
+      }, 1300);
+      return;
     } catch {
       setFormMsg('Connection error. Please try again.');
     } finally {
@@ -420,9 +458,18 @@ export default function InstructorAccountsClient() {
         try { msg = ((await res.json()) as { error?: string })?.error ?? msg; } catch { /* html */ }
         setDeleteError(msg); return;
       }
-      setDeleteTarget(null);
-      toast.delete(`${deleteTarget.name}'s account has been deactivated.`);
+      const deletedName = deleteTarget.name;
+      setDeleteLoading(false);
+      setDeleteSuccess(true);
+      setShowDeleteSkeleton(true);
       loadAccounts();
+      setTimeout(() => {
+        setDeleteSuccess(false);
+        setShowDeleteSkeleton(false);
+        setDeleteTarget(null);
+        toast.delete(`${deletedName}'s account has been deactivated.`);
+      }, 1300);
+      return;
     } catch {
       setDeleteError('Connection error. Please try again.');
     } finally {
@@ -530,14 +577,12 @@ export default function InstructorAccountsClient() {
         {/* ── Page header ── */}
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
+            <BackButton variant="dark" />
             <h1 className="text-2xl font-bold text-white mb-1">Instructor Account Details</h1>
-            <p className="text-slate-400 text-sm">
-              Manage instructor login accounts, reset passwords, and control access.
-            </p>
           </div>
           <button
             onClick={openCreate}
-            className="flex items-center gap-2 bg-[#3C91E6] hover:bg-[#2E7DD1] text-white px-5 py-2.5 rounded-xl font-semibold text-sm transition-colors shadow-lg shadow-[#3C91E6]/20"
+            className="flex items-center gap-2 bg-[#1D5BD6] hover:bg-[#2E7DD1] text-white px-5 py-2.5 rounded-xl font-semibold text-sm transition-colors shadow-lg shadow-[#1D5BD6]/20"
           >
             <Plus className="w-4 h-4" />
             Add Instructor Account
@@ -576,13 +621,13 @@ export default function InstructorAccountsClient() {
           </div>
 
           <p className="text-xs text-slate-400 mt-3">
-            {showSkeleton ? 'Loading…' : `${accounts.length} instructor account${accounts.length !== 1 ? 's' : ''} found`}
+            {tableSkeletonVisible ? 'Loading…' : `${accounts.length} instructor account${accounts.length !== 1 ? 's' : ''} found`}
           </p>
         </div>
 
         {/* ── Table ── */}
         <PageLoadTransition
-          showSkeleton={showSkeleton}
+          showSkeleton={tableSkeletonVisible}
           skeleton={<TableSkeleton cols={7} rows={8} />}
         >
         <div className="bg-[#111827] border border-white/10 rounded-2xl overflow-hidden">
@@ -620,6 +665,9 @@ export default function InstructorAccountsClient() {
                           <Avatar account={a} size={10} />
                           <div>
                             <p className="font-semibold text-white leading-tight">{a.name}</p>
+                            {a.specialization && (
+                              <p className="text-xs text-[#1D5BD6] mt-0.5">{a.specialization}</p>
+                            )}
                             <p className="text-xs text-slate-500 mt-0.5">{a.employee_id || '—'}</p>
                           </div>
                         </div>
@@ -722,6 +770,28 @@ export default function InstructorAccountsClient() {
         title={editTarget ? 'Edit Instructor Account' : 'Add Instructor Account'}
         size="lg"
       >
+        {saveSuccess && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-2xl backdrop-blur-md save-success-overlay">
+            <div className="save-success-badge flex flex-col items-center gap-3 px-8 py-7 rounded-2xl bg-[#111827] border border-white/10 shadow-2xl">
+              <svg width="72" height="72" viewBox="0 0 52 52">
+                <circle
+                  className="save-success-circle"
+                  cx="26" cy="26" r="24"
+                  fill="none" stroke="#22C55E" strokeWidth="3"
+                />
+                <path
+                  className="save-success-check"
+                  fill="none" stroke="#22C55E" strokeWidth="3.5"
+                  strokeLinecap="round" strokeLinejoin="round"
+                  d="M14.5 27 22 34.5 38 17"
+                />
+              </svg>
+              <p className="text-base font-semibold text-white">
+                {editTarget ? 'Account updated!' : 'Account created!'}
+              </p>
+            </div>
+          </div>
+        )}
         <form onSubmit={submitForm} noValidate>
           <div className="space-y-6">
 
@@ -736,7 +806,7 @@ export default function InstructorAccountsClient() {
                       type="button"
                       onClick={() => picInputRef.current?.click()}
                       disabled={picUploading}
-                      className="absolute -bottom-1 -right-1 w-6 h-6 bg-[#3C91E6] hover:bg-[#2E7DD1] rounded-full flex items-center justify-center shadow-lg transition disabled:opacity-50"
+                      className="absolute -bottom-1 -right-1 w-6 h-6 bg-[#1D5BD6] hover:bg-[#2E7DD1] rounded-full flex items-center justify-center shadow-lg transition disabled:opacity-50"
                       title="Change photo"
                     >
                       <Camera className="w-3 h-3 text-white" />
@@ -749,7 +819,7 @@ export default function InstructorAccountsClient() {
                       type="button"
                       onClick={() => picInputRef.current?.click()}
                       disabled={picUploading}
-                      className="mt-2 flex items-center gap-1.5 text-xs text-[#3C91E6] hover:text-[#60A5FA] transition disabled:opacity-50"
+                      className="mt-2 flex items-center gap-1.5 text-xs text-[#1D5BD6] hover:text-[#60A5FA] transition disabled:opacity-50"
                     >
                       <Upload className="w-3 h-3" />
                       {picUploading ? 'Uploading…' : 'Upload new photo'}
@@ -771,8 +841,8 @@ export default function InstructorAccountsClient() {
             {/* Section: Name */}
             <div>
               <div className="flex items-center gap-2 mb-4">
-                <div className="w-7 h-7 rounded-lg bg-[#3C91E6]/20 flex items-center justify-center flex-shrink-0">
-                  <User className="w-4 h-4 text-[#3C91E6]" />
+                <div className="w-7 h-7 rounded-lg bg-[#1D5BD6]/20 flex items-center justify-center flex-shrink-0">
+                  <User className="w-4 h-4 text-[#1D5BD6]" />
                 </div>
                 <p className="text-sm font-bold text-slate-300 uppercase tracking-wider">Name</p>
               </div>
@@ -833,13 +903,24 @@ export default function InstructorAccountsClient() {
                   <select
                     value={form.program_id}
                     onChange={e => setField('program_id', e.target.value)}
-                    className={`w-full bg-[#0b0f1a] border rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:ring-1 focus:ring-[#3C91E6]/50 transition hover:border-white/20 ${formErrors.program_id ? 'border-red-500/50' : 'border-white/10'}`}
+                    className={`w-full bg-[#0b0f1a] border rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:ring-1 focus:ring-[#1D5BD6]/50 transition hover:border-white/20 ${formErrors.program_id ? 'border-red-500/50' : 'border-white/10'}`}
                   >
                     <option value="">— Select Program —</option>
                     {programs.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
                   </select>
                   {formErrors.program_id && <p className="text-xs text-red-400 mt-1">{formErrors.program_id}</p>}
                 </div>
+              </div>
+              <div className="mt-4">
+                <label className="block text-sm font-semibold text-slate-300 mb-2">
+                  Subjects to Handle&nbsp;<span className="text-slate-500 font-normal">(optional — a priority recommendation, not a restriction)</span>
+                </label>
+                <SubjectMultiSelect
+                  options={subjectOptions}
+                  selected={form.priority_subjects}
+                  onChange={setPrioritySubjectsField}
+                  loading={subjectOptionsLoading}
+                />
               </div>
             </div>
 
@@ -925,7 +1006,7 @@ export default function InstructorAccountsClient() {
               <button
                 type="submit"
                 disabled={formLoading}
-                className="flex-1 bg-[#3C91E6] hover:bg-[#2E7DD1] text-white py-2.5 rounded-xl text-sm font-bold transition disabled:opacity-60 flex items-center justify-center gap-2"
+                className="flex-1 bg-[#1D5BD6] hover:bg-[#2E7DD1] text-white py-2.5 rounded-xl text-sm font-bold transition disabled:opacity-60 flex items-center justify-center gap-2"
               >
                 {formLoading
                   ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Saving…</>
@@ -946,6 +1027,14 @@ export default function InstructorAccountsClient() {
         title="Delete Instructor Account"
         size="sm"
       >
+        {deleteSuccess && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-2xl backdrop-blur-md save-success-overlay">
+            <div className="save-success-badge flex flex-col items-center gap-3 px-8 py-7 rounded-2xl bg-[#111827] border border-white/10 shadow-2xl">
+              <TrashDropAnimation className="bg-red-500/15 border-red-500/30" color="#F87171" />
+              <p className="text-base font-semibold text-white">Account deleted!</p>
+            </div>
+          </div>
+        )}
         {deleteTarget && (
           <div className="space-y-5">
             <div className="flex items-start gap-4">

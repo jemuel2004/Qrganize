@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import { jwtVerify } from 'jose';
 import { evaluateSession } from '@/server/trustedDevices';
 import { getRequiredJwtSecretBytes } from '@/lib/authSecret';
@@ -22,7 +22,7 @@ const PUBLIC_API = new Set([
 
 function homeForRole(role: string): string {
   if (role === 'instructor') return '/instructor';
-  if (role === 'department_chair') return '/dept-chair';
+  if (role === 'program_chair') return '/dept-chair';
   return '/dashboard';
 }
 
@@ -62,7 +62,7 @@ function enforceRolePageAccess(
     return NextResponse.redirect(new URL('/instructor', req.url));
   }
 
-  if ((role === 'admin' || role === 'department_chair') && isInstructorArea(pathname)) {
+  if ((role === 'admin' || role === 'department_chair' || role === 'program_chair') && isInstructorArea(pathname)) {
     return NextResponse.redirect(new URL(homeForRole(role), req.url));
   }
 

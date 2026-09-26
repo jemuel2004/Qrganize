@@ -98,6 +98,7 @@ const FACULTY_PROFILE_COLUMNS: Array<[string, string, string]> = [
   ['faculty', 'educational_qualification', 'VARCHAR(255)'],
   ['faculty', 'major', 'VARCHAR(255)'],
   ['faculty', 'eligibility', 'VARCHAR(255)'],
+  ['faculty', 'specialization', 'VARCHAR(255)'],
   ['instructor_accounts', 'google_sub', 'VARCHAR(255)'],
   ['instructor_accounts', 'google_verified', 'BOOLEAN NOT NULL DEFAULT FALSE'],
   ['instructor_accounts', 'google_verified_at', 'TIMESTAMPTZ'],

@@ -114,7 +114,7 @@ function TypeBadge({ type }: { type: string }) {
   return (
     <span className={`inline-flex items-center flex-shrink-0 text-[11px] font-medium leading-none px-1.5 py-[3px] rounded-md ${
       isLab
-        ? 'bg-[#3074B8]/10 text-[#3074B8]'
+        ? 'bg-[#12408F]/10 text-[#12408F]'
         : 'bg-slate-500/10 text-slate-300'
     }`}>
       {type}
@@ -166,8 +166,8 @@ function DashHeader({
   return (
     <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-white/10">
       <div className="flex items-start gap-3 min-w-0">
-        <div className="w-9 h-9 rounded-lg bg-[#3074B8]/15 flex items-center justify-center flex-shrink-0">
-          <Icon className="w-[18px] h-[18px] text-[#3C91E6]" />
+        <div className="w-9 h-9 rounded-lg bg-[#12408F]/15 flex items-center justify-center flex-shrink-0">
+          <Icon className="w-[18px] h-[18px] text-[#1D5BD6]" />
         </div>
         <div className="min-w-0 pt-0.5">
           <h2 className="text-[15px] font-semibold text-white leading-5">{title}</h2>
@@ -328,7 +328,7 @@ export default function InstructorDashboard() {
     <div className="flex flex-col w-full min-w-0 px-4 sm:px-6 py-6 gap-5">
 
       {/* ══ HEADER — blue hero matching admin ══════════════════════════ */}
-      <div className="bg-[#3C91E6] rounded-2xl px-4 sm:px-7 py-5 sm:py-6">
+      <div className="bg-[#1D5BD6] rounded-2xl px-4 sm:px-7 py-5 sm:py-6">
         <div className="flex items-center justify-between flex-wrap gap-3 sm:gap-4">
 
           {/* Left — greeting + date */}
@@ -476,7 +476,7 @@ export default function InstructorDashboard() {
             <div className="flex items-center gap-2.5 w-full sm:w-auto">
               {data.my_reservation.status === 'Pending' && (
                 <Link href="/instructor/scan"
-                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 bg-[#3C91E6] hover:bg-[#3074B8] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-colors shadow-lg shadow-[#3C91E6]/20 min-h-11">
+                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 bg-[#1D5BD6] hover:bg-[#12408F] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-colors shadow-lg shadow-[#1D5BD6]/20 min-h-11">
                   <QrCode className="w-4 h-4" /> Scan QR Now
                 </Link>
               )}
@@ -503,7 +503,7 @@ export default function InstructorDashboard() {
             <p className="text-sm text-slate-400 mt-0.5">Reserve a room below or scan a QR code at any available room entrance</p>
           </div>
           <Link href="/instructor/scan"
-            className="flex-shrink-0 flex items-center gap-2 bg-[#3C91E6] hover:bg-[#3074B8] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-colors shadow-sm shadow-[#3C91E6]/20">
+            className="flex-shrink-0 flex items-center gap-2 bg-[#1D5BD6] hover:bg-[#12408F] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-colors shadow-sm shadow-[#1D5BD6]/20">
             <QrCode className="w-4 h-4" /> Scan QR
           </Link>
         </div>
@@ -555,7 +555,7 @@ export default function InstructorDashboard() {
               sub={`Today — ${today} · ${sessions.length} class${sessions.length !== 1 ? 'es' : ''} scheduled`}
               action={
                 <Link href="/instructor/schedule"
-                  className="inline-flex items-center gap-0.5 text-sm font-semibold text-[#3C91E6] hover:text-[#3074B8] transition-colors">
+                  className="inline-flex items-center gap-0.5 text-sm font-semibold text-[#1D5BD6] hover:text-[#12408F] transition-colors">
                   Full schedule <ChevronRight className="w-4 h-4" />
                 </Link>
               }
@@ -563,7 +563,7 @@ export default function InstructorDashboard() {
 
             {(currSess || nextSess) && (
               <div className="mx-5 mt-4 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-[#3C91E6]">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-[#1D5BD6]">
                   {currSess ? 'Ongoing now' : 'Next class'}
                 </p>
                 <p className="text-sm font-semibold text-white mt-1 truncate">
@@ -598,7 +598,7 @@ export default function InstructorDashboard() {
 
                       <div className="flex flex-col items-center flex-shrink-0 pt-1.5 w-3">
                         <div className={`w-2 h-2 rounded-full ${
-                          ongoing  ? 'bg-[#3C91E6]' :
+                          ongoing  ? 'bg-[#1D5BD6]' :
                           upcoming ? 'bg-slate-400' :
                           'bg-slate-600'
                         }`} />
@@ -616,7 +616,7 @@ export default function InstructorDashboard() {
                             {sess.subject_code}
                           </p>
                           {ongoing && (
-                            <span className="flex-shrink-0 text-[10px] font-semibold text-[#3C91E6] bg-[#3074B8]/15 px-1.5 py-0.5 rounded-md">
+                            <span className="flex-shrink-0 text-[10px] font-semibold text-[#1D5BD6] bg-[#12408F]/15 px-1.5 py-0.5 rounded-md">
                               Now
                             </span>
                           )}
@@ -636,7 +636,7 @@ export default function InstructorDashboard() {
             )}
 
             <div className="px-5 py-3.5 border-t border-white/10 mt-auto">
-              <Link href="/instructor/schedule" className="inline-flex items-center gap-1 text-sm font-medium text-[#3C91E6] hover:text-[#3074B8] transition-colors">
+              <Link href="/instructor/schedule" className="inline-flex items-center gap-1 text-sm font-medium text-[#1D5BD6] hover:text-[#12408F] transition-colors">
                 View full semester schedule <ChevronRight className="w-4 h-4" />
               </Link>
             </div>
@@ -658,7 +658,7 @@ export default function InstructorDashboard() {
                     <input
                       type="time" value={findTime} onChange={e => setFindTime(e.target.value)} required
                       className="w-full h-10 bg-[#0f172a] border border-white/10 text-white rounded-lg px-3 text-sm
-                        focus:outline-none focus:ring-2 focus:ring-[#3074B8]/40 focus:border-[#3074B8]/60"
+                        focus:outline-none focus:ring-2 focus:ring-[#12408F]/40 focus:border-[#12408F]/60"
                     />
                   </div>
                   <div>
@@ -666,7 +666,7 @@ export default function InstructorDashboard() {
                     <select
                       value={findDay} onChange={e => setFindDay(e.target.value)}
                       className="w-full h-10 bg-[#0f172a] border border-white/10 text-white rounded-lg px-3 text-sm
-                        focus:outline-none focus:ring-2 focus:ring-[#3074B8]/40 focus:border-[#3074B8]/60"
+                        focus:outline-none focus:ring-2 focus:ring-[#12408F]/40 focus:border-[#12408F]/60"
                     >
                       {DAYS.map(d => <option key={d} value={d}>{d}</option>)}
                     </select>
@@ -674,7 +674,7 @@ export default function InstructorDashboard() {
                 </div>
                 <button
                   type="submit" disabled={findLoading}
-                  className="w-full h-10 flex items-center justify-center gap-2 bg-[#3074B8] hover:bg-[#3C91E6]
+                  className="w-full h-10 flex items-center justify-center gap-2 bg-[#12408F] hover:bg-[#1D5BD6]
                     disabled:opacity-50 text-white rounded-lg text-sm font-semibold"
                 >
                   {findLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
@@ -717,7 +717,7 @@ export default function InstructorDashboard() {
                             onClick={() => reserveRoom(room.id)}
                             disabled={reserving === room.id || !!data?.my_reservation}
                             title={data?.my_reservation ? 'Release your current reservation first' : 'Reserve this room'}
-                            className="h-8 min-w-[4.5rem] px-3 rounded-lg border border-[#3074B8]/35 text-[#3C91E6] text-xs font-semibold hover:bg-[#3074B8]/10 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center justify-center"
+                            className="h-8 min-w-[4.5rem] px-3 rounded-lg border border-[#12408F]/35 text-[#1D5BD6] text-xs font-semibold hover:bg-[#12408F]/10 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center justify-center"
                           >
                             {reserving === room.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Reserve'}
                           </button>
@@ -734,7 +734,7 @@ export default function InstructorDashboard() {
             </div>
 
             <div className="px-5 py-3.5 border-t border-white/10 mt-auto">
-              <Link href="/instructor/available-rooms" className="inline-flex items-center gap-1 text-sm font-medium text-[#3C91E6] hover:text-[#3074B8] transition-colors">
+              <Link href="/instructor/available-rooms" className="inline-flex items-center gap-1 text-sm font-medium text-[#1D5BD6] hover:text-[#12408F] transition-colors">
                 Browse all available rooms <ChevronRight className="w-4 h-4" />
               </Link>
             </div>
@@ -750,7 +750,7 @@ export default function InstructorDashboard() {
             {loadError ? 'Could not load dashboard' : 'Dashboard unavailable'}
           </p>
           <p className="text-slate-400 text-sm mt-1">Check your connection and try again.</p>
-          <button onClick={() => load()} className="mt-4 flex items-center gap-2 text-sm text-[#3C91E6] hover:text-white font-semibold transition-colors">
+          <button onClick={() => load()} className="mt-4 flex items-center gap-2 text-sm text-[#1D5BD6] hover:text-white font-semibold transition-colors">
             <RefreshCw className="w-4 h-4" /> Refresh
           </button>
         </div>

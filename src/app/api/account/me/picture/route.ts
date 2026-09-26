@@ -9,7 +9,7 @@ import path from 'path';
 export async function POST(req: NextRequest) {
   try {
     const authUser = await getAuthUser(req) as { id?: number; role?: string } | null;
-    if (!authUser || (authUser.role !== 'admin' && authUser.role !== 'department_chair')) {
+    if (!authUser || !['admin', 'department_chair', 'program_chair'].includes(authUser.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   try {
     const authUser = await getAuthUser(req) as { id?: number; role?: string } | null;
-    if (!authUser || (authUser.role !== 'admin' && authUser.role !== 'department_chair')) {
+    if (!authUser || !['admin', 'department_chair', 'program_chair'].includes(authUser.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

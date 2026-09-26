@@ -120,7 +120,7 @@ const inp = 'w-full text-xs bg-transparent outline-none placeholder-[#CBD5E1] py
 const cellCls = (err: boolean, focus: boolean) =>
   `relative border rounded-lg px-2 py-1.5 transition-colors min-w-0 ${
     err    ? 'border-red-300 bg-red-50/50' :
-    focus  ? 'border-[#3C91E6] bg-[#EFF6FF]/40' :
+    focus  ? 'border-[#1D5BD6] bg-[#EFF6FF]/40' :
              'border-[#E2E8F0] bg-white hover:border-[#CBD5E1]'
   }`;
 
@@ -446,7 +446,7 @@ export default function BulkAddModal({ programs, curriculumVersion, onClose, onS
               ? <CheckCircle className="w-10 h-10 text-emerald-600" />
               : <AlertTriangle className="w-10 h-10 text-amber-500" />}
           </div>
-          <h2 className="text-2xl font-bold text-center" style={{ color: '#1E3A5F' }}>
+          <h2 className="text-2xl font-bold text-center" style={{ color: '#0B2A5B' }}>
             {added > 0 ? 'Subjects Saved!' : 'Import Complete'}
           </h2>
           {added > 0 && (
@@ -460,8 +460,8 @@ export default function BulkAddModal({ programs, curriculumVersion, onClose, onS
               <div className="text-xs text-emerald-700 mt-0.5 font-semibold">New Added</div>
             </div>
             <div className="bg-[#EFF6FF] border border-[#BFDBFE] rounded-xl p-3 text-center">
-              <div className="text-2xl font-bold text-[#3C91E6]">{result.reactivated}</div>
-              <div className="text-xs text-[#3074B8] mt-0.5 font-semibold">Restored</div>
+              <div className="text-2xl font-bold text-[#1D5BD6]">{result.reactivated}</div>
+              <div className="text-xs text-[#12408F] mt-0.5 font-semibold">Restored</div>
             </div>
             <div className="bg-slate-50 border border-[#E2E8F0] rounded-xl p-3 text-center">
               <div className="text-2xl font-bold text-slate-500">{result.duplicated}</div>
@@ -484,7 +484,7 @@ export default function BulkAddModal({ programs, curriculumVersion, onClose, onS
             </button>
             <button onClick={onClose}
               className="flex-1 rounded-xl py-2.5 text-sm font-bold text-white hover:opacity-90 transition"
-              style={{ backgroundColor: '#3C91E6' }}>
+              style={{ backgroundColor: '#1D5BD6' }}>
               Done
             </button>
           </div>
@@ -512,10 +512,10 @@ export default function BulkAddModal({ programs, curriculumVersion, onClose, onS
         <div className="flex items-center justify-between px-6 py-4 border-b border-[#E2E8F0] flex-shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-[#EFF6FF] rounded-xl flex items-center justify-center">
-              <Plus className="w-5 h-5 text-[#3C91E6]" />
+              <Plus className="w-5 h-5 text-[#1D5BD6]" />
             </div>
             <div>
-              <h2 className="text-lg font-bold" style={{ color: '#1E3A5F' }}>Bulk Add Subjects</h2>
+              <h2 className="text-lg font-bold" style={{ color: '#0B2A5B' }}>Bulk Add Subjects</h2>
               <p className="text-xs" style={{ color: '#64748B' }}>
                 Saving to {curriculumVersionLabel(curriculumVersion)}
                 {filledCount > 0
@@ -532,8 +532,8 @@ export default function BulkAddModal({ programs, curriculumVersion, onClose, onS
                 value={search}
                 onChange={e => { setSearch(e.target.value); setPage(0); }}
                 placeholder="Search rows…"
-                className="border border-[#E2E8F0] rounded-xl pl-3 pr-3 py-2 text-xs w-44 focus:outline-none focus:border-[#3C91E6] transition-colors"
-                style={{ color: '#1E3A5F' }}
+                className="border border-[#E2E8F0] rounded-xl pl-3 pr-3 py-2 text-xs w-44 focus:outline-none focus:border-[#1D5BD6] transition-colors"
+                style={{ color: '#0B2A5B' }}
               />
               {search && (
                 <button onClick={() => setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-[#94A3B8] hover:text-[#475569]">
@@ -551,7 +551,7 @@ export default function BulkAddModal({ programs, curriculumVersion, onClose, onS
         <div className="flex items-center gap-2 px-6 py-2.5 border-b border-[#E2E8F0] flex-shrink-0 flex-wrap" style={{ backgroundColor: '#F8FAFC' }}>
           <button onClick={addRow} disabled={rows.length >= MAX_ROWS}
             className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] hover:bg-[#DBEAFE] transition disabled:opacity-40"
-            style={{ color: '#3C91E6' }}>
+            style={{ color: '#1D5BD6' }}>
             <Plus className="w-3.5 h-3.5" /> Add Row
           </button>
           <button onClick={applyAutoFill} title="Fill empty Program / Year Level / Semester cells using the last row's values"
@@ -617,7 +617,7 @@ export default function BulkAddModal({ programs, curriculumVersion, onClose, onS
                       onDrop={() => handleDrop(globalIdx)}
                       onDragEnd={() => { setDragIdx(null); setDragOverIdx(null); }}
                       className={`transition-colors group ${
-                        isDragTarget ? 'bg-[#EFF6FF] border-t-2 border-[#3C91E6]' :
+                        isDragTarget ? 'bg-[#EFF6FF] border-t-2 border-[#1D5BD6]' :
                         hasErr       ? 'bg-red-50/40' :
                         row.saved    ? 'bg-emerald-50/40' :
                                        'hover:bg-[#F8FAFC]'
@@ -696,7 +696,7 @@ export default function BulkAddModal({ programs, curriculumVersion, onClose, onS
                       {/* Category (read-only, derived from Subject Type) */}
                       <td className="px-1.5 py-1.5">
                         <div className="px-2 py-1.5 text-xs font-semibold rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] text-center"
-                          style={{ color: row.subject_type ? '#1E3A5F' : '#94A3B8' }}>
+                          style={{ color: row.subject_type ? '#0B2A5B' : '#94A3B8' }}>
                           {row.subject_type ? categoryFromSubjectType(row.subject_type) : '—'}
                         </div>
                       </td>
@@ -784,7 +784,7 @@ export default function BulkAddModal({ programs, curriculumVersion, onClose, onS
                       <td className="px-1.5 py-1.5">
                         <div className="flex items-center justify-center gap-0.5">
                           <button onClick={() => duplicateRow(row._id)} title="Duplicate row"
-                            className="p-1.5 rounded-lg hover:bg-[#EFF6FF] transition" style={{ color: '#3C91E6' }}>
+                            className="p-1.5 rounded-lg hover:bg-[#EFF6FF] transition" style={{ color: '#1D5BD6' }}>
                             <Copy className="w-3.5 h-3.5" />
                           </button>
                           <button onClick={() => removeRow(row._id)} title="Delete row"
@@ -831,7 +831,7 @@ export default function BulkAddModal({ programs, curriculumVersion, onClose, onS
                 {Array.from({ length: totalPages }, (_, i) => (
                   <button key={i} onClick={() => setPage(i)}
                     className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition ${page === i ? 'text-white' : 'border border-[#E2E8F0] hover:bg-white'}`}
-                    style={page === i ? { backgroundColor: '#3C91E6' } : { color: '#64748B' }}>
+                    style={page === i ? { backgroundColor: '#1D5BD6' } : { color: '#64748B' }}>
                     {i + 1}
                   </button>
                 ))}
@@ -870,7 +870,7 @@ export default function BulkAddModal({ programs, curriculumVersion, onClose, onS
               onClick={handleSave}
               disabled={saving || filledCount === 0}
               className="flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold text-white transition hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
-              style={{ backgroundColor: '#3C91E6' }}
+              style={{ backgroundColor: '#1D5BD6' }}
             >
               {saving
                 ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>

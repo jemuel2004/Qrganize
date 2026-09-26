@@ -1,4 +1,4 @@
-import { query } from '@/server/db';
+﻿import { query } from '@/server/db';
 
 export type NotificationType =
   | 'qr_scan_success'
@@ -55,7 +55,7 @@ export async function ensureNotificationsTable(): Promise<void> {
 
 export interface NotificationPayload {
   recipientId?: number;
-  recipientRole: 'admin' | 'instructor' | 'department_chair';
+  recipientRole: 'admin' | 'department_chair' | 'instructor' | 'program_chair';
   title: string;
   message: string;
   type: NotificationType;

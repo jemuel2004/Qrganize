@@ -1,4 +1,4 @@
-import { redirect } from 'next/navigation';
+﻿import { redirect } from 'next/navigation';
 import { getPageAuthRole } from '@/server/auth';
 
 /**
@@ -9,6 +9,6 @@ export default async function Home() {
   const role = await getPageAuthRole();
   if (!role) redirect('/login');
   if (role === 'instructor') redirect('/instructor');
-  if (role === 'department_chair') redirect('/dept-chair');
+  if (role === 'program_chair') redirect('/dept-chair');
   redirect('/dashboard');
 }

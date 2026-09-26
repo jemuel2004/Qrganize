@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import { manilaCalendarDateString } from '@/server/appTimezone';
 import { query } from '@/server/db';
 import { getAuthUser } from '@/server/auth';
@@ -14,20 +14,20 @@ import { createNotification } from '@/server/notifications';
   QR Scan Logic — Thesis Hybrid Room Request System
   ─────────────────────────────────────────────────
   Session timing rules (scheduled rooms):
-    Scan window    : scheduled_start − 15 min  →  scheduled_end
-    On Time (Valid): scan_time ≤ scheduled_start + 5 min
-    Late           : scan_time > scheduled_start + 5 min  AND  ≤ scheduled_end
+    Scan window    : scheduled_start âˆ’ 15 min  â†’  scheduled_end
+    On Time (Valid): scan_time â‰¤ scheduled_start + 5 min
+    Late           : scan_time > scheduled_start + 5 min  AND  â‰¤ scheduled_end
     Rejected       : scan_time > scheduled_end  (class already over)
 
   Room occupancy expiry always uses SCHEDULED end time (never scan time):
     expires_at = CURRENT_DATE + scheduled_end + INTERVAL '30 minutes'
 
   Walk-in (lecture room, no class assigned, room available):
-    Instructor or admin → OCCUPIED immediately (QR is the presence check)
+    Instructor or admin â†’ OCCUPIED immediately (QR is the presence check)
 
   Room Request (separate flow):
-    Submit request → occupancy Pending + 15-min countdown → QR scan confirms
-    OR admin accepts → OCCUPIED immediately (no QR required)
+    Submit request â†’ occupancy Pending + 15-min countdown â†’ QR scan confirms
+    OR admin accepts â†’ OCCUPIED immediately (no QR required)
 
   Laboratory rooms:
     Follow scheduled-session rules only. No walk-in occupancy, no room-request hold.
@@ -118,7 +118,7 @@ export async function POST(req: NextRequest) {
 
     const authUser = await getAuthUser(req) as { role?: string; faculty_id?: unknown } | null;
     if (!authUser) return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
-    const isAdmin  = authUser.role === 'admin' || authUser.role === 'department_chair';
+    const isAdmin  = authUser.role === 'admin' || authUser.role === 'department_chair' || authUser.role === 'program_chair';
 
     // Resolve the scanning instructor's display name once for human-readable admin notifications.
     const nameRes = await query(
@@ -139,7 +139,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── STEP 1 · Resolve room ─────────────────────────────────────────────────
+    // ── STEP 1 Â· Resolve room ─────────────────────────────────────────────────
     const roomResult = await query(
       "SELECT * FROM rooms WHERE qr_code_id = $1 AND status = 'Active'",
       [qr_code_id],
@@ -160,10 +160,10 @@ export async function POST(req: NextRequest) {
       'Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday',
     ][now.getDay()];
 
-    // ── STEP 2 · Expire stale occupancy for this room ─────────────────────────
+    // ── STEP 2 Â· Expire stale occupancy for this room ─────────────────────────
     await expireStaleOccupancy(room.id);
 
-    // ── STEP 3 · Check current active occupancy ───────────────────────────────
+    // ── STEP 3 Â· Check current active occupancy ───────────────────────────────
     const occRes = await query(`
       SELECT
         ro.*,
@@ -179,7 +179,7 @@ export async function POST(req: NextRequest) {
     `, [room.id]);
     const occ = occRes.rows[0] ?? null;
 
-    // ── 3a · Room held by a DIFFERENT instructor ──────────────────────────────
+    // ── 3a Â· Room held by a DIFFERENT instructor ──────────────────────────────
     if (occ && Number(occ.faculty_id) !== Number(faculty_id)) {
       const availRes = await query(`
         SELECT r.id, r.room_name, r.room_type, r.building
@@ -218,7 +218,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ── 3b · Own PENDING → confirm → IN-USE ──────────────────────────────────
+    // ── 3b Â· Own PENDING â†’ confirm â†’ IN-USE ──────────────────────────────────
     if (occ && Number(occ.faculty_id) === Number(faculty_id) && occ.status === 'Pending') {
       // Set to Occupied with a 4-hour fallback; override below if a schedule is found.
       await query(`
@@ -343,7 +343,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ── 3c · Own OCCUPIED already (intentional re-scan → Already Checked In) ──
+    // ── 3c Â· Own OCCUPIED already (intentional re-scan â†’ Already Checked In) ──
     // Backend is source of truth; client shows modal (does not create a new session).
     if (occ && Number(occ.faculty_id) === Number(faculty_id) && occ.status === 'Occupied') {
       return NextResponse.json({
@@ -357,10 +357,10 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ── STEP 4 · Walk-in: no current occupancy ────────────────────────────────
+    // ── STEP 4 Â· Walk-in: no current occupancy ────────────────────────────────
     //
     // Query for the instructor's scheduled class for this room.
-    // Scan window:  (scheduled_start − 15 min)  →  (scheduled_end + 30 min)
+    // Scan window:  (scheduled_start âˆ’ 15 min)  â†’  (scheduled_end + 30 min)
     //   The +30min tail lets us detect post-session scans and reject them,
     //   rather than silently turning them into walk-in reservations.
     const schedNowRes = await query(`
@@ -393,7 +393,7 @@ export async function POST(req: NextRequest) {
       LIMIT  1
     `, [room.id, dayOfWeek, scanTime]);
 
-    // ── 4b · Room has a scheduled class in the scan window ───────────────────
+    // ── 4b Â· Room has a scheduled class in the scan window ───────────────────
     if (schedNowRes.rows.length > 0) {
       const sched             = schedNowRes.rows[0];
       const assignedFacultyId = Number(sched.assigned_faculty_id);
@@ -402,7 +402,7 @@ export async function POST(req: NextRequest) {
       const endMins           = timeToMins(String(sched.end_time));
       const scanMins          = timeToMins(scanTime);
 
-      // ── 4b-i · Unauthorized instructor ───────────────────────────────────
+      // ── 4b-i Â· Unauthorized instructor ───────────────────────────────────
       if (scanFacultyId !== assignedFacultyId && !isAdmin) {
         await insertScanLogIfUnique(
           room.id, faculty_id, sched.ms_id, scanDate, 'Unauthorized',
@@ -447,11 +447,11 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      // ── 4b-ii · Authorized instructor (or admin) scans ───────────────────
+      // ── 4b-ii Â· Authorized instructor (or admin) scans ───────────────────
       //
       // Attendance timing (based on scheduled times, NOT scan time):
-      //   On Time (Valid) : scan ≤ scheduled_start + 5 min
-      //   Late            : scan > scheduled_start + 5 min  AND ≤ scheduled_end
+      //   On Time (Valid) : scan â‰¤ scheduled_start + 5 min
+      //   Late            : scan > scheduled_start + 5 min  AND â‰¤ scheduled_end
       //   Rejected        : scan > scheduled_end  (class already ended)
       //
       // Room occupancy always uses the scheduled end time for expires_at.
@@ -580,7 +580,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ── 4c · Unscheduled room ──────────────────────────────────────────────
+    // ── 4c Â· Unscheduled room ──────────────────────────────────────────────
     // Laboratory: assigned/scheduled only — do not walk-in occupy or start a request countdown.
     if (isLaboratoryRoom(room.room_type) && !isAdmin) {
       await insertScanLogIfUnique(

@@ -11,7 +11,7 @@ import { ensureRoomOccupancy, expireStaleOccupancy, completeRoomRelease } from '
 export async function GET(req: NextRequest) {
   try {
     const authUser = await getAuthUser(req) as { role?: string } | null;
-    if (!authUser || (authUser.role !== 'admin' && authUser.role !== 'department_chair')) {
+    if (!authUser || (authUser.role !== 'admin' && authUser.role !== 'program_chair')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -98,8 +98,8 @@ export async function POST(req: NextRequest) {
           { status: 403 },
         );
       }
-    } else if (authUser.role !== 'admin' && authUser.role !== 'department_chair') {
-      // Only instructor, admin, and department_chair roles may create reservations
+    } else if (authUser.role !== 'admin' && authUser.role !== 'program_chair') {
+      // Only instructor, admin, and program_chair roles may create reservations
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
@@ -197,7 +197,7 @@ export async function DELETE(req: NextRequest) {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
       faculty_id = Number(authUser.faculty_id);
-    } else if (authUser.role === 'admin' || authUser.role === 'department_chair') {
+    } else if (authUser.role === 'admin' || authUser.role === 'department_chair' || authUser.role === 'program_chair') {
       if (!bodyFacultyId) {
         return NextResponse.json({ error: 'room_id and faculty_id are required' }, { status: 400 });
       }

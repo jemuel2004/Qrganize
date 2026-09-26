@@ -1,4 +1,4 @@
-import { query } from '@/server/db';
+﻿import { query } from '@/server/db';
 
 export type OtpAccountKind = 'user' | 'instructor';
 
@@ -120,7 +120,7 @@ export async function getOtpPreferenceSnapshot(
   if (!row) return null;
   const email = usableEmail(row.email);
   const googleVerified = row.google_verified === true;
-  const isChair = role === 'department_chair' || row.role === 'department_chair';
+  const isChair = role === 'program_chair' || row.role === 'program_chair';
   return {
     otp_enabled: row.otp_enabled === true,
     google_verified: googleVerified,
