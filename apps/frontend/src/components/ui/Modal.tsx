@@ -74,7 +74,7 @@ export default function Modal({ open, onClose, title, children, footer, size = '
         aria-modal="true"
         aria-labelledby="modal-title"
         tabIndex={-1}
-        className={`qr-modal-panel relative bg-[#111827] border border-white/10 rounded-2xl shadow-2xl w-full ${sizes[size]} max-h-[94vh] sm:max-h-[92vh] flex flex-col min-w-0 qr-modal-in`}
+        className={`qr-modal-panel relative bg-[#111827] border border-white/10 rounded-2xl shadow-2xl w-full ${sizes[size]} max-h-[94dvh] sm:max-h-[92dvh] flex flex-col min-w-0 qr-modal-in`}
         /* Stop clicks inside the panel from bubbling to the backdrop */
         onClick={e => e.stopPropagation()}
       >

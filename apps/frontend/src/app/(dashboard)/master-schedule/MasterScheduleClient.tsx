@@ -23,10 +23,10 @@ interface Program { id: number; code: string; name: string; }
 interface Schedule {
   id: number; subject_code: string; subject_name: string;
   lecture_hours: number; laboratory_hours: number; total_hours: number; units: number;
-  block_name: string; year_level: string;
+  block_id: number; block_name: string; year_level: string;
   block_semester: string; block_academic_year: string;
   program_code: string; program_name: string; program_id: number;
-  faculty_name: string | null; employee_id: string | null; faculty_position: string | null;
+  faculty_id: number | null; faculty_name: string | null; employee_id: string | null; faculty_position: string | null;
   day_pattern: string | null; start_time: string | null; end_time: string | null;
   room_name: string | null; room_type: string | null; status: string;
 }
@@ -189,7 +189,7 @@ function BlockTable({ block }: { block: BlockPage }) {
                     <div className="flex gap-1.5">
                       {s.status === 'Unassigned' && (
                         <Link
-                          href={`/workload?assign=${s.id}`}
+                          href={`/workload?assign=${s.id}&block=${s.block_id}`}
                           className="qr-assign-btn px-3 py-1.5 text-xs rounded-lg font-semibold"
                           style={{ animationDelay: `${delay}s, ${delay}s` }}
                         >
@@ -198,7 +198,10 @@ function BlockTable({ block }: { block: BlockPage }) {
                       )}
                       {s.status === 'Assigned' && (
                         <Link
-                          href={`/scheduling?ms=${s.id}`}
+                          // Instructor is already known — skip Position/Faculty and open this class.
+                          href={s.faculty_id
+                            ? `/scheduling?step=schedule&faculty=${s.faculty_id}&ms=${s.id}`
+                            : `/scheduling?ms=${s.id}`}
                           className="px-3 py-1.5 text-xs bg-[#DCFCE7] text-[#16A34A] border border-[#BBF7D0] rounded-lg hover:bg-[#BBF7D0] font-semibold transition-colors"
                         >
                           Schedule

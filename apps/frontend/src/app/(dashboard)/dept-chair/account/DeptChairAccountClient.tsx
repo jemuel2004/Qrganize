@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Script from 'next/script';
 import { useToast } from '@/context/ToastContext';
+import { roleLabel } from '@/lib/roleAccess';
 import { useScrollLock } from '@/hooks/useScrollLock';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import BackButton from '@/components/ui/BackButton';
@@ -473,7 +474,7 @@ function ProfileSettingsSection() {
       <div className="flex items-center justify-between gap-3 pt-0.5">
         {user && (
           <p className="text-xs text-[#94A3B8]">
-            Role: <span className="font-medium text-[#64748B] capitalize">{user.role.replace(/_/g, ' ')}</span>
+            Role: <span className="font-medium text-[#64748B]">{roleLabel(user.role)}</span>
           </p>
         )}
         {dirty && (
@@ -562,7 +563,7 @@ function DeptChairProfilePicture() {
       .then(d => {
         if (d.user) {
           setPicUrl(d.user.profile_picture ?? null);
-          setDisplayName(d.user.username || d.user.email || 'Department Chair');
+          setDisplayName(d.user.username || d.user.email || roleLabel(d.user.role) || 'Program Chair');
         }
       })
       .catch(() => {})

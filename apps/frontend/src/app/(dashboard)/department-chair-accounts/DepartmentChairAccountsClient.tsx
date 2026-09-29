@@ -410,10 +410,10 @@ export default function DepartmentChairAccountsClient() {
               <table className="w-full text-sm min-w-[860px]">
                 <thead>
                   <tr className="border-b border-white/10 bg-white/[0.02]">
-                    <th className="px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Username</th>
-                    <th className="px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Email</th>
-                    <th className="px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Status</th>
-                    <th className="px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Created</th>
+                    <th className="px-4 sm:px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Username</th>
+                    <th className="hidden md:table-cell px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Email</th>
+                    <th className="hidden sm:table-cell px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Status</th>
+                    <th className="hidden lg:table-cell px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Created</th>
                     <th className="px-5 py-4 text-right text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Actions</th>
                   </tr>
                 </thead>
@@ -422,29 +422,32 @@ export default function DepartmentChairAccountsClient() {
                     const busy = togglingId === acc.id;
                     return (
                       <tr key={acc.id} className={`transition-colors hover:bg-white/[0.03] ${!acc.is_active ? 'opacity-60' : ''}`}>
-                        <td className="px-5 py-4">
+                        <td className="px-4 sm:px-5 py-4">
                           <div className="flex items-center gap-3">
                             <div className="w-10 h-10 rounded-full bg-[#1D5BD6]/20 border border-[#1D5BD6]/30 flex items-center justify-center flex-shrink-0 text-[#1D5BD6] font-bold text-sm">
                               {acc.username.slice(0, 2).toUpperCase()}
                             </div>
                             <div className="min-w-0">
-                              <p className="font-semibold text-white font-mono text-sm">{acc.username}</p>
+                              <p className="font-semibold text-white font-mono text-sm break-all">{acc.username}</p>
                               {acc.google_verified ? (
                                 <p className="text-[10px] text-emerald-400 mt-0.5">Google: Verified</p>
                               ) : (
                                 <p className="text-[10px] text-red-400 mt-0.5">Google: Not Verified</p>
                               )}
+                              {/* Phone: hidden columns fold in under the username */}
+                              <p className="md:hidden text-xs text-slate-400 mt-1 break-all">{acc.email}</p>
+                              <div className="sm:hidden mt-1.5"><StatusBadge active={acc.is_active} /></div>
                             </div>
                           </div>
                         </td>
-                        <td className="px-5 py-4">
+                        <td className="hidden md:table-cell px-5 py-4">
                           <p className="text-slate-400 text-sm whitespace-nowrap">{acc.email}</p>
                         </td>
-                        <td className="px-5 py-4">
+                        <td className="hidden sm:table-cell px-5 py-4">
                           <StatusBadge active={acc.is_active} />
                         </td>
-                        <td className="px-5 py-4 text-slate-500 text-xs whitespace-nowrap">{fmtDate(acc.created_at)}</td>
-                        <td className="px-5 py-4">
+                        <td className="hidden lg:table-cell px-5 py-4 text-slate-500 text-xs whitespace-nowrap">{fmtDate(acc.created_at)}</td>
+                        <td className="px-3 sm:px-5 py-4">
                           <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
                             <button type="button" onClick={() => openEdit(acc)} title="Edit account"
                               className="p-2 rounded-lg text-slate-400 hover:text-[#1D5BD6] hover:bg-[#1D5BD6]/10 transition-colors min-h-10 min-w-10 inline-flex items-center justify-center">

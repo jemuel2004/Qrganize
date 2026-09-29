@@ -13,6 +13,7 @@ import {
   ShieldCheck, UserCog,
 } from 'lucide-react';
 import InstructorAvatar from '@/components/ui/InstructorAvatar';
+import { roleLabel as getRoleLabel } from '@/lib/roleAccess';
 import {
   dropdownVariants,
   NAV_DURATION,
@@ -59,23 +60,16 @@ function getInitials(name: string): string {
   return name.slice(0, 2).toUpperCase();
 }
 
-function getRoleLabel(role: string): string {
-  switch (role) {
-    case 'admin':            return 'Administrator';
-    case 'program_chair': return 'Department Chair';
-    case 'instructor':       return 'Faculty';
-    default:                 return role;
-  }
-}
-
 const AVATAR_BG: Record<string, string> = {
   admin:            'bg-[#1D5BD6]',
-  program_chair: 'bg-[#6366F1]',
+  department_chair: 'bg-[#12408F]',
+  program_chair:    'bg-[#6366F1]',
   instructor:       'bg-[#10B981]',
 };
 const AVATAR_RING: Record<string, string> = {
   admin:            'ring-[#1D5BD6]/40',
-  program_chair: 'ring-[#6366F1]/40',
+  department_chair: 'ring-[#12408F]/40',
+  program_chair:    'ring-[#6366F1]/40',
   instructor:       'ring-[#10B981]/40',
 };
 
@@ -346,7 +340,8 @@ export default function UserProfileDropdown({ theme = 'light', compact = false }
               )}
               <span className={`inline-flex items-center gap-1 mt-2.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide
                 ${user.role === 'admin'            ? 'bg-[#DBEAFE] text-[#164BB5]' :
-                  user.role === 'program_chair' ? 'bg-[#EDE9FE] text-[#7C3AED]' :
+                  user.role === 'department_chair' ? 'bg-[#E8EEF8] text-[#12408F]' :
+                  user.role === 'program_chair'    ? 'bg-[#EDE9FE] text-[#7C3AED]' :
                                                      'bg-[#D1FAE5] text-[#059669]'}`}>
                 {roleLabel}
               </span>

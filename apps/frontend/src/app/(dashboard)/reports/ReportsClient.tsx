@@ -29,6 +29,8 @@ import { CURRICULUM_VERSIONS, DEFAULT_CURRICULUM_VERSION, curriculumVersionLabel
 import { WorkloadPrintMenu } from '../faculty-schedules/FacultySchedulesClient';
 import { downloadCurriculumExcel, groupCurriculums, printCurriculum, type CurriculumRowLike } from '../program/curriculum/curriculumReport';
 import { downloadQrExcel, printRooms, type RoomQR } from '../qr-generator/qrReport';
+import { downloadClassProgramExcel, fetchClassProgram, loadClassProgramDocSettings } from '../program/class-program/classProgramReport';
+import { fetchDayCombinations } from '@/lib/dayCombinations';
 
 interface FacultyOption { id: number; name: string; employment_status: string; position: string }
 interface ProgramOption { id: number; code: string; name: string }
@@ -272,9 +274,9 @@ function usePrograms(): ProgramOption[] {
 /* ─── Class Program ─────────────────────────────────────────────────────── */
 
 /**
- * The Class Program's printed form and saved signatories live on its own page,
- * so the page is loaded in a hidden frame with the selection and runs its own
- * Print / Excel — the output is identical and the user stays on Reports.
+ * Excel: built right here with the Class Program page's own builder, data and
+ * saved signatories (classProgramReport). Print: the printed form is the Class
+ * Program page itself, so it opens in a new tab and prints automatically.
  */
 function ClassProgramReport({ programs, semester, schoolYear }: {
   programs: ProgramOption[]; semester: string; schoolYear: string;
@@ -287,7 +289,6 @@ function ClassProgramReport({ programs, semester, schoolYear }: {
   const [blocksLoading, setBlocksLoading] = useState(false);
   const [busy, setBusy] = useState<Busy>(null);
   const [done, flashDone] = useDone();
-  const frameRef = useRef<HTMLIFrameElement | null>(null);
   const progCode = programs.find(p => String(p.id) === program)?.code ?? '';
   const blockName = blocks.find(b => String(b.id) === block)?.block_name;
   const summary = blockName ? `${progCode} · ${year} · Block ${blockName}` : null;
@@ -304,42 +305,35 @@ function ClassProgramReport({ programs, semester, schoolYear }: {
     return () => ctrl.abort();
   }, [program, year, semester, schoolYear]);
 
-  const cleanup = useCallback(() => {
-    frameRef.current?.remove();
-    frameRef.current = null;
-    setBusy(null);
-  }, []);
-  useEffect(() => () => { frameRef.current?.remove(); }, []);
-
-  function run(action: 'print' | 'excel') {
-    if (!program || !year || !block) return;
-    setBusy(action);
-    const frame = document.createElement('iframe');
-    frame.setAttribute('aria-hidden', 'true');
-    frame.tabIndex = -1;
-    frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:1200px;height:900px;border:0;';
-    frame.src = `/program/class-program?${new URLSearchParams({ program, year, block, action })}`;
-    const timer = window.setTimeout(() => {
-      window.removeEventListener('message', onMessage);
-      cleanup();
-      toast.error('The class program took too long to load. Please try again.');
-    }, 45_000);
-    function onMessage(e: MessageEvent) {
-      if (e.origin !== window.location.origin || e.data?.source !== 'qrganize-class-program') return;
-      window.clearTimeout(timer);
-      window.removeEventListener('message', onMessage);
-      if (e.data.status === 'error') toast.error(e.data.message || 'Could not create the class program.');
-      else {
-        flashDone(action);
-        if (action === 'excel') toast.success('Class Program downloaded as Excel.');
-      }
-      // Give the download a moment to start before the frame goes away
-      window.setTimeout(cleanup, action === 'excel' ? 1500 : 300);
+  async function onExcel() {
+    if (!program || !year || !block || !semester) return;
+    setBusy('excel');
+    try {
+      const [{ block: detail, schedules }, { combinations }] = await Promise.all([
+        fetchClassProgram({ blockId: block, programId: program, yearLevel: year, semester }),
+        fetchDayCombinations(semester, schoolYear),
+      ]);
+      await downloadClassProgramExcel({
+        block: detail,
+        schedules,
+        combos: combinations.filter(c => c.is_active),
+        settings: loadClassProgramDocSettings(detail.program_code),
+      });
+      flashDone('excel');
+      toast.success('Class Program downloaded as Excel.');
+    } catch (e) {
+      toast.error(e instanceof Error && e.message ? e.message : 'Could not create the Excel file.');
+    } finally {
+      setBusy(null);
     }
-    window.addEventListener('message', onMessage);
-    frameRef.current?.remove();
-    frameRef.current = frame;
-    document.body.appendChild(frame);
+  }
+
+  function onPrint() {
+    if (!program || !year || !block) return;
+    // The Class Program page opens with this block and prints automatically
+    const win = window.open(`/program/class-program?${new URLSearchParams({ program, year, block, action: 'print' })}`, '_blank');
+    if (win) flashDone('print');
+    else toast.error(POPUP_BLOCKED);
   }
 
   return (
@@ -350,7 +344,7 @@ function ClassProgramReport({ programs, semester, schoolYear }: {
       href="/program/class-program"
       note="Signatories are set on the Class Program page."
       summary={summary}
-      actions={<ExportButtons busy={busy} done={done} disabled={!block} onExcel={() => run('excel')} onPrint={() => run('print')} />}
+      actions={<ExportButtons busy={busy} done={done} disabled={!block} onExcel={onExcel} onPrint={onPrint} />}
     >
       <div>
         <label className={LABEL}>Program</label>

@@ -475,7 +475,7 @@ export default function InstructorDashboard() {
           </div>
         </div>
       ) : data ? (
-        <div className="bg-[#111827] border border-dashed border-white/10 rounded-2xl px-6 py-4 flex items-center gap-4">
+        <div className="bg-[#111827] border border-dashed border-white/10 rounded-2xl px-4 sm:px-6 py-4 flex flex-wrap sm:flex-nowrap items-center gap-4">
           <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center flex-shrink-0">
             <DoorOpen className="w-5 h-5 text-slate-500" />
           </div>
@@ -484,7 +484,7 @@ export default function InstructorDashboard() {
             <p className="text-sm text-slate-400 mt-0.5">Request a room below or scan a QR code at any available room entrance</p>
           </div>
           <Link href="/instructor/scan"
-            className="flex-shrink-0 flex items-center gap-2 bg-[#1D5BD6] hover:bg-[#12408F] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-colors shadow-sm shadow-[#1D5BD6]/20">
+            className="w-full sm:w-auto justify-center flex-shrink-0 flex items-center gap-2 bg-[#1D5BD6] hover:bg-[#12408F] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-colors shadow-sm shadow-[#1D5BD6]/20">
             <QrCode className="w-4 h-4" /> Scan QR
           </Link>
         </div>

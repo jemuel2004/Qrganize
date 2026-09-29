@@ -11,11 +11,19 @@ export default async function WorkloadPage({
   searchParams: Promise<{
     facultyId?: string | string[];
     instructorId?: string | string[];
+    assign?: string | string[];
+    block?: string | string[];
   }>;
 }) {
   const params = await searchParams;
   const initialFacultyQuery =
     firstQueryValue(params.facultyId) || firstQueryValue(params.instructorId);
 
-  return <WorkloadClient initialFacultyQuery={initialFacultyQuery} />;
+  return (
+    <WorkloadClient
+      initialFacultyQuery={initialFacultyQuery}
+      assignMsId={Number(firstQueryValue(params.assign)) || null}
+      assignBlockId={Number(firstQueryValue(params.block)) || null}
+    />
+  );
 }

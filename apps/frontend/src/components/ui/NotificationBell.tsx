@@ -315,11 +315,11 @@ export default function NotificationBell({ theme = 'light' }: NotificationBellPr
           >
             <div className="flex items-center justify-between gap-2 px-3 py-2.5 border-b border-[#E5E7EB] flex-shrink-0 bg-white min-w-0">
               <div className="flex items-center gap-2 min-w-0">
-                <h3 className="text-base font-bold text-[#1E293B] truncate">
+                <h3 className="text-base font-bold text-[#1E293B] whitespace-nowrap">
                   Notifications
                 </h3>
                 {unreadCount > 0 && (
-                  <span className="flex-shrink-0 px-2 py-0.5 bg-[#F1F5F9] text-[#475569] text-[11px] font-semibold rounded-full">
+                  <span className="hidden min-[400px]:inline-flex flex-shrink-0 px-2 py-0.5 bg-[#F1F5F9] text-[#475569] text-[11px] font-semibold rounded-full">
                     {unreadCount} unread
                   </span>
                 )}

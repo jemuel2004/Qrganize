@@ -140,13 +140,13 @@ export default function AuditLogsClient() {
       {/* ── Filters ── */}
       <section className="bg-white rounded-2xl border border-[#E3E9F3] p-4 sm:p-5 space-y-4 shadow-[0_8px_24px_-18px_rgba(11,42,91,0.35)]">
         <div className="flex flex-col md:flex-row md:items-center gap-3">
-          <div role="tablist" aria-label="Time range" className="flex gap-1 p-1 rounded-full bg-[#EAF0FA] border border-[#DCE5F3] self-start">
+          <div role="tablist" aria-label="Time range" className="flex gap-1 p-1 rounded-full bg-[#EAF0FA] border border-[#DCE5F3] self-stretch md:self-start">
             {RANGES.map(r => {
               const on = r.id === range;
               return (
                 <motion.button key={r.id} type="button" role="tab" aria-selected={on} onClick={() => setRange(r.id)}
                   whileTap={reduceMotion ? undefined : { scale: 0.94 }}
-                  className={`relative px-5 h-10 rounded-full text-[15px] font-semibold transition-colors ${on ? '' : 'text-[#475569] hover:text-[#0B2A5B]'}`}
+                  className={`relative flex-1 sm:flex-none px-3 sm:px-5 h-10 rounded-full text-[15px] font-semibold whitespace-nowrap transition-colors ${on ? '' : 'text-[#475569] hover:text-[#0B2A5B]'}`}
                   style={on ? { color: '#FFFFFF' } : undefined}>
                   {on && <motion.span layoutId="audit-range" className="absolute inset-0 rounded-full bg-[#0B2A5B] shadow-[0_4px_12px_-4px_rgba(11,42,91,0.5)]"
                     transition={{ duration: reduceMotion ? 0 : 0.35, ease: EASE }} />}
@@ -220,24 +220,25 @@ export default function AuditLogsClient() {
                         animate={{ opacity: 1, y: 0, transition: { duration: 0.25, ease: EASE, delay: reduceMotion ? 0 : Math.min(i, 10) * 0.025 } }}>
                         <motion.button type="button" onClick={() => setPicked(l)}
                           whileTap={reduceMotion ? undefined : { scale: 0.99 }}
-                          className="group w-full flex items-center gap-4 px-5 py-3.5 text-left hover:bg-[#F8FAFE] active:bg-[#EFF6FF] transition-colors">
+                          className="group w-full flex items-center gap-3 sm:gap-4 px-4 sm:px-5 py-3.5 text-left hover:bg-[#F8FAFE] active:bg-[#EFF6FF] transition-colors">
                           <span className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 transition-transform group-hover:scale-105"
                             style={l.success ? { backgroundColor: c.tint, color: c.color } : { backgroundColor: '#FEF2F2', color: '#DC2626' }}>
                             <Icon className="w-5 h-5" />
                           </span>
                           <span className="min-w-0 flex-1">
                             <span className="flex items-center gap-2 flex-wrap">
-                              <span className="font-bold text-[15px] text-[#0B2A5B] truncate">{l.summary}</span>
+                              <span className="font-bold text-[15px] text-[#0B2A5B] min-w-0 break-words sm:truncate">{l.summary}</span>
                               {!l.success && <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-[#FEF2F2] text-[#B91C1C] border border-[#FECACA]">Failed</span>}
                             </span>
-                            <span className="mt-0.5 flex items-center gap-2 text-[13px] text-[#64748B]">
-                              <span className="font-semibold text-[#334155] truncate">{l.actor_name ?? 'Unknown'}</span>
-                              {l.actor_role && <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-[#F1F5F9] text-[#475569]">{ROLE_LABEL[l.actor_role] ?? l.actor_role}</span>}
-                              <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold" style={{ backgroundColor: c.tint, color: c.color }}>{l.category}</span>
+                            <span className="mt-1 sm:mt-0.5 flex items-center flex-wrap sm:flex-nowrap gap-x-2 gap-y-1 text-[13px] text-[#64748B]">
+                              <span className="sm:hidden font-semibold text-[#475569] whitespace-nowrap">{fmtTime(l.created_at)} ·</span>
+                              <span className="font-semibold text-[#334155] min-w-0 break-all sm:break-normal sm:truncate">{l.actor_name ?? 'Unknown'}</span>
+                              {l.actor_role && <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap bg-[#F1F5F9] text-[#475569]">{ROLE_LABEL[l.actor_role] ?? l.actor_role}</span>}
+                              <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap" style={{ backgroundColor: c.tint, color: c.color }}>{l.category}</span>
                             </span>
                           </span>
-                          <span className="text-sm font-semibold text-[#475569] whitespace-nowrap">{fmtTime(l.created_at)}</span>
-                          <ChevronRight className="w-5 h-5 text-[#94A3B8] transition-transform group-hover:translate-x-0.5 group-hover:text-[#1D5BD6]" />
+                          <span className="hidden sm:inline text-sm font-semibold text-[#475569] whitespace-nowrap">{fmtTime(l.created_at)}</span>
+                          <ChevronRight className="flex-shrink-0 w-5 h-5 text-[#94A3B8] transition-transform group-hover:translate-x-0.5 group-hover:text-[#1D5BD6]" />
                         </motion.button>
                       </motion.li>
                     );

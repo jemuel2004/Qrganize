@@ -19,6 +19,7 @@ import {
   KeyRound, ShieldCheck, Smartphone, Lock, ChevronRight, User,
 } from 'lucide-react';
 import DayCombinationsSection from './DayCombinationsSection';
+import { roleLabel } from '@/lib/roleAccess';
 import { ProfilePictureUpload } from '@/components/ui/ProfilePictureUpload';
 import TrustedDevicesPanel from '@/components/security/TrustedDevicesPanel';
 import OtpPreferencePanel from '@/components/security/OtpPreferencePanel';
@@ -480,7 +481,7 @@ function OwnProfileSettings() {
       <div className="flex items-center justify-between gap-3 pt-0.5">
         {user && (
           <p className="text-xs text-[#94A3B8]">
-            Role: <span className="font-medium text-[#64748B] capitalize">{user.role.replace(/_/g, ' ')}</span>
+            Role: <span className="font-medium text-[#64748B]">{roleLabel(user.role)}</span>
           </p>
         )}
         {dirty && (

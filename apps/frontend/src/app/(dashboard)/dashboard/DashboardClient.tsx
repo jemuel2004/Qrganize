@@ -120,8 +120,8 @@ function Section({ icon: Icon, title, action, className = '', center = false, ch
   return (
     <section className={`relative bg-white rounded-2xl border border-[#E3E9F3] shadow-[0_1px_3px_rgba(11,42,91,0.06)] p-5 sm:p-6 min-w-0 overflow-hidden flex flex-col ${className}`}>
       <span aria-hidden className="absolute left-0 top-5 bottom-5 w-1 rounded-r bg-[#1D5BD6]" />
-      <div className="flex items-center justify-between gap-3 mb-5">
-        <h2 className="inline-flex items-center gap-2.5 text-[15px] font-bold uppercase tracking-[0.08em] text-[#0B2A5B]">
+      <div className="flex items-center justify-between flex-wrap gap-x-3 gap-y-2.5 mb-5">
+        <h2 className="inline-flex items-center gap-2.5 text-[15px] font-bold uppercase tracking-[0.08em] text-[#0B2A5B] whitespace-nowrap">
           <Icon className="w-5 h-5 text-[#1D5BD6]" /> {title}
         </h2>
         {action}
@@ -142,7 +142,7 @@ function ViewLink({ href, children }: { href: string; children: ReactNode }) {
 /* ─── Today's schedule — 5 classes per slide, auto-advancing ─── */
 const SLIDE_SIZE = 5;
 const SLIDE_MS = 3000;
-const ROW_H = 52;
+const ROW_H = 56;
 /** Shared column widths so the fixed header lines up with the sliding rows */
 const SCHEDULE_COLS = ['24%', '14%', '18%', '14%', '30%'];
 
@@ -177,9 +177,9 @@ function TodayScheduleCarousel({ classes }: { classes: TodayClass[] }) {
       onFocusCapture={() => setPaused(true)}
       onBlurCapture={() => setPaused(false)}
     >
-      <div className="overflow-x-auto">
-        <div className="min-w-[620px]">
-          <table className="w-full table-fixed text-[14px]">
+      <div className="sm:overflow-x-auto">
+        <div className="sm:min-w-[620px]">
+          <table className="hidden sm:table w-full table-fixed text-[14px]">
             <ScheduleCols />
             <thead>
               <tr className="text-left text-[13px] font-semibold text-[#64748B] border-b border-[#EEF2F8]">
@@ -191,14 +191,30 @@ function TodayScheduleCarousel({ classes }: { classes: TodayClass[] }) {
           {/* Fixed height of 5 rows so the card never jumps between slides */}
           <div className="relative overflow-hidden" style={{ height: ROW_H * Math.min(SLIDE_SIZE, classes.length) }}>
             <AnimatePresence initial={false} mode="popLayout">
-              <motion.table
+              <motion.div
                 key={current}
-                className="absolute inset-x-0 top-0 w-full table-fixed text-[14px]"
+                className="absolute inset-x-0 top-0"
                 initial={reduceMotion ? { opacity: 0 } : { opacity: 0, x: 48 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -48 }}
                 transition={{ duration: reduceMotion ? 0.15 : 0.45, ease: EASE }}
               >
+                {/* Phone: two-line rows instead of a sideways-scrolling table */}
+                <ul className="sm:hidden divide-y divide-[#F1F5F9]">
+                  {rows.map(c => (
+                    <li key={c.id} className="flex flex-col justify-center min-w-0" style={{ height: ROW_H }}>
+                      <p className="flex items-center gap-2 min-w-0 text-[14px]">
+                        <span className="w-2 h-2 rounded-full bg-[#1D5BD6] flex-shrink-0" />
+                        <span className="font-semibold text-[#0B2A5B] whitespace-nowrap tabular-nums">{fmt12(c.start_time)}–{fmt12(c.end_time)}</span>
+                        <span className="font-bold text-[#0B2A5B] truncate">{c.subject_code}</span>
+                      </p>
+                      <p className="pl-4 text-[13px] text-[#475569] truncate">
+                        {[blockLabel(c), c.room_name, c.faculty_name].filter(Boolean).join(' · ')}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+                <table className="hidden sm:table w-full table-fixed text-[14px]">
                 <ScheduleCols />
                 <tbody className="divide-y divide-[#F1F5F9]">
                   {rows.map(c => (
@@ -214,7 +230,8 @@ function TodayScheduleCarousel({ classes }: { classes: TodayClass[] }) {
                     </tr>
                   ))}
                 </tbody>
-              </motion.table>
+                </table>
+              </motion.div>
             </AnimatePresence>
           </div>
         </div>
@@ -247,7 +264,7 @@ function TodayScheduleCarousel({ classes }: { classes: TodayClass[] }) {
 
 function Pill({ status }: { status: keyof typeof STATUS_TONE }) {
   const t = STATUS_TONE[status];
-  return <span className="inline-flex px-2.5 py-1 rounded-full text-[12px] font-bold" style={{ backgroundColor: t.bg, color: t.fg }}>{status}</span>;
+  return <span className="inline-flex flex-shrink-0 whitespace-nowrap px-2.5 py-1 rounded-full text-[12px] font-bold" style={{ backgroundColor: t.bg, color: t.fg }}>{status}</span>;
 }
 
 /* ─── Main ───────────────────────────────────────────────────── */
@@ -344,7 +361,26 @@ export default function DashboardClient() {
                     ]} />
                   </div>
                 </div>
-                <div className="min-w-0 overflow-x-auto">
+                <ul className="sm:hidden max-h-[340px] overflow-y-auto divide-y divide-[#F1F5F9] border-t border-[#EEF2F8]">
+                  {data.live_rooms.map(r => (
+                    <li key={r.id} className="py-3 min-w-0">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="inline-flex items-center gap-2 min-w-0 font-semibold text-[15px] text-[#0B2A5B]">
+                          {r.room_type === 'Laboratory' ? <Monitor className="w-4 h-4 flex-shrink-0 text-[#D97706]" /> : <BookOpen className="w-4 h-4 flex-shrink-0 text-[#1D5BD6]" />}
+                          <span className="truncate">{r.room_name}</span>
+                        </span>
+                        <Pill status={r.occupancy_status} />
+                      </div>
+                      {r.subject_code && (
+                        <p className="mt-1 pl-6 text-[13px] text-[#475569] break-words">
+                          {r.is_now ? <b className="text-[#0B2A5B]">Now · </b> : <span className="text-[#94A3B8]">Next · </span>}
+                          {r.subject_code} · {fmt12(r.start_time)}–{fmt12(r.end_time)} · {r.faculty_name}
+                        </p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                <div className="hidden sm:block min-w-0 overflow-x-auto">
                   <div className="max-h-[300px] overflow-y-auto">
                     <table className="w-full text-[14px] min-w-[440px]">
                       <thead className="sticky top-0 bg-white z-[1]">

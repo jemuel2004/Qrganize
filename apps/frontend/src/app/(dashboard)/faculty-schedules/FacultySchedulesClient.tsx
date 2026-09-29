@@ -649,7 +649,51 @@ export default function FacultySchedulesClient({
           </p>
         </div>
 
-        <div className="overflow-x-auto">
+        {/* Phone: one card per faculty instead of a sideways-scrolling table */}
+        <ul className="md:hidden divide-y divide-[#F1F5F9]">
+          {visibleGroups.length === 0 ? (
+            <li className="text-center py-16 px-4 text-[15px]" style={{ color: '#94A3B8' }}>No faculty found. Try adjusting your filters.</li>
+          ) : visibleGroups.map(group => {
+            const isPermanent = group.empStatus === 'Permanent';
+            const totalValue = group.rows.reduce((sum, r) => sum + rowValue(r), 0);
+            const stats = [
+              { label: 'Regular', value: group.rows.filter(r => r.load_category === 'Regular').length },
+              { label: 'Overload', value: group.rows.filter(r => r.load_category === 'Overload').length },
+              { label: 'Subjects', value: group.rows.length },
+              { label: isPermanent ? 'Units' : 'Hours', value: isPermanent ? totalValue.toFixed(2) : totalValue.toFixed(1) },
+            ];
+            return (
+              <li key={`m-${group.facultyId}`}>
+                <button
+                  type="button"
+                  onClick={() => setViewFaculty({ id: group.facultyId, name: group.facultyName, empId: group.empId, position: group.position, empStatus: group.empStatus, rows: group.rows })}
+                  className="w-full text-left px-4 py-4 active:bg-[#F1F5F9] transition-colors"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-[15px] leading-snug break-words" style={{ color: '#0B2A5B' }}>{group.facultyName}</p>
+                      <p className="text-[13px] mt-0.5 break-words" style={{ color: '#64748B' }}>{group.position || '—'}</p>
+                    </div>
+                    <EmploymentBadge status={group.empStatus} className="flex-shrink-0" />
+                  </div>
+                  <div className="mt-3 grid grid-cols-4 gap-2">
+                    {stats.map(st => (
+                      <div key={st.label} className="rounded-lg bg-[#F8FAFC] border border-[#EEF2F8] px-2 py-1.5 text-center min-w-0">
+                        <p className="text-[15px] font-bold tabular-nums" style={{ color: '#0B2A5B' }}>{st.value}</p>
+                        <p className="text-[11px] font-semibold truncate" style={{ color: '#64748B' }}>{st.label}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <span className="mt-3 inline-flex items-center gap-1.5 text-[14px] font-semibold" style={{ color: '#1D5BD6' }}>
+                    <Eye className="w-4 h-4" /> View schedule
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full min-w-[720px] table-fixed text-sm">
             <thead>
               <tr className="border-b border-[#F1F5F9]" style={{ backgroundColor: '#F8FAFC' }}>

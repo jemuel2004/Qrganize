@@ -1195,6 +1195,8 @@ export default function SchedulingClient() {
     stepParam === 'instructor' || stepParam === 'schedule' ? 'instructor' : 'position';
   const positionFilter = (searchParams.get('type') as 'Permanent' | 'Contractual' | null) ?? '';
   const selFacultyId = searchParams.get('faculty');
+  /** Master Schedule "Schedule" → this class opens directly for its assigned faculty. */
+  const fromMsId = Number(searchParams.get('ms')) || null;
 
   const buildStepUrl = useCallback((next: Record<string, string | undefined>) => {
     const sp = new URLSearchParams(searchParams.toString());
@@ -1310,10 +1312,12 @@ export default function SchedulingClient() {
   const goBack = useCallback(() => {
     setBackLoading(true);
     setTimeout(() => {
-      router.back();
+      // Opened straight from Master Schedule in a fresh tab — no history to walk.
+      if (fromMsId && window.history.length <= 1) router.replace('/master-schedule');
+      else router.back();
       setBackLoading(false);
     }, 1500);
-  }, [router]);
+  }, [router, fromMsId]);
   const [sessions, setSessions]       = useState<SessionItem[]>([]);
   const [manualCount, setManualCount] = useState(1);
   /** Days to place on the next freshly created sessions (from a Day combination click) */
@@ -1380,6 +1384,8 @@ export default function SchedulingClient() {
     return () => controller.abort();
   }, [semester, schoolYear, workload]);
 
+  /** Term the current `workload` was fetched for (guards the Master Schedule deep link). */
+  const workloadTermRef = useRef('');
   const fetchWorkload = useCallback(() => {
     if (!selFaculty) return;
     setFetchingW(true);
@@ -1388,6 +1394,7 @@ export default function SchedulingClient() {
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (!data || data.error) { setWorkload(null); return; }
+        workloadTermRef.current = `${semester}|${schoolYear}`;
         setWorkload(data);
       })
       .catch(() => setWorkload(null))
@@ -1426,6 +1433,39 @@ export default function SchedulingClient() {
     if (panelSwitchTimeout.current) clearTimeout(panelSwitchTimeout.current);
     panelSwitchTimeout.current = setTimeout(() => setPanelSwitching(false), 2000);
   }
+
+  /* Master Schedule deep link: once this faculty's workload is in, open the
+     class straight away — its first unscheduled component, or (if every part
+     already has a day/time) its first component so the schedule can be edited.
+     Runs once per link; refreshing the page re-applies it from the URL. */
+  const appliedMsLink = useRef<string | null>(null);
+  useEffect(() => {
+    if (!fromMsId || view !== 'schedule' || syLoading || fetchingW || !workload || !selFaculty) return;
+    if (workloadTermRef.current !== `${semester}|${schoolYear}`) return;
+    const linkKey = `${fromMsId}-${selFaculty.id}`;
+    if (appliedMsLink.current === linkKey) return;
+    const termLoads = workload.loads.filter(l => l.block_semester === semester && l.block_academic_year === schoolYear);
+    const rows = expandLoads(termLoads, selFaculty.employment_status === 'Permanent').filter(r => r.load.ms_id === fromMsId);
+    appliedMsLink.current = linkKey;
+    const row = rows.find(r => !r.isScheduled) ?? rows[0];
+    if (!row) {
+      toast.error('This class is no longer in this faculty’s workload.');
+      return;
+    }
+    const section = row.isScheduled ? 'scheduled'
+      : row.isOverloadComponent ? 'overload'
+      : row.isPraiseComponent ? 'praise-tasks'
+      : 'regular';
+    setOpenSections({ [section]: true });
+    selectLoad(row);
+  }, [fromMsId, view, syLoading, fetchingW, workload, selFaculty, semester, schoolYear, toast]);
+
+  /* Deep-linked faculty that no longer exists / is inactive → back to the normal wizard. */
+  useEffect(() => {
+    if (!fromMsId || view !== 'schedule' || facultyLoading || facultyList.length === 0 || selFaculty) return;
+    toast.error('The assigned faculty could not be found. Please pick a faculty.');
+    router.replace(pathname);
+  }, [fromMsId, view, facultyLoading, facultyList.length, selFaculty, toast, router, pathname]);
 
   useEffect(() => {
     if (!selLoad) return;
@@ -1984,7 +2024,7 @@ export default function SchedulingClient() {
                       faculty: positionFilter !== opt.key ? undefined : selFacultyId ?? undefined,
                     }), { scroll: false });
                   }}
-                    className={`w-full flex items-center gap-4 text-left px-5 py-4 rounded-xl border transition-colors ${
+                    className={`w-full flex flex-wrap sm:flex-nowrap items-center gap-x-4 gap-y-2.5 text-left px-4 sm:px-5 py-4 rounded-xl border transition-colors ${
                       selected ? 'ring-1' : 'border-[#E2E8F0] hover:border-[#CBD5E1]'
                     }`}
                     style={selected ? { borderColor: fg, backgroundColor: bg, ['--tw-ring-color' as string]: fg } : undefined}>
@@ -1996,6 +2036,8 @@ export default function SchedulingClient() {
                       <span className="block font-bold text-[#0B2A5B]">{opt.label} <span className="font-normal text-[#94A3B8] text-sm">({opt.count})</span></span>
                       <span className="block text-sm text-[#64748B] mt-0.5">{opt.desc}</span>
                     </span>
+                    {/* Phone: status badge drops under the description instead of squeezing it */}
+                    <span className="order-last w-full pl-14 sm:order-none sm:w-auto sm:pl-0 flex-shrink-0 empty:hidden">
                     {opt.pending > 0 && (
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-[#FFF7ED] text-[#C2410C] border border-[#FED7AA] flex-shrink-0"
                         title="Assigned classes in this group that still need a day and time">
@@ -2012,6 +2054,7 @@ export default function SchedulingClient() {
                         <CheckCircle className="w-3.5 h-3.5" /> All scheduled
                       </span>
                     )}
+                    </span>
                     <span className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
                       selected ? '' : 'border-[#CBD5E1]'
                     }`}
@@ -2253,7 +2296,7 @@ export default function SchedulingClient() {
               </button>
               <div className="flex items-center gap-1.5 text-sm text-[#64748B] min-w-0">
                 <span onClick={goBack} className="text-[#1D5BD6] hover:text-[#164BB5] cursor-pointer font-medium">
-                  Faculty
+                  {fromMsId ? 'Master Schedule' : 'Faculty'}
                 </span>
                 <ChevronRight className="w-4 h-4 flex-shrink-0" />
                 <span className="text-[#0B2A5B] font-semibold truncate">{selFaculty?.name}</span>
@@ -2507,7 +2550,7 @@ export default function SchedulingClient() {
                   </button>
                   <div className="flex items-center gap-1.5 text-sm text-[#64748B] min-w-0">
                     <span onClick={goBack} className="text-[#1D5BD6] hover:text-[#164BB5] cursor-pointer font-medium">
-                      Faculty
+                      {fromMsId ? 'Master Schedule' : 'Faculty'}
                     </span>
                     <ChevronRight className="w-4 h-4 flex-shrink-0" />
                     <span className="text-[#0B2A5B] font-semibold truncate">{selFaculty?.name}</span>

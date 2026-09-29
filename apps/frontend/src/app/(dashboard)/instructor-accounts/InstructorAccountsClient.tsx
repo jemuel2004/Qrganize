@@ -652,12 +652,12 @@ export default function InstructorAccountsClient() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-white/10 bg-white/[0.02]">
-                    <th className="px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Faculty</th>
-                    <th className="px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Position</th>
-                    <th className="px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Username</th>
-                    <th className="px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Email</th>
-                    <th className="px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Status</th>
-                    <th className="px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Created</th>
+                    <th className="px-4 sm:px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Faculty</th>
+                    <th className="hidden md:table-cell px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Position</th>
+                    <th className="hidden md:table-cell px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Username</th>
+                    <th className="hidden lg:table-cell px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Email</th>
+                    <th className="hidden sm:table-cell px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Status</th>
+                    <th className="hidden lg:table-cell px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Created</th>
                     <th className="px-5 py-4 text-right text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Actions</th>
                   </tr>
                 </thead>
@@ -666,47 +666,50 @@ export default function InstructorAccountsClient() {
                     <tr key={a.faculty_id} className={`transition-colors hover:bg-white/[0.03] ${!a.is_active ? 'opacity-60' : ''}`}>
 
                       {/* Instructor */}
-                      <td className="px-5 py-4">
+                      <td className="px-4 sm:px-5 py-4">
                         <div className="flex items-center gap-3">
                           <Avatar account={a} size={10} />
-                          <div>
-                            <p className="font-semibold text-white leading-tight">{a.name}</p>
+                          <div className="min-w-0">
+                            <p className="font-semibold text-white leading-tight break-words">{a.name}</p>
                             {a.specialization && (
                               <p className="text-xs text-[#1D5BD6] mt-0.5">{a.specialization}</p>
                             )}
                             <p className="text-xs text-slate-500 mt-0.5">{a.employee_id || '—'}</p>
+                            {/* Phone/tablet: hidden columns fold in under the name */}
+                            <p className="md:hidden text-xs text-slate-400 mt-1 break-all">{a.position} · <span className="font-mono">{a.username}</span></p>
+                            <div className="sm:hidden mt-1.5"><StatusBadge active={a.is_active} /></div>
                           </div>
                         </div>
                       </td>
 
                       {/* Position */}
-                      <td className="px-5 py-4">
+                      <td className="hidden md:table-cell px-5 py-4">
                         <p className="text-slate-300 text-sm leading-snug max-w-[160px]">{a.position}</p>
                       </td>
 
                       {/* Username */}
-                      <td className="px-5 py-4">
+                      <td className="hidden md:table-cell px-5 py-4">
                         <p className="text-slate-200 font-mono text-sm">{a.username}</p>
                       </td>
 
                       {/* Email */}
-                      <td className="px-5 py-4">
+                      <td className="hidden lg:table-cell px-5 py-4">
                         <p className="text-slate-400 text-sm">{a.email}</p>
                       </td>
 
                       {/* Status */}
-                      <td className="px-5 py-4">
+                      <td className="hidden sm:table-cell px-5 py-4">
                         <StatusBadge active={a.is_active} />
                       </td>
 
                       {/* Created */}
-                      <td className="px-5 py-4">
+                      <td className="hidden lg:table-cell px-5 py-4">
                         <p className="text-slate-500 text-xs">{fmtDate(a.account_created_at)}</p>
                         <p className="text-slate-600 text-xs mt-0.5">Updated {fmtDate(a.account_updated_at)}</p>
                       </td>
 
                       {/* Actions */}
-                      <td className="px-5 py-4">
+                      <td className="px-3 sm:px-5 py-4">
                         <div className="flex items-center justify-end gap-1.5">
 
                           {/* Edit */}

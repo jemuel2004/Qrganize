@@ -523,7 +523,7 @@ export default function LoginClient() {
                             onClick={() => { if (!active) selectRole(r.id); }}
                             aria-pressed={active}
                             className={[
-                              'relative flex-1 inline-flex items-center justify-center gap-2 text-[14px] font-semibold rounded-[10px] whitespace-nowrap transition-colors duration-300',
+                              'relative flex-auto sm:flex-1 px-2 inline-flex items-center justify-center gap-2 text-[14px] font-semibold rounded-[10px] whitespace-nowrap transition-colors duration-300',
                               active ? 'text-[#1D5BD6]' : 'text-[#0B2A5B] hover:text-[#1D5BD6]',
                             ].join(' ')}
                             style={{ height: '44px' }}

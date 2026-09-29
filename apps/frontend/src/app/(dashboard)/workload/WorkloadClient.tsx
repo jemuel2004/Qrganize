@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
 import { useToast } from '@/context/ToastContext';
 import { useSchoolYear } from '@/context/SchoolYearContext';
@@ -86,12 +88,17 @@ function blockDropdownLabel(b: Block): string {
 
 interface Program { id: number; code: string; name: string; department?: string | null; }
 
-/** Active programs for the selected instructor, ordered by program code. */
-function programsAllowedForInstructor(faculty: Faculty | null, allPrograms: Program[]): Program[] {
-  if (!faculty) return [];
+/** Programs ordered by program code. */
+function sortPrograms(allPrograms: Program[]): Program[] {
   return [...allPrograms].sort((a, b) =>
     a.code.localeCompare(b.code, undefined, { numeric: true, sensitivity: 'base' })
   );
+}
+
+/** Active programs for the selected instructor, ordered by program code. */
+function programsAllowedForInstructor(faculty: Faculty | null, allPrograms: Program[]): Program[] {
+  if (!faculty) return [];
+  return sortPrograms(allPrograms);
 }
 interface Schedule {
   id: number; subject_code: string; subject_name: string;
@@ -101,6 +108,11 @@ interface Schedule {
   year_level: string; semester: string; academic_year: string;
   program_code: string; status: string; faculty_name: string | null;
   subject_category?: 'Major' | 'Minor';
+}
+/** The Master Schedule row an admin clicked "Assign" on (same API row, plus its IDs). */
+interface AssignTarget extends Schedule {
+  program_id: number; block_id: number; faculty_id: number | null;
+  block_semester: string; block_academic_year: string;
 }
 interface WorkloadLoad {
   id: number; load_category: string; units: number; hours: number;
@@ -373,10 +385,16 @@ function hasAtMostThreeNumericDigits(raw: unknown): boolean {
 
 export default function WorkloadPage({
   initialFacultyQuery = '',
+  assignMsId = null,
+  assignBlockId = null,
 }: {
   initialFacultyQuery?: string;
+  /** Master Schedule → Assign: the class to assign, and the block it lives in. */
+  assignMsId?: number | null;
+  assignBlockId?: number | null;
 }) {
   const toast = useToast();
+  const router = useRouter();
   const { schoolYear: globalYear, semester: globalSemester, loading: syLoading } = useSchoolYear();
   const syInit = useRef(false);
   const appliedFacultyQuery = useRef<string | null>(null);
@@ -408,6 +426,34 @@ export default function WorkloadPage({
       if (globalSemester) setListSemester(globalSemester);
     }
   }, [syLoading, globalYear, globalSemester]);
+
+  const [assignTarget, setAssignTarget] = useState<AssignTarget | null>(null);
+  const [assignTargetLoading, setAssignTargetLoading] = useState(assignMsId != null);
+  /** Program / Year / Block belong to the subject being assigned, not to the faculty. */
+  const keepSubjectContext = assignTarget != null;
+  useEffect(() => {
+    if (!assignMsId) return;
+    if (!assignBlockId) {
+      setAssignTargetLoading(false);
+      toast.error('Subject details are missing. Pick the subject manually.');
+      return;
+    }
+    const controller = new AbortController();
+    fetch(`/api/master-schedule?block_id=${assignBlockId}`, { signal: controller.signal })
+      .then(r => r.json())
+      .then(d => {
+        const row = (d.schedules as AssignTarget[] | undefined)?.find(x => x.id === assignMsId);
+        if (!row) { toast.error('This subject could not be found in the Master Schedule.'); return; }
+        setAssignTarget(row);
+        // Work in the subject's own term, even if another one was last selected.
+        syInit.current = true;
+        setListSemester(row.block_semester);
+        setListYear(row.block_academic_year);
+      })
+      .catch(() => { if (!controller.signal.aborted) toast.error('Unable to load the subject.'); })
+      .finally(() => { if (!controller.signal.aborted) setAssignTargetLoading(false); });
+    return () => controller.abort();
+  }, [assignMsId, assignBlockId, toast]);
 
   const [selectedFaculty, setSelectedFaculty] = useState<Faculty | null>(null);
   const [workload, setWorkload] = useState<WorkloadSummary | null>(null);
@@ -582,8 +628,12 @@ export default function WorkloadPage({
   // No blocks assigned for this term → open: every block is available (same rule as the API)
   const facultyBlocks = assignedTermBlocks.length > 0 ? assignedTermBlocks : termBlocks;
 
+  /* Master Schedule -> Assign: Program / Year / Block describe the SUBJECT, so their
+     options are every block of the term, never narrowed to the faculty's own. */
+  const optionBlocks = keepSubjectContext ? termBlocks : facultyBlocks;
+
   /* Assigned blocks in the selected program (used to build year-level options) */
-  const programBlocks = facultyBlocks.filter(b => !filterProgram || String(b.program_id) === filterProgram);
+  const programBlocks = optionBlocks.filter(b => !filterProgram || String(b.program_id) === filterProgram);
 
   /* Unique year levels available in the selected program, sorted */
   const programYearLevels = [...new Set(programBlocks.map(b => b.year_level))].sort();
@@ -596,7 +646,7 @@ export default function WorkloadPage({
   );
 
   useEffect(() => {
-    if (!selectedFaculty) return;
+    if (!selectedFaculty || keepSubjectContext) return;
     const allowed = [...new Set(facultyBlocks.map(b => String(b.program_id)))];
     if (filterProgram && allowed.includes(filterProgram)) return;
     const next = allowed.length === 1 ? allowed[0] : '';
@@ -608,7 +658,7 @@ export default function WorkloadPage({
       setFiltersApplied(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedFaculty?.id, liveSelectedFaculty?.assigned_block_ids?.join(','), allBlocks, filterSemester, filterAcademicYear]);
+  }, [selectedFaculty?.id, liveSelectedFaculty?.assigned_block_ids?.join(','), allBlocks, filterSemester, filterAcademicYear, keepSubjectContext]);
 
   function handleBlockChange(blockId: string) {
     if (blockId) {
@@ -636,6 +686,7 @@ export default function WorkloadPage({
   }
 
   function clearProgramChain() {
+    if (keepSubjectContext) return; // the subject's Program / Year / Block stay put
     setFilterProgram('');
     setFilterBlock('');
     setFilterYearLevel('');
@@ -648,6 +699,36 @@ export default function WorkloadPage({
     setSubjectSearch('');
   }, [filterProgram, filterYearLevel, filterBlock, filterSemester, filterAcademicYear]);
 
+  /* Master Schedule → Assign: Program / Year / Block come from the subject as
+     soon as it loads, before any faculty is picked. They stay editable, and
+     picking a faculty never overwrites them (see selectFaculty). */
+  const prefilledAssign = useRef(false);
+  useEffect(() => {
+    if (!assignTarget || prefilledAssign.current) return;
+    prefilledAssign.current = true;
+    setFilterProgram(String(assignTarget.program_id));
+    setFilterYearLevel(assignTarget.year_level);
+    setFilterBlock(String(assignTarget.block_id));
+  }, [assignTarget]);
+  /** The picked faculty may teach the subject's block (Faculty → Blocks to Teach, the assign API's rule). */
+  const targetBlockAllowed = !!assignTarget && facultyBlocks.some(b => b.id === assignTarget.block_id);
+
+  /* …and open the Minor / Major tab the subject belongs to (runs after the reset above). */
+  useEffect(() => {
+    if (assignTarget && filterBlock === String(assignTarget.block_id)) {
+      setSubjectCategory(coerceSubjectCategory(assignTarget.subject_category, 'Minor'));
+    }
+  }, [filterProgram, filterYearLevel, filterBlock, filterSemester, filterAcademicYear, assignTarget]);
+
+  /* Keep the picked faculty in the URL so a refresh resumes the same assignment. */
+  useEffect(() => {
+    if (!assignMsId || facultyListLoading) return;
+    const url = new URL(window.location.href);
+    if (selectedFaculty) url.searchParams.set('facultyId', String(selectedFaculty.id));
+    else url.searchParams.delete('facultyId');
+    if (url.href !== window.location.href) window.history.replaceState(null, '', url);
+  }, [assignMsId, facultyListLoading, selectedFaculty]);
+
   // Full reset of instructor selection and all dependent child filters.
   // Called whenever Employment Type changes so no stale data from the
   // previous type leaks into the new context.
@@ -657,11 +738,13 @@ export default function WorkloadPage({
     setSelectedFaculty(null);
     setWorkload(null);
     setAllWorkloadLoads([]);
-    setFilterProgram('');
-    setFilterBlock('');
-    setFilterYearLevel('');
-    setAvailableSchedules([]);
-    setFiltersApplied(false);
+    if (!keepSubjectContext) {
+      setFilterProgram('');
+      setFilterBlock('');
+      setFilterYearLevel('');
+      setAvailableSchedules([]);
+      setFiltersApplied(false);
+    }
     setAssignMsg('');
     setAssignError('');
     setRemainingBalanceWarning(null);
@@ -670,7 +753,7 @@ export default function WorkloadPage({
     setMoveToOverloadMode('entire');
     setSplitRegularAmount(0);
     setComponentSplitUnits(0);
-  }, []);
+  }, [keepSubjectContext]);
 
   const allFiltersSet = !!(filterProgram && filterBlock && filterYearLevel && filterSemester && filterAcademicYear);
 
@@ -1329,15 +1412,19 @@ export default function WorkloadPage({
     setAssignMsg(''); setAssignError('');
     setRemainingBalanceWarning(null); setOverloadConfirm(null);
     setMoveToOverloadTarget(null); setMoveToOverloadMode('entire'); setSplitRegularAmount(0); setComponentSplitUnits(0);
-    setAvailableSchedules([]);
-    setFiltersApplied(false);
-    setFilterYearLevel('');
-    setFilterBlock('');
-    setFilterProgram(f.program_id != null ? String(f.program_id) : '');
+    /* The faculty's own program only seeds the filters in the normal flow. From
+       Master Schedule → Assign they describe the subject and are left alone. */
+    if (!keepSubjectContext) {
+      setAvailableSchedules([]);
+      setFiltersApplied(false);
+      setFilterYearLevel('');
+      setFilterBlock('');
+      setFilterProgram(f.program_id != null ? String(f.program_id) : '');
+    }
     setMoveToPraiseConfirm(null);
     setReturnToOverloadConfirm(null);
     setSelectedFaculty(f);
-  }, []);
+  }, [keepSubjectContext]);
 
   useEffect(() => {
     const raw = initialFacultyQuery.trim();
@@ -1551,8 +1638,10 @@ export default function WorkloadPage({
   const selectedProgram = programs.find(p => String(p.id) === filterProgram);
   const instructorSelected = selectedFaculty != null;
   // Only programs that have at least one block assigned to this faculty
-  const programsForInstructor = programsAllowedForInstructor(selectedFaculty, programs)
-    .filter(p => facultyBlocks.some(b => b.program_id === p.id));
+  const programsForInstructor = (keepSubjectContext ? sortPrograms(programs) : programsAllowedForInstructor(selectedFaculty, programs))
+    .filter(p => optionBlocks.some(b => b.program_id === p.id));
+  /** Program select is usable once there's a faculty, or a subject being assigned. */
+  const programEnabled = instructorSelected || keepSubjectContext;
 
   function loadBadge(load: WorkloadLoad, rowType: 'lec' | 'lab') {
     const lec2 = parseFloat(String(load.lecture_hours)) || 0;
@@ -1643,6 +1732,30 @@ export default function WorkloadPage({
      brief load so it feels responsive; the tabs/search/badge stay visible
      throughout so the tab pill itself doesn't vanish mid-switch. */
   const showListSkeleton = showSubjectsSkeleton || categorySwitching || showPraiseDeleteSkeleton;
+
+  /* Master Schedule → Assign: glide to the subject's row once it is on screen. */
+  const assignTargetVisible = !!assignTarget && !showListSkeleton && displaySchedules.some(s => s.id === assignTarget.id);
+  const scrolledAssignFor = useRef<number | null>(null);
+  useEffect(() => {
+    if (!assignTargetVisible || !selectedFaculty) { if (!selectedFaculty) scrolledAssignFor.current = null; return; }
+    if (scrolledAssignFor.current === selectedFaculty.id) return;
+    scrolledAssignFor.current = selectedFaculty.id;
+    document.getElementById('assign-target-row')?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'center' });
+  }, [assignTargetVisible, selectedFaculty, reduceMotion]);
+  /** Assigned during this visit (the subject now sits in the picked faculty's workload). */
+  const assignTargetDone = !!assignTarget && allWorkloadLoads.some(l => l.ms_id === assignTarget.id);
+  /** Someone else already took it — this link is stale. */
+  const assignTargetTaken = !!assignTarget && !assignTargetDone && assignTarget.faculty_id != null
+    && faculty.some(f => f.id === assignTarget.faculty_id);
+  const assignBannerState = assignTargetDone ? 'done'
+    : assignTargetTaken ? 'taken'
+    : !selectedFaculty ? 'pick'
+    : !targetBlockAllowed && allBlocks.length > 0 ? 'blocked'
+    : 'ready';
+  function backToMasterSchedule() {
+    if (window.history.length > 1) router.back();
+    else router.push('/master-schedule');
+  }
 
   return (
     <div className="p-4 sm:p-6 max-w-7xl mx-auto w-full min-w-0">
@@ -1737,6 +1850,90 @@ export default function WorkloadPage({
       <div className="mt-4 sm:mt-7 mb-10">
         <WatermarkTitle>Faculty Workload</WatermarkTitle>
       </div>
+
+      {/* -- Master Schedule → Assign: the subject is already known; only the faculty is picked -- */}
+      {assignMsId && (assignTargetLoading ? (
+        <Skeleton className="h-[88px] w-full rounded-2xl mb-5" />
+      ) : assignTarget && (
+        <div className="mb-5 bg-white rounded-2xl border border-[#E2E8F0] border-l-4 border-l-[#22C55E] shadow-sm px-4 sm:px-5 py-4 flex flex-col lg:flex-row lg:items-center gap-3 lg:gap-6">
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-semibold text-[#15803D] uppercase tracking-wide">Assigning subject</div>
+            <div className="mt-0.5 text-base sm:text-lg font-bold text-[#0B2A5B] break-words">
+              <span className="font-mono">{assignTarget.subject_code}</span> — {assignTarget.subject_name}
+            </div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs font-semibold">
+              <span className="px-2 py-1 rounded-lg bg-[#F1F5F9] text-[#334155]">
+                {assignTarget.program_code} · {assignTarget.year_level} · Block {assignTarget.block_name}
+              </span>
+              <span className="px-2 py-1 rounded-lg bg-[#EFF6FF] text-[#1D5BD6]">
+                {coerceSubjectCategory(assignTarget.subject_category, 'Minor')} subject
+              </span>
+              {(parseFloat(String(assignTarget.lecture_hours)) || 0) > 0 && (
+                <span className="px-2 py-1 rounded-lg bg-[#EFF6FF] text-[#1D5BD6]">Lec {parseFloat(String(assignTarget.lecture_hours))} hrs</span>
+              )}
+              {(parseFloat(String(assignTarget.laboratory_hours)) || 0) > 0 && (
+                <span className="px-2 py-1 rounded-lg bg-[#F5F3FF] text-[#7C3AED]">Lab {parseFloat(String(assignTarget.laboratory_hours))} hrs</span>
+              )}
+              <span className="px-2 py-1 rounded-lg bg-[#F1F5F9] text-[#334155]">{parseFloat(String(assignTarget.units)).toFixed(2)} units</span>
+            </div>
+          </div>
+          <div className="lg:max-w-sm text-sm font-medium flex-shrink-0">
+            <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={`${assignBannerState}-${selectedFaculty?.id ?? 0}`}
+              initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={reduceMotion ? undefined : { opacity: 0, y: -8 }}
+              transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+            >
+            {assignTargetDone ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center gap-1.5 text-[#15803D] font-semibold">
+                  <CheckCircle2 className="w-4 h-4" /> Assigned to {selectedFaculty?.name}
+                </span>
+                <button type="button" onClick={backToMasterSchedule}
+                  className="min-h-10 px-3.5 rounded-xl text-sm font-semibold bg-[#1D5BD6] text-white hover:bg-[#2E7DD1] transition-colors">
+                  Back to Master Schedule
+                </button>
+              </div>
+            ) : assignTargetTaken ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[#B45309]">Already assigned to {assignTarget.faculty_name}.</span>
+                <Link href={`/scheduling?step=schedule&faculty=${assignTarget.faculty_id}&ms=${assignTarget.id}`}
+                  className="min-h-10 inline-flex items-center px-3.5 rounded-xl text-sm font-semibold bg-[#DCFCE7] text-[#15803D] border border-[#BBF7D0] hover:bg-[#BBF7D0] transition-colors">
+                  Schedule
+                </Link>
+              </div>
+            ) : !selectedFaculty ? (
+              <span className="text-[#0B2A5B]">Select the faculty to assign it to.</span>
+            ) : !targetBlockAllowed && allBlocks.length > 0 ? (
+              <span className="inline-flex items-start gap-1.5 text-[#B45309]">
+                <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                Block {assignTarget.block_name} is not among {selectedFaculty.name}’s assigned blocks. Choose another faculty.
+              </span>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                <span className="inline-flex items-center gap-2 text-[#0B2A5B]">
+                  <motion.span
+                    initial={reduceMotion ? false : { scale: 0.6, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ type: 'spring', stiffness: 380, damping: 22, delay: 0.1 }}
+                    className="w-9 h-9 rounded-full bg-[#DCFCE7] text-[#15803D] border border-[#BBF7D0] flex items-center justify-center font-bold text-sm flex-shrink-0"
+                    aria-hidden
+                  >
+                    {selectedFaculty.name.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase()}
+                  </motion.span>
+                  <span className="min-w-0">Assigning to <span className="font-bold">{selectedFaculty.name}</span></span>
+                  <EmploymentBadge status={selectedFaculty.employment_status} />
+                </span>
+                <span className="text-[#15803D]">Highlighted in green below — press + to assign.</span>
+              </div>
+            )}
+            </motion.div>
+            </AnimatePresence>
+          </div>
+        </div>
+      ))}
 
       {/* -- Filter Card: Instructor → Program → Year → Block ------------------ */}
       <FilterBar className="relative z-20 min-w-0 overflow-visible mb-0">
@@ -1854,20 +2051,20 @@ export default function WorkloadPage({
           <div className="min-w-0 w-full order-3 lg:col-span-3">
             <label
               className={`block text-xs font-semibold uppercase tracking-wide mb-1.5 ${
-                instructorSelected ? 'text-slate-500' : 'text-slate-400'
+                programEnabled ? 'text-slate-500' : 'text-slate-400'
               }`}
             >
               Program
             </label>
             <FilterSelect
-              value={instructorSelected ? filterProgram : ''}
+              value={programEnabled ? filterProgram : ''}
               onChange={handleProgramChange}
-              disabled={!instructorSelected}
+              disabled={!programEnabled}
               label="Program"
-              className={`w-full min-h-[42px] ${instructorSelected && !filterProgram ? 'qr-guide-pulse' : ''}`}
+              className={`w-full min-h-[42px] ${programEnabled && !filterProgram ? 'qr-guide-pulse' : ''}`}
             >
               <option value="">
-                {instructorSelected ? '— Select Program —' : 'Select a faculty member first'}
+                {programEnabled ? '— Select Program —' : 'Select a faculty member first'}
               </option>
               {programsForInstructor.map(p => (
                 <option key={p.id} value={p.id}>{p.code} — {p.name}</option>
@@ -2012,10 +2209,10 @@ export default function WorkloadPage({
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="bg-[#F8FAFC] text-xs font-semibold text-[#64748B] uppercase tracking-wide border-b border-[#E2E8F0]">
-                        <th className="px-6 py-3 text-left">Faculty</th>
-                        <th className="px-6 py-3 text-left">Program</th>
-                        <th className="px-6 py-3 text-left">Status</th>
-                        <th className="px-6 py-3 text-left">Load</th>
+                        <th className="px-4 sm:px-6 py-3 text-left">Faculty</th>
+                        <th className="hidden sm:table-cell px-6 py-3 text-left">Program</th>
+                        <th className="hidden sm:table-cell px-6 py-3 text-left">Status</th>
+                        <th className="px-4 sm:px-6 py-3 text-left">Load</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -2039,18 +2236,28 @@ export default function WorkloadPage({
                             }}
                             className="cursor-pointer hover:bg-slate-50 active:bg-slate-100 transition-colors duration-200"
                           >
-                            <td className="px-6 py-3">
+                            <td className="px-4 sm:px-6 py-3 min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
-                                <span className="font-semibold text-slate-800">{f.name}</span>
+                                <span className="font-semibold text-slate-800 break-words">{f.name}</span>
                                 <EmploymentBadge status={f.employment_status} />
                               </div>
                               {f.specialization && (
                                 <div className="text-xs text-[#1D5BD6] mt-0.5">{f.specialization}</div>
                               )}
                               <div className="text-xs text-slate-500 mt-0.5">{f.employee_id}</div>
+                              {/* Phone: program + status move under the name */}
+                              <div className="sm:hidden mt-1 flex items-center gap-2 flex-wrap text-xs text-slate-600">
+                                <span>{f.program_code || '—'}</span>
+                                {status && (
+                                  <span className="inline-flex items-center gap-1.5">
+                                    <span className={`w-2 h-2 rounded-full ${status.dot}`} />
+                                    <span className={`font-medium ${status.text}`}>{status.label}</span>
+                                  </span>
+                                )}
+                              </div>
                             </td>
-                            <td className="px-6 py-3 text-slate-600">{f.program_code || '—'}</td>
-                            <td className="px-6 py-3">
+                            <td className="hidden sm:table-cell px-6 py-3 text-slate-600">{f.program_code || '—'}</td>
+                            <td className="hidden sm:table-cell px-6 py-3">
                               {status ? (
                                 <span className="inline-flex items-center gap-1.5">
                                   <span className={`w-2 h-2 rounded-full ${status.dot}`} />
@@ -2060,7 +2267,7 @@ export default function WorkloadPage({
                                 <span className="text-xs text-slate-400">—</span>
                               )}
                             </td>
-                            <td className="px-6 py-3 tabular-nums">
+                            <td className="px-4 sm:px-6 py-3 tabular-nums whitespace-nowrap align-top sm:align-middle">
                               {fSummary ? (() => {
                                 const incomplete = workloadProblemPriority(fSummary) !== 3;
                                 return (
@@ -2116,7 +2323,7 @@ export default function WorkloadPage({
                   <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
                     <tr>
                       {['Code', 'Subject Name', 'Lec', 'Lab', isPermanent ? 'Units' : 'Hrs', ''].map(h => (
-                        <th key={h} className="text-left px-5 py-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">{h}</th>
+                        <th key={h} className={`text-left px-3 sm:px-5 py-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide ${h === 'Lec' || h === 'Lab' ? 'hidden sm:table-cell' : ''}`}>{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -2129,18 +2336,31 @@ export default function WorkloadPage({
                         remainingForWarning <= 0.001 || wu > remainingForWarning + 0.001
                       );
                       const isPriority = isPrioritySubject(s);
+                      const isAssignTarget = assignTarget?.id === s.id;
+                      const animateTarget = isAssignTarget && !reduceMotion;
+                      /* Soft ring pulse on the + button so the next step is obvious. */
+                      const plusPulse = animateTarget ? {
+                        animate: { boxShadow: [`0 0 0 0 ${willExceed ? 'rgba(220,38,38,0.45)' : 'rgba(34,197,94,0.55)'}`, '0 0 0 12px rgba(34,197,94,0)'] },
+                        transition: { duration: 1.2, repeat: 2, delay: 1.2, ease: 'easeOut' as const },
+                        whileTap: { scale: 0.92 },
+                      } : {};
                       return (
-                        <tr
-                          key={s.id}
+                        <motion.tr
+                          key={isAssignTarget ? `${s.id}-f${selectedFaculty?.id ?? 0}` : s.id}
+                          id={isAssignTarget ? 'assign-target-row' : undefined}
+                          initial={animateTarget ? { backgroundColor: '#FFFFFF' } : false}
+                          animate={animateTarget ? { backgroundColor: ['#FFFFFF', '#86EFAC', '#DCFCE7'] } : undefined}
+                          transition={animateTarget ? { duration: 1.1, ease: 'easeOut', delay: 0.35 } : undefined}
                           className={`transition-colors ${
-                            willExceed ? 'bg-[#FEF2F2] hover:bg-red-50'
+                            isAssignTarget ? 'bg-[#DCFCE7] border-l-[3px] border-l-[#22C55E] ring-2 ring-inset ring-[#22C55E]'
+                              : willExceed ? 'bg-[#FEF2F2] hover:bg-red-50'
                               : isPriority ? 'bg-[#DCFCE7] hover:bg-[#BBF7D0] border-l-[3px] border-l-[#22C55E]'
                               : 'hover:bg-[#F8FAFC]'
                           }`}
                         >
-                          <td className="px-5 py-4 font-mono font-semibold text-[#0B2A5B] text-sm align-middle whitespace-nowrap">{s.subject_code}</td>
-                          <td className="px-5 py-4 align-middle">
-                            <div style={{ minWidth: 160, maxWidth: 280 }}>
+                          <td className="px-3 sm:px-5 py-4 font-mono font-semibold text-[#0B2A5B] text-sm align-middle whitespace-nowrap">{s.subject_code}</td>
+                          <td className="px-3 sm:px-5 py-4 align-middle">
+                            <div className="min-w-[120px] sm:min-w-[160px]" style={{ maxWidth: 280 }}>
                               <div
                                 className="text-[#0B2A5B] text-sm font-medium leading-snug"
                                 style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden' }}
@@ -2149,6 +2369,16 @@ export default function WorkloadPage({
                                 {s.subject_name}
                               </div>
                               <div className="mt-1.5 flex flex-wrap gap-1">
+                                {isAssignTarget && (
+                                  <motion.span
+                                    initial={reduceMotion ? false : { opacity: 0, x: -6 }}
+                                    animate={{ opacity: 1, x: 0 }}
+                                    transition={{ duration: 0.3, delay: 0.5 }}
+                                    className="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-[#15803D] text-white"
+                                  >
+                                    Assigning
+                                  </motion.span>
+                                )}
                                 {lecH > 0 && (
                                   <span className="px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-[#EFF6FF] text-[#1D5BD6]">Lec</span>
                                 )}
@@ -2158,22 +2388,24 @@ export default function WorkloadPage({
                               </div>
                             </div>
                           </td>
-                          <td className="px-5 py-4 text-center text-[#64748B] text-sm align-middle">{lecH > 0 ? lecH : '—'}</td>
-                          <td className="px-5 py-4 text-center text-[#64748B] text-sm align-middle">{labH > 0 ? labH : '—'}</td>
-                          <td className={`px-5 py-4 text-center font-bold text-base align-middle ${willExceed ? 'text-[#DC2626]' : 'text-[#1D5BD6]'}`}>
+                          <td className="hidden sm:table-cell px-5 py-4 text-center text-[#64748B] text-sm align-middle">{lecH > 0 ? lecH : '—'}</td>
+                          <td className="hidden sm:table-cell px-5 py-4 text-center text-[#64748B] text-sm align-middle">{labH > 0 ? labH : '—'}</td>
+                          <td className={`px-3 sm:px-5 py-4 text-center font-bold text-base align-middle ${willExceed ? 'text-[#DC2626]' : 'text-[#1D5BD6]'}`}>
                             {wu.toFixed(2)}
                           </td>
-                          <td className="px-5 py-4 align-middle">
+                          <td className="px-3 sm:px-5 py-4 align-middle">
                             {willExceed ? (
-                              <button
+                              <motion.button
+                                {...plusPulse}
                                 onClick={() => assignSubject(s.id)}
                                 title="Exceeds remaining regular load — will require confirmation"
                                 className="flex items-center justify-center w-9 h-9 rounded-full bg-[#FEE2E2] text-[#DC2626] border border-[#FECACA] hover:bg-[#FECACA] transition-colors"
                               >
                                 <AlertTriangle className="w-4 h-4" />
-                              </button>
+                              </motion.button>
                             ) : (
-                              <button
+                              <motion.button
+                                {...plusPulse}
                                 onClick={() => assignSubject(s.id)}
                                 title="Assign to faculty"
                                 className="flex items-center justify-center w-9 h-9 rounded-full transition-colors shadow-sm"
@@ -2182,10 +2414,10 @@ export default function WorkloadPage({
                                 onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#1D5BD6')}
                               >
                                 <Plus className="w-4 h-4" />
-                              </button>
+                              </motion.button>
                             )}
                           </td>
-                        </tr>
+                        </motion.tr>
                       );
                     })}
                   </tbody>

@@ -349,6 +349,18 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: system-ui, -apple-system, sans-serif;
+  /* Long names, emails and codes wrap instead of pushing cards off-screen */
+  overflow-wrap: break-word;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+/* Phones: 16px form text is easier to read and stops iOS zooming on focus */
+@media (max-width: 639px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
 }
 /* Light: faint blue wash like the reference instead of a flat fill */
 html.light body {

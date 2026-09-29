@@ -122,6 +122,7 @@ export async function GET(req: NextRequest) {
           c.total_hours,
           c.units,
           ${subjectCategorySql('c')} AS subject_category,
+          b.id             AS block_id,
           b.block_name,
           b.year_level,
           b.semester       AS block_semester,

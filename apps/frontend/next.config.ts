@@ -7,7 +7,7 @@ import type { NextConfig } from "next";
  */
 const BACKEND_URL = (process.env.BACKEND_URL || "http://localhost:4000").replace(/\/$/, "");
 
-/** CSP with the two framing directives adjustable per route (see headers()). */
+/** Content-Security-Policy value (no page may be framed; only Google sign-in may be embedded). */
 function contentSecurityPolicy(frameSrc = "https://accounts.google.com", frameAncestors = "'none'") {
   return [
     "default-src 'self'",
@@ -80,6 +80,10 @@ const nextConfig: NextConfig = {
     '*.ngrok-free.app',
     '*.ngrok.app',
     '*.ngrok.io',
+    // Phones on the same Wi-Fi opening http://<this PC's IP>:3000 — no DNS or
+    // tunnel needed (some routers/ISPs block ngrok domains outright).
+    '192.168.*.*',
+    '10.*.*.*',
   ],
 
   devIndicators: false,
@@ -103,22 +107,6 @@ const nextConfig: NextConfig = {
       {
         source: '/(.*)',
         headers: securityHeaders,
-      },
-      /* Reports → Class Program Print / Excel loads the Class Program page in a
-         hidden same-site frame (its printed form and saved signatories live
-         there). Only that pair is relaxed, and only for QRganize itself —
-         every other page, and every other site, still can't frame anything.
-         Later entries override the same header keys (Next.js headers docs). */
-      {
-        source: '/reports',
-        headers: [{ key: 'Content-Security-Policy', value: contentSecurityPolicy("'self' https://accounts.google.com") }],
-      },
-      {
-        source: '/program/class-program',
-        headers: [
-          { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
-          { key: 'Content-Security-Policy', value: contentSecurityPolicy(undefined, "'self'") },
-        ],
       },
     ];
   },
