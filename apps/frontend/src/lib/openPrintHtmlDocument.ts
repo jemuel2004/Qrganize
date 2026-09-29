@@ -65,8 +65,10 @@ function waitForDocumentReady(target: Window): Promise<void> {
       ? doc.fonts.ready.then(() => undefined).catch(() => undefined)
       : Promise.resolve();
 
+  /* Upper bound only — print starts as soon as the images are in. Long enough
+     for the header/footer logos to arrive over a slow phone connection. */
   const timeout = new Promise<void>(resolve => {
-    setTimeout(resolve, 2500);
+    setTimeout(resolve, 8000);
   });
 
   return Promise.race([Promise.all([imagesReady, fontsReady]).then(() => undefined), timeout]).then(
