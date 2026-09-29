@@ -122,9 +122,11 @@ interface WorkloadPrintData {
  * as the Faculty Workload page. `mode="excel"` downloads that same form as a
  * formatted .xlsx instead of printing it.
  */
-export function WorkloadPrintMenu({ facultyId, semester, academicYear, mode = 'print' }: {
+export function WorkloadPrintMenu({ facultyId, semester, academicYear, mode = 'print', phoneStretch = false }: {
   facultyId: number; semester: string; academicYear: string;
   mode?: 'print' | 'excel';
+  /** Phones: fill half the row, and open the menu toward the side that has room */
+  phoneStretch?: boolean;
 }) {
   const isExcel = mode === 'excel';
   const toast = useToast();
@@ -256,7 +258,7 @@ export function WorkloadPrintMenu({ facultyId, semester, academicYear, mode = 'p
   }
 
   return (
-    <div ref={wrapRef} className="relative" onKeyDown={e => { if (e.key === 'Escape' && open) { e.stopPropagation(); setOpen(false); } }}>
+    <div ref={wrapRef} className={`relative ${phoneStretch ? 'flex-1 sm:flex-none' : ''}`} onKeyDown={e => { if (e.key === 'Escape' && open) { e.stopPropagation(); setOpen(false); } }}>
       <motion.button
         type="button"
         onClick={toggle}
@@ -264,7 +266,7 @@ export function WorkloadPrintMenu({ facultyId, semester, academicYear, mode = 'p
         aria-haspopup="menu"
         aria-expanded={open}
         title={isExcel ? 'Download workload as Excel' : 'Print workload'}
-        className={`group inline-flex items-center gap-1.5 h-9 px-3 rounded-lg border text-[13px] font-semibold transition-colors ${
+        className={`group inline-flex items-center justify-center gap-1.5 ${phoneStretch ? 'w-full sm:w-auto h-11 sm:h-9 text-[15px] sm:text-[13px]' : 'h-9 text-[13px]'} px-3 rounded-lg border font-semibold transition-colors ${
           isExcel
             // Excel's own green
             ? open ? 'bg-[#107C41] border-[#107C41] text-white' : 'bg-[#E9F5EE] border-[#B7DFC6] text-[#107C41] hover:bg-[#D5EDDF] hover:border-[#107C41]'
@@ -288,8 +290,8 @@ export function WorkloadPrintMenu({ facultyId, semester, academicYear, mode = 'p
             initial={reduceMotion ? false : { opacity: 0, y: -6, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1, transition: { duration: reduceMotion ? 0 : 0.2, ease } }}
             exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -6, scale: 0.97, transition: { duration: 0.15, ease } }}
-            style={{ transformOrigin: 'top right' }}
-            className="absolute right-0 top-full mt-2 z-20 w-64 bg-white border border-[#E2E8F0] rounded-xl shadow-[0_16px_40px_-12px_rgba(11,42,91,0.35)] p-1.5"
+            style={{ transformOrigin: phoneStretch && isExcel ? 'top left' : 'top right' }}
+            className={`absolute ${phoneStretch && isExcel ? 'left-0 sm:left-auto sm:right-0' : 'right-0'} top-full mt-2 z-20 w-64 max-w-[calc(100vw-2rem)] bg-white border border-[#E2E8F0] rounded-xl shadow-[0_16px_40px_-12px_rgba(11,42,91,0.35)] p-1.5`}
           >
             <p className="px-2.5 pt-1.5 pb-2 text-[10px] font-bold uppercase tracking-widest text-[#94A3B8]">
               {isExcel ? 'Download official form (Excel)' : 'Print official form'}
@@ -362,9 +364,9 @@ function LoadBadge({ cat }: { cat: string }) {
 
 function ModalStat({ label, value, color = '#0B2A5B' }: { label: string; value: number; color?: string }) {
   return (
-    <div className="bg-white border border-[#E2E8F0] rounded-xl px-4 py-3 flex flex-col shadow-sm">
-      <span className="text-[26px] font-bold leading-none tabular-nums" style={{ color }}>{value}</span>
-      <span className="text-[10px] uppercase tracking-wider font-semibold mt-1.5" style={{ color: '#94A3B8' }}>{label}</span>
+    <div className="bg-white border border-[#E2E8F0] rounded-xl px-3 sm:px-4 py-3 flex flex-col shadow-sm min-w-0">
+      <span className="text-[24px] sm:text-[26px] font-bold leading-none tabular-nums" style={{ color }}>{value}</span>
+      <span className="text-[11px] sm:text-[10px] uppercase tracking-wide sm:tracking-wider font-semibold mt-1.5 leading-tight" style={{ color: '#64748B' }}>{label}</span>
     </div>
   );
 }
@@ -797,7 +799,7 @@ export default function FacultySchedulesClient({
             initial={reduceMotion ? false : { opacity: 0 }}
             animate={{ opacity: 1, transition: { duration: reduceMotion ? 0 : 0.4, ease } }}
             exit={{ opacity: 0, transition: { duration: reduceMotion ? 0 : 0.3, ease } }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4"
             data-modal-root
             role="dialog"
             aria-modal="true"
@@ -810,19 +812,19 @@ export default function FacultySchedulesClient({
               initial={reduceMotion ? false : { opacity: 0, y: 18, scale: 0.96 }}
               animate={{ opacity: 1, y: 0, scale: 1, transition: { duration: reduceMotion ? 0 : 0.45, ease, delay: reduceMotion ? 0 : 0.05 } }}
               exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 12, scale: 0.97, transition: { duration: 0.3, ease } }}
-              className="bg-white rounded-2xl shadow-2xl w-[85vw] max-w-[1300px] max-h-[85vh] flex flex-col"
+              className="bg-white rounded-2xl shadow-2xl w-full sm:w-[85vw] max-w-[1300px] max-h-[92vh] sm:max-h-[85vh] flex flex-col"
               style={{ border: '1px solid #E2E8F0' }}
               onClick={e => e.stopPropagation()}
             >
               {/* ── Modal Header ── */}
-              <div className="flex items-center justify-between px-6 py-4 border-b border-[#F1F5F9] flex-shrink-0">
-                <div className="min-w-0 flex-1">
+              <div className="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-6 py-4 border-b border-[#F1F5F9] flex-shrink-0">
+                <div className="min-w-0 flex-1 pr-10 sm:pr-0">
                   <p className="text-[10px] font-bold uppercase tracking-widest mb-1" style={{ color: '#94A3B8' }}>
                     Schedule Details
                   </p>
                   <h2
                     id="sched-modal-title"
-                    className="font-bold leading-tight truncate"
+                    className="font-bold leading-tight break-words sm:truncate"
                     style={{ color: '#0B2A5B', fontSize: '20px' }}
                   >
                     {viewFaculty.name}
@@ -836,29 +838,31 @@ export default function FacultySchedulesClient({
                   </div>
                 </div>
                 {/* Quiet header actions: Print menu (Regular / Overload / Praise) · Close */}
-                <div className="ml-4 flex items-center gap-1 flex-shrink-0">
+                <div className="sm:ml-4 flex items-center gap-2 sm:gap-1 sm:flex-shrink-0">
                   <WorkloadPrintMenu
                     key={`excel-${viewFaculty.id}`}
                     mode="excel"
+                    phoneStretch
                     facultyId={viewFaculty.id}
                     semester={globalSemester}
                     academicYear={globalYear}
                   />
                   <WorkloadPrintMenu
                     key={viewFaculty.id}
+                    phoneStretch
                     facultyId={viewFaculty.id}
                     semester={globalSemester}
                     academicYear={globalYear}
                   />
-                  <span className="w-px h-5 bg-[#E2E8F0] mx-1" aria-hidden="true" />
+                  <span className="hidden sm:block w-px h-5 bg-[#E2E8F0] mx-1" aria-hidden="true" />
                   <motion.button
                     type="button"
                     onClick={() => setViewFaculty(null)}
                     whileHover={reduceMotion ? undefined : { rotate: 90 }}
                     whileTap={reduceMotion ? undefined : { scale: 0.9 }}
                     transition={{ duration: 0.2, ease }}
-                    className="p-1.5 rounded-lg transition-colors hover:bg-[#F1F5F9]"
-                    style={{ color: '#94A3B8' }}
+                    className="absolute top-3 right-3 sm:static p-2 sm:p-1.5 rounded-lg transition-colors hover:bg-[#F1F5F9]"
+                    style={{ color: '#64748B' }}
                     aria-label="Close schedule details"
                   >
                     <X className="w-4 h-4" />
@@ -867,16 +871,16 @@ export default function FacultySchedulesClient({
               </div>
 
               {/* ── Statistics Grid ── */}
-              <div className="px-6 py-3 border-b border-[#F1F5F9] flex-shrink-0" style={{ backgroundColor: '#F8FAFC' }}>
-                <div className="grid grid-cols-4 gap-3">
+              <div className="px-4 sm:px-6 py-3 border-b border-[#F1F5F9] flex-shrink-0" style={{ backgroundColor: '#F8FAFC' }}>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
                   <ModalStat label="Total Subjects" value={viewFaculty.rows.length} color="#0B2A5B" />
                   <ModalStat label="Regular Load"   value={regularRows.length}      color="#1D5BD6" />
                   <ModalStat label="Overload"        value={overloadRows.length}     color="#D97706" />
-                  <div className="bg-white border border-[#E2E8F0] rounded-xl px-4 py-3 flex flex-col shadow-sm">
-                    <span className="text-[26px] font-bold leading-none tabular-nums" style={{ color: unitColor }}>
+                  <div className="bg-white border border-[#E2E8F0] rounded-xl px-3 sm:px-4 py-3 flex flex-col shadow-sm min-w-0">
+                    <span className="text-[24px] sm:text-[26px] font-bold leading-none tabular-nums" style={{ color: unitColor }}>
                       {totalVal.toFixed(2)}
                     </span>
-                    <span className="text-[10px] uppercase tracking-wider font-semibold mt-1.5" style={{ color: '#94A3B8' }}>
+                    <span className="text-[11px] sm:text-[10px] uppercase tracking-wide sm:tracking-wider font-semibold mt-1.5 leading-tight" style={{ color: '#64748B' }}>
                       {unitLabel}
                     </span>
                   </div>
