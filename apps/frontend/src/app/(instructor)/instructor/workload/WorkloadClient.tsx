@@ -214,7 +214,8 @@ function splitLoad(load: WorkloadLoad, isPermanent = false): SplitRow[] {
 
 /* ─── Main Component ─────────────────────────────────────────────────────── */
 /** Load colours shared by the cards and the tabs */
-const TAB_TONE = { regular: '#1D5BD6', overload: '#DC4A0A', praise: '#C99A06' } as const;
+const TAB_TONE = { regular: '#1D5BD6', overload: '#DC4A0A', praise: '#C99A06', total: '#0B2A5B' } as const;
+type WorkloadTab = keyof typeof TAB_TONE;
 
 /** Summary card tinted in its load colour (Regular blue · Overload orange · Praise gold · Total navy) */
 function LoadCard({ tone, label, unit, value, of, note, index, onClick, active = false, onPrint }: {
@@ -269,6 +270,50 @@ function LoadCard({ tone, label, unit, value, of, note, index, onClick, active =
   );
 }
 
+/** Total card's view: how Regular + Overload (+ Praise) add up — each row opens its table. */
+function TotalBreakdown({ unit, rows, total, subjects, onOpen }: {
+  unit: string;
+  rows: { key: 'regular' | 'overload' | 'praise'; label: string; count: number; value: number }[];
+  total: number;
+  subjects: number;
+  onOpen: (key: 'regular' | 'overload' | 'praise') => void;
+}) {
+  const reduceMotion = useReducedMotion();
+  return (
+    <div className="divide-y divide-[#E2E8F0]">
+      {rows.map((r, i) => (
+        <motion.button
+          key={r.key}
+          type="button"
+          onClick={() => onOpen(r.key)}
+          initial={reduceMotion ? false : { opacity: 0, x: -8 }}
+          animate={{ opacity: 1, x: 0, transition: { duration: 0.25, delay: i * 0.05 } }}
+          className="w-full flex items-center gap-3 px-4 sm:px-5 py-4 text-left hover:bg-[#F8FAFC] transition-colors"
+        >
+          <span aria-hidden className="w-1.5 self-stretch rounded-full" style={{ backgroundColor: TAB_TONE[r.key] }} />
+          <span className="flex-1 min-w-0">
+            <span className="block text-[15px] font-bold text-[#0B2A5B]">{r.label}</span>
+            <span className="block text-sm text-[#64748B]">{r.count} subject{r.count !== 1 ? 's' : ''}</span>
+          </span>
+          <span className="text-lg font-black tabular-nums" style={{ color: TAB_TONE[r.key] }}>{r.value.toFixed(2)}</span>
+          <span className="text-sm text-[#64748B] w-12">{unit}</span>
+          <ChevronRight className="w-5 h-5 text-[#94A3B8] flex-shrink-0" />
+        </motion.button>
+      ))}
+      <div className="flex items-center gap-3 px-4 sm:px-5 py-4 bg-[#F8FAFC]">
+        <span aria-hidden className="w-1.5 self-stretch rounded-full" style={{ backgroundColor: TAB_TONE.total }} />
+        <span className="flex-1 min-w-0">
+          <span className="block text-[15px] font-black text-[#0B2A5B]">Total</span>
+          <span className="block text-sm text-[#64748B]">{subjects} subject{subjects !== 1 ? 's' : ''}</span>
+        </span>
+        <span className="text-lg font-black tabular-nums text-[#0B2A5B]">{total.toFixed(2)}</span>
+        <span className="text-sm text-[#64748B] w-12">{unit}</span>
+        <span className="w-5 flex-shrink-0" />
+      </div>
+    </div>
+  );
+}
+
 export default function InstructorWorkloadClient() {
   const [semester,     setSemester]     = useState('');
   const [academicYear, setAcademicYear] = useState('');
@@ -280,13 +325,13 @@ export default function InstructorWorkloadClient() {
   const [data,         setData]         = useState<WorkloadSummary | null>(null);
   const [loading,      setLoading]      = useState(true);
   const [error,        setError]        = useState<string | null>(null);
-  const [activeTab,    setActiveTab]    = useState<'regular' | 'overload' | 'praise'>('regular');
+  const [activeTab,    setActiveTab]    = useState<WorkloadTab>('regular');
   const [printError,   setPrintError]   = useState('');
   const [printOfferFallback, setPrintOfferFallback] = useState(false);
   /** Whether the currently selected workload table is visible. */
   const [tableVisible, setTableVisible] = useState(true);
 
-  function selectTab(key: 'regular' | 'overload' | 'praise') {
+  function selectTab(key: WorkloadTab) {
     setActiveTab(key);
     setTableVisible(true);
   }
@@ -356,11 +401,10 @@ export default function InstructorWorkloadClient() {
 
   const hasOverloadSection = overloadPrintLoads.length > 0 || splitPrintLoads.length > 0;
   const hasPraiseSection = (workload?.praise ?? []).length > 0 || praiseSubjectLoads.length > 0 || praiseSplitLoads.length > 0;
-  const effectiveTab: 'regular' | 'overload' | 'praise' =
-    (activeTab === 'overload' && !hasOverloadSection)
-    || (activeTab === 'praise' && !hasPraiseSection)
-      ? 'regular'
-      : activeTab;
+  const effectiveTab: WorkloadTab = activeTab === 'praise' && !hasPraiseSection ? 'regular' : activeTab;
+  /** What the Print button prints — the Total summary has no form of its own, so it prints the Regular Load. */
+  const printTab: 'regular' | 'overload' | 'praise' =
+    effectiveTab === 'total' || (effectiveTab === 'overload' && !hasOverloadSection) ? 'regular' : effectiveTab;
 
   useEffect(() => {
     if (activeTab !== effectiveTab) setActiveTab(effectiveTab);
@@ -704,7 +748,7 @@ export default function InstructorWorkloadClient() {
     if (!workload) return;
     setPrintError('');
     setPrintOfferFallback(false);
-    const kind = which ?? effectiveTab;
+    const kind = which ?? printTab;
     const result = await printRegularLoadDocument({
       faculty: workload.faculty,
       loads: kind === 'overload'
@@ -766,7 +810,7 @@ export default function InstructorWorkloadClient() {
               style={{ color: '#FFFFFF' }}
             >
               <Printer className="w-4 h-4" />
-              Print {effectiveTab === 'regular' ? 'Regular Load' : effectiveTab === 'overload' ? 'Overload' : 'Praise Load'}
+              Print {printTab === 'regular' ? 'Regular Load' : printTab === 'overload' ? 'Overload' : 'Praise Load'}
             </motion.button>
           )}
         </div>
@@ -863,7 +907,7 @@ export default function InstructorWorkloadClient() {
                 onPrint={() => handlePrint('regular')} />
               <LoadCard index={1} tone={TAB_TONE.overload} label="Overload" unit={isP ? 'units' : 'hours'} value={olVal.toFixed(2)}
                 active={effectiveTab === 'overload' && tableVisible}
-                onClick={hasOverloadSection ? () => selectTab('overload') : undefined}
+                onClick={() => selectTab('overload')}
                 onPrint={hasOverloadSection ? () => handlePrint('overload') : undefined} />
               {hasPraiseSection && (
                 <LoadCard index={2} tone={TAB_TONE.praise} label="Praise Load" unit={`${isP ? 'units' : 'hours'} · ${praiseCount} item${praiseCount !== 1 ? 's' : ''}`}
@@ -871,9 +915,10 @@ export default function InstructorWorkloadClient() {
                   active={effectiveTab === 'praise' && tableVisible} onClick={() => selectTab('praise')}
                   onPrint={() => handlePrint('praise')} />
               )}
-              <LoadCard index={3} tone="#0B2A5B" label={isP ? 'Total Units' : 'Total Hours'}
+              <LoadCard index={3} tone={TAB_TONE.total} label={isP ? 'Total Units' : 'Total Hours'}
                 unit={`${isP ? 'units' : 'hours'} · ${distinctSubjects} subject${distinctSubjects !== 1 ? 's' : ''}`}
-                value={modalTotal.toFixed(2)} />
+                value={modalTotal.toFixed(2)}
+                active={effectiveTab === 'total' && tableVisible} onClick={() => selectTab('total')} />
             </div>
 
             {/* ── Printable area ────────────────────────────────────── */}
@@ -896,8 +941,9 @@ export default function InstructorWorkloadClient() {
               <div className="flex flex-wrap items-center gap-2 mb-1">
                 {([
                   { key: 'regular', label: 'Workload', count: regularPrintLoads.length, show: true },
-                  { key: 'overload', label: 'Overload', count: overloadCount, show: hasOverloadSection },
+                  { key: 'overload', label: 'Overload', count: overloadCount, show: hasOverloadSection || effectiveTab === 'overload' },
                   { key: 'praise', label: 'Praise Load', count: praiseCount, show: hasPraiseSection },
+                  { key: 'total', label: isP ? 'Total Units' : 'Total Hours', count: distinctSubjects, show: effectiveTab === 'total' },
                 ] as const).filter(t => t.show).map(t => {
                   const on = effectiveTab === t.key;
                   const c = TAB_TONE[t.key];
@@ -953,11 +999,33 @@ export default function InstructorWorkloadClient() {
                     )
                   )}
                   {effectiveTab === 'overload' && (
-                    <OfficialWorkloadFormTable
-                      rows={officialOverloadRows}
-                      summary={officialOverloadSummary}
-                      variant="overload"
-                      groups={formGroups}
+                    hasOverloadSection ? (
+                      <OfficialWorkloadFormTable
+                        rows={officialOverloadRows}
+                        summary={officialOverloadSummary}
+                        variant="overload"
+                        groups={formGroups}
+                      />
+                    ) : (
+                      <div className="px-4 py-8 text-center">
+                        <p className="text-sm font-semibold text-[#0B2A5B]">No overload assigned</p>
+                        <p className="text-sm text-[#64748B] mt-1">
+                          No overload subjects for the active academic period.
+                        </p>
+                      </div>
+                    )
+                  )}
+                  {effectiveTab === 'total' && (
+                    <TotalBreakdown
+                      unit={isP ? 'units' : 'hours'}
+                      rows={[
+                        { key: 'regular', label: isP ? 'Regular Load' : 'Regular Hours', count: regularPrintLoads.length, value: modalRegVal },
+                        { key: 'overload', label: 'Overload', count: overloadCount, value: olVal },
+                        ...(hasPraiseSection ? [{ key: 'praise' as const, label: 'Praise Load', count: praiseCount, value: praiseTotal }] : []),
+                      ]}
+                      total={modalTotal}
+                      subjects={distinctSubjects}
+                      onOpen={selectTab}
                     />
                   )}
                   {effectiveTab === 'praise' && (
