@@ -8,6 +8,7 @@ import type { WeekDay } from '@shared/dayCombination';
 import { fetchDayCombinations } from '@/lib/dayCombinations';
 import {
   buildOfficialGroups,
+  loadDayPatterns,
   matchOfficialSlot,
   formatOfficialTimeRange,
   occupiedRangeFromScheduleTimes,
@@ -244,7 +245,7 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
   const documentKind = input.documentKind ?? 'regular';
   const isP = fac.employment_status === 'Permanent';
   /** Day/time groups of the form — follow the semester's day combinations */
-  const groups = buildOfficialGroups(input.dayCombinations);
+  const groups = buildOfficialGroups(input.dayCombinations, loadDayPatterns(loads));
 
   type PRow = {
     load: PrintWorkloadLoad;

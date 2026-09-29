@@ -10,7 +10,7 @@ import {
   AlertTriangle, Printer, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import OfficialWorkloadFormTable, { type OfficialFormRow } from '@/components/OfficialWorkloadFormTable';
-import { buildOfficialGroups, matchOfficialSlot, formatOfficialNumber, formatOfficialTimeRange, occupiedRangeFromScheduleTimes } from '@/lib/officialWorkloadSlots';
+import { buildOfficialGroups, loadDayPatterns, matchOfficialSlot, formatOfficialNumber, formatOfficialTimeRange, occupiedRangeFromScheduleTimes } from '@/lib/officialWorkloadSlots';
 import { useDayCombinations } from '@/lib/dayCombinations';
 import { printRegularLoadDocument } from '@/lib/instructorWorkloadPrintDocument';
 import { openWorkloadPrintableVersion } from '@/lib/openPrintHtmlDocument';
@@ -319,10 +319,11 @@ export default function InstructorWorkloadClient() {
   const [academicYear, setAcademicYear] = useState('');
   // Form groups follow the term's day combinations (Settings → Day Combinations)
   const { active: dayCombos } = useDayCombinations(semester || null, academicYear || null);
-  const formGroups = useMemo(() => buildOfficialGroups(dayCombos), [dayCombos]);
   const [periodReady,  setPeriodReady]  = useState(false);
   const [noPeriod,     setNoPeriod]     = useState(false);
   const [data,         setData]         = useState<WorkloadSummary | null>(null);
+  // Plus any day set this faculty's classes use that isn't configured, so they still show in their time slot
+  const formGroups = useMemo(() => buildOfficialGroups(dayCombos, loadDayPatterns(data?.loads)), [dayCombos, data]);
   const [loading,      setLoading]      = useState(true);
   const [error,        setError]        = useState<string | null>(null);
   const [activeTab,    setActiveTab]    = useState<WorkloadTab>('regular');

@@ -1135,7 +1135,7 @@ export default function RoomRequestsClient() {
                     aria-expanded={on}
                     whileHover={reduceMotion || on ? undefined : { y: -2 }}
                     whileTap={reduceMotion ? undefined : { scale: 0.98 }}
-                    className="qr-stat-tint relative overflow-hidden text-left rounded-2xl border-2 px-4 sm:px-5 py-4 flex items-center gap-3 sm:gap-4 transition-[border-color,box-shadow] duration-300"
+                    className="qr-stat-tint relative overflow-hidden text-left rounded-2xl border-2 px-3 sm:px-5 py-4 flex items-center gap-2 sm:gap-4 min-w-0 transition-[border-color,box-shadow] duration-300"
                     style={{
                       background: `linear-gradient(135deg, ${t.tone}${on ? '1F' : '0D'} 0%, #FFFFFF 75%)`,
                       borderColor: on ? t.tone : `${t.tone}33`,
@@ -1143,15 +1143,16 @@ export default function RoomRequestsClient() {
                     }}
                   >
                     {on && <motion.span layoutId="rr-view-bar" className="absolute inset-x-0 top-0 h-1" style={{ backgroundColor: t.tone }} transition={{ duration: reduceMotion ? 0 : 0.35, ease: EASE }} />}
-                    <span className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0" style={{ backgroundColor: on ? t.tone : `${t.tone}14`, color: on ? '#FFFFFF' : t.tone }}>
+                    {/* Phones: no icon, so the label always has room for one line */}
+                    <span className="hidden sm:flex w-11 h-11 rounded-xl items-center justify-center flex-shrink-0" style={{ backgroundColor: on ? t.tone : `${t.tone}14`, color: on ? '#FFFFFF' : t.tone }}>
                       <t.Icon className="w-5 h-5" />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[15px] font-bold text-[#0B2A5B]">{t.label}</span>
+                      <span className="block text-[15px] font-bold text-[#0B2A5B] whitespace-nowrap">{t.label}</span>
                       <span className="hidden sm:block text-xs text-[#64748B]">{t.sub}</span>
                     </span>
-                    <span className="text-2xl font-bold tabular-nums" style={{ color: t.tone }}>{t.count}</span>
-                    <motion.span animate={{ rotate: on ? 180 : 0 }} transition={{ duration: reduceMotion ? 0 : 0.3 }} style={{ color: on ? t.tone : '#94A3B8' }} aria-hidden>
+                    <span className="text-2xl font-bold tabular-nums flex-shrink-0" style={{ color: t.tone }}>{t.count}</span>
+                    <motion.span className="flex-shrink-0" animate={{ rotate: on ? 180 : 0 }} transition={{ duration: reduceMotion ? 0 : 0.3 }} style={{ color: on ? t.tone : '#94A3B8' }} aria-hidden>
                       <ChevronDown className="w-5 h-5" />
                     </motion.span>
                   </motion.button>

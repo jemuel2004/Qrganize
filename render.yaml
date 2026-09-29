@@ -9,7 +9,8 @@ services:
     # Persistent disk (below) needs a paid instance; see DEPLOYMENT.md for the free-tier trade-off
     plan: starter
     # npm workspaces: install at the repo root so packages/shared resolves
-    buildCommand: npm ci && npm run build -w @qrganize/backend
+    # --include=dev: NODE_ENV=production would otherwise skip the build tools (cross-env, TypeScript)
+    buildCommand: npm ci --include=dev && npm run build -w @qrganize/backend
     # `next start` listens on $PORT, which Render provides
     startCommand: npm run start:prod -w @qrganize/backend
     # Public endpoint that also touches the database

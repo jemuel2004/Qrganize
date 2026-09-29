@@ -366,7 +366,10 @@ export default function ScheduleClient() {
       )}
 
       {!loading && schedules.length > 0 && (
-        <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 sm:gap-3 mb-5" style={selectableDays.length > 5 ? { gridTemplateColumns: `repeat(${selectableDays.length}, minmax(0, 1fr))` } : undefined}>
+        <div
+          className="grid grid-cols-3 sm:grid-cols-[repeat(var(--day-cols),minmax(0,1fr))] gap-x-2 gap-y-3 sm:gap-3 mb-5 pt-2"
+          style={{ ['--day-cols' as string]: Math.max(5, selectableDays.length) }}
+        >
           {selectableDays.map(day => {
             const active = day === selectedDay;
             const isToday = day === todayName;
@@ -385,17 +388,26 @@ export default function ScheduleClient() {
                   color: active ? '#FFFFFF' : t.text,
                 }}
                 transition={{ duration: reduceMotion ? 0 : 0.25 }}
-                className="inline-flex items-center justify-center gap-2 px-3 h-12 rounded-xl text-[15px] font-bold border-2 w-full"
+                aria-label={`${day}, ${n} class${n !== 1 ? 'es' : ''}${isToday ? ', today' : ''}`}
+                className="relative inline-flex items-center justify-center gap-1.5 sm:gap-2 px-2 sm:px-3 h-12 rounded-xl text-[15px] font-bold border-2 w-full min-w-0"
               >
-                {day}
+                {/* Phones: short names so name + count always fit on one line */}
+                <span className="sm:hidden">{day.slice(0, 3)}</span>
+                <span className="hidden sm:inline truncate">{day}</span>
                 <span
                   className="min-w-6 h-6 px-1.5 rounded-full text-[12px] font-bold inline-flex items-center justify-center tabular-nums"
                   style={active ? { backgroundColor: 'rgba(255,255,255,0.25)', color: '#FFFFFF' } : { backgroundColor: '#FFFFFF', color: t.text }}
                 >
                   {n}
                 </span>
-                {isToday && !active && (
-                  <span className="text-[10px] font-bold uppercase tracking-wide">Today</span>
+                {/* Sits on the top edge, so it never crowds the name or count */}
+                {isToday && (
+                  <span
+                    className="absolute -top-2.5 left-1/2 -translate-x-1/2 px-1.5 py-px rounded-md text-[10px] font-bold uppercase tracking-wide leading-tight whitespace-nowrap border"
+                    style={{ backgroundColor: '#FFFFFF', color: t.text, borderColor: t.border }}
+                  >
+                    Today
+                  </span>
                 )}
               </motion.button>
             );

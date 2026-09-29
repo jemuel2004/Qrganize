@@ -633,20 +633,22 @@ export default function InstructorDashboard() {
 
             <div className="p-5 flex flex-col gap-4 flex-1 min-h-0">
               <form onSubmit={handleFind} className="space-y-3 flex-shrink-0">
+                {/* min-w-0 + appearance-none: iPhone Safari gives time inputs a fixed
+                    minimum width that otherwise spills over the Day box */}
                 <div className="grid grid-cols-2 gap-3">
-                  <div>
+                  <div className="min-w-0">
                     <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Time</label>
                     <input
                       type="time" value={findTime} onChange={e => setFindTime(e.target.value)} required
-                      className="w-full h-10 bg-[#0f172a] border border-white/10 text-white rounded-lg px-3 text-sm
+                      className="block w-full min-w-0 max-w-full appearance-none text-left h-10 bg-[#0f172a] border border-white/10 text-white rounded-lg px-3 text-sm
                         focus:outline-none focus:ring-2 focus:ring-[#12408F]/40 focus:border-[#12408F]/60"
                     />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Day</label>
                     <select
                       value={findDay} onChange={e => setFindDay(e.target.value)}
-                      className="w-full h-10 bg-[#0f172a] border border-white/10 text-white rounded-lg px-3 text-sm
+                      className="block w-full min-w-0 h-10 bg-[#0f172a] border border-white/10 text-white rounded-lg px-3 text-sm
                         focus:outline-none focus:ring-2 focus:ring-[#12408F]/40 focus:border-[#12408F]/60"
                     >
                       {DAYS.map(d => <option key={d} value={d}>{d}</option>)}

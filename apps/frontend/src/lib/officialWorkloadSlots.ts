@@ -138,25 +138,51 @@ const GENERIC_PM: [number, number][] = [
  */
 export function buildOfficialGroups(
   combos: readonly { days: readonly WeekDay[]; is_active?: boolean }[] | null | undefined,
+  /**
+   * Day patterns of the classes shown on the form. A class scheduled on days
+   * that aren't a configured combination (e.g. Mon/Thu, set before the term's
+   * combinations changed) still gets its own section instead of falling into
+   * "Needs Classification" — it is already assigned and scheduled.
+   */
+  classDayPatterns: readonly (string | null | undefined)[] = [],
 ): OfficialGroup[] {
   const active = (combos ?? []).filter(c => c.is_active !== false && c.days.length > 0);
   if (active.length === 0) return OFFICIAL_GROUPS;
   const groups: OfficialGroup[] = [];
-  for (const c of active) {
-    const key = daysKey(c.days);
+  const seen = new Set<string>();
+  const addDays = (days: readonly WeekDay[]) => {
+    const key = daysKey(days);
+    if (seen.has(key)) return;
+    seen.add(key);
     const legacy = LEGACY_BY_DAYS[key];
     if (legacy) {
       groups.push(...legacy.map(g => ({ ...g, dayKey: key })));
-      continue;
+      return;
     }
-    const code = daysCode(c.days);
+    const code = daysCode(days);
     const id = code.toLowerCase();
     groups.push(
       { id: `${id}-am`, label: `${code}/Morning`, dayGroup: code, dayKey: key, slots: GENERIC_AM.map(([s, e]) => makeSlot(`${id}-am`, s, e)) },
       { id: `${id}-pm`, label: `${code}/Afternoon`, dayGroup: code, dayKey: key, slots: GENERIC_PM.map(([s, e]) => makeSlot(`${id}-pm`, s, e)) },
     );
+  };
+  for (const c of active) addDays(c.days);
+  for (const pattern of classDayPatterns) {
+    const days = parseDays(pattern);
+    if (days && days.length > 0) addDays(days);
   }
   return groups;
+}
+
+/** Every day pattern a set of loads is scheduled on (whole class, Lec and Lab). */
+export function loadDayPatterns(
+  loads: readonly { day_pattern?: string | null; lec_day_pattern?: string | null; lab_day_pattern?: string | null }[] | null | undefined,
+): string[] {
+  const out = new Set<string>();
+  for (const l of loads ?? []) {
+    for (const p of [l.day_pattern, l.lec_day_pattern, l.lab_day_pattern]) if (p) out.add(p);
+  }
+  return [...out];
 }
 
 function normalizeDayToken(tok: string): string {

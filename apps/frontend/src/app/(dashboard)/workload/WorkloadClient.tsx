@@ -14,6 +14,7 @@ import TrashDropAnimation from '@/components/ui/TrashDropAnimation';
 import OfficialWorkloadFormTable, { type OfficialFormRow } from '@/components/OfficialWorkloadFormTable';
 import {
   buildOfficialGroups,
+  loadDayPatterns,
   matchOfficialSlot,
   formatOfficialNumber,
   formatOfficialTimeRange,
@@ -416,7 +417,6 @@ export default function WorkloadPage({
   const [listYear, setListYear] = useState('');
   // Workload form groups follow the term's day combinations (Settings → Day Combinations)
   const { active: dayCombos } = useDayCombinations(listSemester, listYear);
-  const formGroups = useMemo(() => buildOfficialGroups(dayCombos), [dayCombos]);
 
   // Initialize from global school year context once it loads
   useEffect(() => {
@@ -462,6 +462,8 @@ export default function WorkloadPage({
    * Handled Subjects overload table — ensures subjects like IT321 are never
    * hidden just because a different semester is selected in the workload tab. */
   const [allWorkloadLoads, setAllWorkloadLoads] = useState<WorkloadLoad[]>([]);
+  // Plus any day set this faculty's classes use that isn't configured, so they still show in their time slot
+  const formGroups = useMemo(() => buildOfficialGroups(dayCombos, loadDayPatterns(allWorkloadLoads)), [dayCombos, allWorkloadLoads]);
 
   const [filterProgram, setFilterProgram] = useState('');
   const [filterBlock, setFilterBlock] = useState('');
