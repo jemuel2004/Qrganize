@@ -69,7 +69,7 @@ QRGanize: QR-Based Room Scheduler & Monitoring System based on Programs & Instru
 
 | Item | Confirmation |
 |------|----------------|
-| Backend | Next.js App Router route handlers under `src/app/api/` — **not** Express.js |
+| Backend | Separate Next.js app (`apps/backend`) — App Router route handlers under `apps/backend/src/app/api/` — **not** Express.js |
 | Database | PostgreSQL via `pg` and `DATABASE_URL` |
 | Auth | Password hashing (`bcryptjs`), session JWT (`jose`), Google ID token verify, email OTP (`nodemailer`) |
 | QR | Generation (`qrcode`); camera/upload scanning (`html5-qrcode`) |

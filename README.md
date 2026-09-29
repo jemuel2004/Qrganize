@@ -182,7 +182,7 @@ Administrators can download a professional NEMSU curriculum workbook (logo, univ
 npm test
 ```
 
-Runs the curriculum import and export checks in `src/lib/curriculumImport` and `src/lib/curriculumExport`.
+Runs the curriculum import and export checks in `packages/shared/src/curriculumImport` and `packages/shared/src/curriculumExport`.
 
 ---
 
@@ -201,30 +201,60 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ## Project Structure
 
+QRganize is split into **two apps that can be deployed separately**, plus shared code:
+
 ```
-src/
-├── app/
-│   ├── (dashboard)/              # Admin & department chair
-│   │   ├── dashboard/
-│   │   ├── program/
-│   │   │   ├── curriculum/       # Subjects, Excel download / import
-│   │   │   ├── faculty/
-│   │   │   ├── blocks/
-│   │   │   └── class-program/
-│   │   ├── workload/
-│   │   ├── scheduling/
-│   │   ├── rooms/
-│   │   ├── qr-generator/
-│   │   ├── room-requests/
-│   │   └── settings/             # System logo and school years
-│   ├── (instructor)/             # Instructor portal (scan, schedule, requests)
-│   ├── login/
-│   └── api/
-├── lib/
-│   ├── curriculumImport/         # Flexible Excel parse + review compare
-│   └── curriculumExport/         # Official NEMSU .xlsx template
-└── client/                       # Shared UI, hooks, layout
+qrganize/
+├── apps/
+│   ├── frontend/                 # WEBSITE — pages + UI (no database, no secrets)
+│   │   ├── src/app/              #   (dashboard)/ admin & chairs, (instructor)/ faculty, login/
+│   │   ├── src/components/       #   ui/ layout/ charts/ security/
+│   │   ├── src/context/ hooks/ lib/
+│   │   ├── src/proxy.ts          #   page gate: asks the backend if the session is live
+│   │   ├── next.config.ts        #   forwards /api/* and /uploads/* to BACKEND_URL
+│   │   └── public/               #   static images (NEMSU logos)
+│   └── backend/                  # API — all /api routes + database
+│       ├── src/app/api/          #   HTTP route handlers
+│       ├── src/auth/             #   sessions, JWT, OTP, trusted devices, rate limit, Google
+│       ├── src/database/         #   db pool, migrations (run on start), schema guards
+│       ├── src/services/         #   business logic: scheduling, workload, rooms, audit…
+│       ├── src/infra/            #   mailer, upload validation
+│       ├── src/proxy.ts          #   API gate: valid, still-live session required
+│       ├── database/             #   schema.sql + seed.sql (fresh install only)
+│       ├── data/geoip/           #   optional GeoLite2 database
+│       └── public/uploads/       #   uploaded photos + system logo
+├── packages/shared/              # pure logic both apps use (curriculum, load rules…)
+├── scripts/dev.mjs               # `npm run dev` → starts both apps
+└── package.json                  # npm workspaces
 ```
+
+**Rules:** the frontend never imports backend code (and has no database access); both may import `@shared/…`.
+The browser only talks to the frontend; the frontend forwards API calls, so cookies stay same-origin and no CORS is needed.
+
+| Command | What it does |
+|---|---|
+| `npm run dev` | Backend on :4000 + frontend on :3000 (open http://localhost:3000) |
+| `npm run build` | Builds the backend, then the frontend |
+| `npm run build:backend` / `build:frontend` | Build one app |
+| `npm run start:backend` / `start:frontend` | Run one built app |
+| `npm run typecheck` · `npm run lint` · `npm test` | Checks |
+
+### Deploying separately
+
+| | Frontend | Backend |
+|---|---|---|
+| Build | `npm ci && npm run build:frontend` | `npm ci && npm run build:backend` |
+| Start | `npm run start:frontend` (port 3000) | `npm run start:backend` (port 4000) |
+| Env | `BACKEND_URL` (e.g. `https://api.example.com`), `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | `DATABASE_URL`, `JWT_SECRET`, `GOOGLE_CLIENT_ID`, `SMTP_*`, `TRUST_PROXY=true` |
+| Database SSL | — | On in production for remote databases; off for a database on the same machine, or set `DB_SSL=false` / `?sslmode=disable` |
+| Env file (local) | `apps/frontend/.env.local` | `apps/backend/.env.local` |
+
+**Set `BACKEND_URL` before building the frontend** — Next.js writes the forwarding address into the
+build (`routes-manifest.json`), and the page gate also reads it at runtime, so it must be set for both steps.
+
+Both builds run from the repository root (npm workspaces), so the host needs the whole repo.
+Keep the backend reachable **only from the frontend** (private network / firewall): it trusts
+`X-Forwarded-For` from the frontend for client IPs, and uploaded files live on its disk.
 
 **Roles:** Academic Administrator, Department Chair, Instructor.
 
@@ -234,8 +264,8 @@ src/
 
 Approximate “Where You’re Logged In” locations use a **local** MaxMind GeoLite2 City database (no third-party IP geolocation API).
 
-1. Download GeoLite2-City `.mmdb` (see `data/geoip/README.md`).
-2. Place at `data/geoip/GeoLite2-City.mmdb`, or set `GEOIP_DB_PATH`.
-3. Behind a trusted reverse proxy, set `TRUST_PROXY=true` so client IPs come from `X-Forwarded-For`.
+1. Download GeoLite2-City `.mmdb` (see `apps/backend/data/geoip/README.md`).
+2. Place at `apps/backend/data/geoip/GeoLite2-City.mmdb`, or set `GEOIP_DB_PATH`.
+3. Behind a trusted reverse proxy, set `TRUST_PROXY=true` in the backend env (already needed because the frontend forwards requests) so client IPs come from `X-Forwarded-For`.
 
 Missing database, localhost, and private IPs never block login. Localhost shows **Local development**.

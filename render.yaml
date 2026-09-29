@@ -1,0 +1,53 @@
+# Render Blueprint — QRganize backend (API + uploaded files).
+# Render → New → Blueprint → pick this repo. Secrets marked `sync: false`
+# are asked for in the Render dashboard; they are never stored in git.
+# Full guide: DEPLOYMENT.md
+services:
+  - type: web
+    name: qrganize-backend
+    runtime: node
+    # Persistent disk (below) needs a paid instance; see DEPLOYMENT.md for the free-tier trade-off
+    plan: starter
+    # npm workspaces: install at the repo root so packages/shared resolves
+    buildCommand: npm ci && npm run build -w @qrganize/backend
+    # `next start` listens on $PORT, which Render provides
+    startCommand: npm run start:prod -w @qrganize/backend
+    # Public endpoint that also touches the database
+    healthCheckPath: /api/settings/logo
+    autoDeploy: true
+    disk:
+      name: qrganize-uploads
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      # Neon connection string (pooled), e.g. postgresql://…-pooler…neon.tech/neondb?sslmode=require
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: OTP_SECRET
+        generateValue: true
+      # Profile photos + system logo on the persistent disk (survive redeploys)
+      - key: UPLOAD_DIR
+        value: /var/data/uploads
+      # Behind Vercel + Render proxies — read the real client IP for rate limiting
+      - key: TRUST_PROXY
+        value: "true"
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: NEXT_PUBLIC_GOOGLE_CLIENT_ID
+        sync: false
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false

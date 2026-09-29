@@ -14,11 +14,11 @@
 /coverage
 
 # next.js
-/.next/
-/out/
+.next/
+out/
 
 # production
-/build
+build/
 
 # misc
 .DS_Store
@@ -32,14 +32,20 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # Local database dump
 qr_ganized.session.sql
+*.dump
 
-# MaxMind GeoLite2 local database (download separately; see data/geoip/README.md)
-/data/geoip/*.mmdb
-/data/geoip/*.mmdb.gz
-/data/geoip/*.tar.gz
+# User uploads (profile photos, system logo) — personal data, never committed.
+# Production keeps them on the Render disk (UPLOAD_DIR); see DEPLOYMENT.md.
+apps/backend/public/uploads/
+
+# MaxMind GeoLite2 local database (download separately; see apps/backend/data/geoip/README.md)
+apps/backend/data/geoip/*.mmdb
+apps/backend/data/geoip/*.mmdb.gz
+apps/backend/data/geoip/*.tar.gz
 
 # vercel
 .vercel
