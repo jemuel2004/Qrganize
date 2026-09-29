@@ -403,8 +403,7 @@ export default function InstructorWorkloadClient() {
   const hasPraiseSection = (workload?.praise ?? []).length > 0 || praiseSubjectLoads.length > 0 || praiseSplitLoads.length > 0;
   const effectiveTab: WorkloadTab = activeTab === 'praise' && !hasPraiseSection ? 'regular' : activeTab;
   /** What the Print button prints — the Total summary has no form of its own, so it prints the Regular Load. */
-  const printTab: 'regular' | 'overload' | 'praise' =
-    effectiveTab === 'total' || (effectiveTab === 'overload' && !hasOverloadSection) ? 'regular' : effectiveTab;
+  const printTab: 'regular' | 'overload' | 'praise' = effectiveTab === 'total' ? 'regular' : effectiveTab;
 
   useEffect(() => {
     if (activeTab !== effectiveTab) setActiveTab(effectiveTab);
