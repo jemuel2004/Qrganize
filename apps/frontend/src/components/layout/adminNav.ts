@@ -52,7 +52,7 @@ export const ALL_NAV_SECTIONS: NavSection[] = [
       { href: '/scheduling', label: 'Schedule Classes', badgeKey: 'scheduleClasses' },
       { href: '/program/class-program', label: 'Class Program' },
       { href: '/master-schedule', label: 'Master Schedule', badgeKey: 'masterSchedule' },
-      { href: '/faculty-schedules', label: 'Deload', badgeKey: 'facultySchedule' },
+      { href: '/faculty-schedules', label: 'Faculty Schedule', badgeKey: 'facultySchedule' },
     ],
   },
   {

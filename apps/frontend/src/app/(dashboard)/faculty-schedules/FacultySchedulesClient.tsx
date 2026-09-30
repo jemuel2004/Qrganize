@@ -641,7 +641,7 @@ export default function FacultySchedulesClient({
       <div>
         <BackButton />
         <div className="mt-4 sm:mt-7 mb-4">
-          <WatermarkTitle>Deload</WatermarkTitle>
+          <WatermarkTitle>Faculty Schedule</WatermarkTitle>
         </div>
       </div>
 
