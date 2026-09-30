@@ -1,5 +1,5 @@
 export { parseCurriculumWorkbook, applyMerges, cellStr, parseNum } from './parseWorkbook';
-export { compareImportRows, normalizeCourseCode, normalizeComparableText } from './compareExisting';
+export { compareImportRows, findSubjectsNotInFile, normalizeCourseCode, normalizeComparableText } from './compareExisting';
 export { matchHeader, normalizeHeader, scoreHeaderCells, looksLikeTableHeaderRow } from './columnMap';
 export { detectYearSemester, isSectionHeadingRow, looksLikeCourseCode } from './yearSemester';
 export { detectProgramFromCourseCodes } from './programDetect';

@@ -37,6 +37,7 @@ export async function GET(req: NextRequest) {
       semester: searchParams.get('semester'),
       academicYear: searchParams.get('academic_year'),
       curriculumVersion: searchParams.get('curriculum_version'),
+      includeUnassignedSubjects: searchParams.get('include') === 'unassigned_subjects',
     });
     return NextResponse.json({ blocks });
   } catch (error) {

@@ -22,6 +22,7 @@ import { categoryFromHours, categoryFromSubjectType, type SubjectCategory } from
 import { isScopedChairRole } from '@/lib/roleAccess';
 import {
   compareImportRows,
+  findSubjectsNotInFile,
   detectProgramFromCourseCodes,
   parseCurriculumWorkbook,
   type ColumnMapping,
@@ -84,6 +85,7 @@ interface ImportResult {
   imported:    number;
   reactivated: number;
   updated:     number;
+  removed:     number;
   total:       number;
   duplicated:  number;
   errors:      string[];
@@ -130,6 +132,28 @@ function importStatusMeta(status: ImportRowStatus): { label: string; className: 
   }
 }
 
+/* Large checkbox with a "some selected" (dash) state, like Gmail's select-all */
+function SelectBox({ checked, indeterminate = false, onChange, label }: {
+  checked: boolean;
+  indeterminate?: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (ref.current) ref.current.indeterminate = indeterminate && !checked; }, [indeterminate, checked]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={checked}
+      onChange={e => onChange(e.target.checked)}
+      aria-label={label}
+      title={label}
+      className="w-[18px] h-[18px] rounded border-[#94A3B8] accent-[#1D5BD6] cursor-pointer align-middle"
+    />
+  );
+}
+
 /* ── Main component ─────────────────────────────────────────────────────── */
 
 export default function CurriculumPage() {
@@ -154,6 +178,11 @@ export default function CurriculumPage() {
   const [deleteTarget,  setDeleteTarget]  = useState<{ id: number; code: string; name: string } | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteSuccess, setDeleteSuccess] = useState(false);
+  /* Gmail-style multi-select: tick rows (or Select all) → delete them together */
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkDeleteOpen,    setBulkDeleteOpen]    = useState(false);
+  const [bulkDeleteLoading, setBulkDeleteLoading] = useState(false);
+  const [bulkDeleteSuccess, setBulkDeleteSuccess] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [listLoading, setListLoading] = useState(false);
   const [booting, setBooting] = useState(true);
@@ -169,6 +198,10 @@ export default function CurriculumPage() {
   const [importProgramDetection, setImportProgramDetection] = useState<ProgramDetection | null>(null);
   const [importProgramMismatch, setImportProgramMismatch] = useState(false);
   const parsedImportRowsRef = useRef<ParsedSubjectRow[]>([]);
+  /* Subjects already saved for the file's year/semesters that the file doesn't list */
+  const [importNotInFile, setImportNotInFile] = useState<Curriculum[]>([]);
+  const [importRemoveNotInFile, setImportRemoveNotInFile] = useState(true);
+  const [importProgramId, setImportProgramId] = useState<number | null>(null);
   const [dragOver, setDragOver]           = useState(false);
   const [importParsing, setImportParsing] = useState(false);
   const [formatGuideOpen, setFormatGuideOpen] = useState(false);
@@ -223,6 +256,7 @@ export default function CurriculumPage() {
   }, []);
 
   useEffect(() => {
+    setSelectedIds(new Set());
     fetchCurriculums(filters.program_id, filters.year_level, filters.semester, filters.curriculum_version);
   }, [filters.program_id, filters.year_level, filters.semester, filters.curriculum_version, fetchCurriculums]);
 
@@ -338,6 +372,42 @@ export default function CurriculumPage() {
     }
   }
 
+  function toggleSelected(ids: number[], on: boolean) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      for (const id of ids) { if (on) next.add(id); else next.delete(id); }
+      return next;
+    });
+  }
+
+  async function confirmBulkDelete() {
+    const ids = selectedVisible.map(c => c.id);
+    if (bulkDeleteLoading || ids.length === 0) return;
+    setBulkDeleteLoading(true);
+    try {
+      const res = await fetch('/api/curriculum', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ program_id: filters.program_id, ids }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { toast.error(d.error || 'Failed to delete subjects.'); return; }
+      const count = d.deleted ?? ids.length;
+      setBulkDeleteSuccess(true);
+      fetchCurriculums(filters.program_id, filters.year_level, filters.semester, filters.curriculum_version);
+      setTimeout(() => {
+        setBulkDeleteOpen(false);
+        setBulkDeleteSuccess(false);
+        setSelectedIds(new Set());
+        toast.delete(`${count} subject${count === 1 ? '' : 's'} deleted.`);
+      }, 1300);
+    } catch {
+      toast.error('Connection error. Please try again.');
+    } finally {
+      setBulkDeleteLoading(false);
+    }
+  }
+
   async function handleDownload() {
     if (!filters.program_id || groups.length === 0) return;
     const prog = programs.find(p => String(p.id) === filters.program_id);
@@ -378,6 +448,9 @@ export default function CurriculumPage() {
     setImportProgramMismatch(false);
     setImportSaveSuccess(false);
     parsedImportRowsRef.current = [];
+    setImportNotInFile([]);
+    setImportRemoveNotInFile(true);
+    setImportProgramId(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
@@ -409,6 +482,8 @@ export default function CurriculumPage() {
       }
     }
     const compared = compareImportRows(parsedRows, existing, target?.id ?? 0);
+    setImportProgramId(target?.id ?? null);
+    setImportNotInFile(target ? findSubjectsNotInFile(parsedRows, existing, target.id) : []);
     setPreviewRows(compared.map(row => {
       const errors = target ? [...row.errors] : [...row.errors, 'Program was not detected or selected'];
       const valid = Boolean(target) && row.valid;
@@ -528,7 +603,8 @@ export default function CurriculumPage() {
       return;
     }
     const validRows = previewRows.filter(r => r.valid);
-    if (validRows.length === 0) { toast.error('No valid rows to import.'); return; }
+    const removeIds = importRemoveNotInFile ? importNotInFile.map(c => c.id) : [];
+    if (validRows.length === 0 && removeIds.length === 0) { toast.error('No valid rows to import.'); return; }
     setImportLoading(true);
     setImportStep('done');
     const minDelay = new Promise(resolve => setTimeout(resolve, 3000));
@@ -539,6 +615,8 @@ export default function CurriculumPage() {
           body: JSON.stringify({
             curriculum_version: filters.curriculum_version,
             apply_updates: true,
+            program_id: importProgramId,
+            remove_ids: removeIds,
             rows: validRows.map(r => ({ program_id: r.program_id, year_level: r.year_level, semester: r.semester, subject_code: r.subject_code, subject_name: r.subject_name, lecture_hours: r.lecture_hours, laboratory_hours: r.laboratory_hours, units: r.credit_units, prerequisites: r.prerequisites, grade: r.grade, subject_category: r.subject_category })),
           }),
         }),
@@ -554,7 +632,8 @@ export default function CurriculumPage() {
         imported: data.imported ?? 0,
         reactivated: data.reactivated ?? 0,
         updated: data.updated ?? 0,
-        total: data.total ?? ((data.imported ?? 0) + (data.reactivated ?? 0) + (data.updated ?? 0)),
+        removed: data.removed ?? 0,
+        total: data.total ?? ((data.imported ?? 0) + (data.reactivated ?? 0) + (data.updated ?? 0) + (data.removed ?? 0)),
         duplicated: data.duplicated ?? 0,
         errors: data.errors ?? [],
       };
@@ -562,6 +641,7 @@ export default function CurriculumPage() {
       if (result.imported    > 0) parts.push(`${result.imported} new`);
       if (result.updated     > 0) parts.push(`${result.updated} updated`);
       if (result.reactivated > 0) parts.push(`${result.reactivated} restored`);
+      if (result.removed     > 0) parts.push(`${result.removed} removed (not in file)`);
       if (result.duplicated  > 0) parts.push(`${result.duplicated} already existed`);
       if (result.errors.length)   parts.push(`${result.errors.length} error${result.errors.length !== 1 ? 's' : ''}`);
       const summary = parts.length ? parts.join(', ') : '0 subjects added';
@@ -585,6 +665,7 @@ export default function CurriculumPage() {
   /* ── Derived state ──────────────────────────────────────────────────── */
 
   const validCount  = previewRows.filter(r => r.valid).length;
+  const removeCount = importRemoveNotInFile ? importNotInFile.length : 0;
   const errorCount  = previewRows.filter(r => r.status === 'invalid').length;
   const newCount = previewRows.filter(r => r.status === 'new').length;
   const existingCount = previewRows.filter(r => r.status === 'existing').length;
@@ -611,6 +692,9 @@ export default function CurriculumPage() {
     (c.prerequisites || '').toLowerCase().includes(filters.search.toLowerCase()),
   );
   const groups = groupCurriculums(filtered);
+  /* Ticked rows still shown — a search that hides a row also leaves it out of Delete */
+  const selectedVisible = filtered.filter(c => selectedIds.has(c.id));
+  const allVisibleSelected = filtered.length > 0 && selectedVisible.length === filtered.length;
   const selectedProg = programs.find(p => String(p.id) === filters.program_id);
   const showPageSkeleton = useMinLoading(booting, LOADING_DELAY);
   const showTableSkeleton = useMinLoading(
@@ -900,6 +984,8 @@ export default function CurriculumPage() {
             const totalLec   = group.subjects.reduce((s, c) => s + Number(c.lecture_hours), 0);
             const totalLab   = group.subjects.reduce((s, c) => s + Number(c.laboratory_hours), 0);
             const totalUnits = group.subjects.reduce((s, c) => s + parseFloat(String(c.units)), 0);
+            const groupIds = group.subjects.map(c => c.id);
+            const groupSelected = groupIds.filter(id => selectedIds.has(id)).length;
             return (
               <div
                 key={group.key}
@@ -921,6 +1007,14 @@ export default function CurriculumPage() {
                   <table className="w-full text-sm min-w-[760px]">
                     <thead>
                       <tr className="border-b border-[color:var(--border-subtle)] bg-[#F8FAFC]">
+                        <th className="text-center pl-4 pr-1 py-3 w-10">
+                          <SelectBox
+                            checked={groupSelected === groupIds.length}
+                            indeterminate={groupSelected > 0}
+                            onChange={on => toggleSelected(groupIds, on)}
+                            label={`Select all ${group.yearLevel} ${group.semester} subjects`}
+                          />
+                        </th>
                         <th className="text-center px-4 py-3 text-xs font-semibold uppercase tracking-wide w-10 text-[#4B5563]">#</th>
                         <th className="text-center px-4 py-3 text-xs font-semibold uppercase tracking-wide whitespace-nowrap min-w-[7.5rem] text-[#4B5563]">Course Code</th>
                         <th className="text-left px-4 py-3 text-xs font-semibold uppercase tracking-wide text-[#4B5563]">Descriptive Title</th>
@@ -935,7 +1029,17 @@ export default function CurriculumPage() {
                     </thead>
                     <tbody className="divide-y divide-[color:var(--border-subtle)]">
                       {group.subjects.map((c, i) => (
-                        <tr key={c.id} className="hover:bg-[#F8FAFC] transition-colors">
+                        <tr
+                          key={c.id}
+                          className={`transition-colors ${selectedIds.has(c.id) ? 'bg-[#EFF6FF] hover:bg-[#E0EDFF]' : 'hover:bg-[#F8FAFC]'}`}
+                        >
+                          <td className="text-center pl-4 pr-1 py-3">
+                            <SelectBox
+                              checked={selectedIds.has(c.id)}
+                              onChange={on => toggleSelected([c.id], on)}
+                              label={`Select ${c.subject_code}`}
+                            />
+                          </td>
                           <td className="px-4 py-3 text-center text-xs text-[#94A3B8]">{i + 1}</td>
                           <td className="px-4 py-3 text-center whitespace-nowrap align-middle min-w-[7.5rem]">
                             <span className="inline-block font-mono font-semibold px-2.5 py-1 rounded text-xs border bg-[#EFF6FF] border-[#BFDBFE] text-[#1D5BD6] whitespace-nowrap">
@@ -978,7 +1082,7 @@ export default function CurriculumPage() {
                     </tbody>
                     <tfoot>
                       <tr className="border-t border-[color:var(--border)] bg-[#F8FAFC]">
-                        <td colSpan={4} className="px-4 py-3 text-right">
+                        <td colSpan={5} className="px-4 py-3 text-right">
                           <span className="text-xs font-bold uppercase tracking-widest text-[#4B5563]">TOTAL</span>
                         </td>
                         <td className="px-4 py-3 text-center font-bold text-[#0B2A5B]">{totalLec}</td>
@@ -1294,6 +1398,104 @@ export default function CurriculumPage() {
         )}
       </Modal>
 
+      {/* ── Selection bar (Gmail-style) — slides up while subjects are ticked ── */}
+      <AnimatePresence>
+        {selectedVisible.length > 0 && !bulkDeleteOpen && (
+          <motion.div
+            key="selection-bar"
+            initial={reduceMotion ? false : { opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 24 }}
+            transition={{ duration: reduceMotion ? 0 : 0.25, ease: [0.16, 1, 0.3, 1] }}
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 w-[calc(100%-2rem)] max-w-xl"
+          >
+            <div className="flex items-center gap-3 bg-[#0B2A5B] rounded-2xl shadow-xl pl-5 pr-2 py-2">
+              <span className="text-base font-semibold flex-1" style={{ color: '#FFFFFF' }}>
+                {selectedVisible.length} selected
+              </span>
+              {!allVisibleSelected && (
+                <button
+                  type="button"
+                  onClick={() => toggleSelected(filtered.map(c => c.id), true)}
+                  className="px-4 py-2.5 rounded-xl text-sm font-semibold hover:bg-white/10 transition whitespace-nowrap"
+                  style={{ color: '#FFFFFF' }}
+                >
+                  Select all {filtered.length}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setSelectedIds(new Set())}
+                className="px-4 py-2.5 rounded-xl text-sm font-semibold hover:bg-white/10 transition"
+                style={{ color: '#FFFFFF' }}
+              >
+                Clear
+              </button>
+              <motion.button
+                type="button"
+                onClick={() => { setBulkDeleteSuccess(false); setBulkDeleteOpen(true); }}
+                whileTap={reduceMotion ? undefined : { scale: 0.97 }}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-sm font-semibold transition"
+                style={{ color: '#FFFFFF' }}
+              >
+                <Trash2 className="w-4 h-4" /> Delete
+              </motion.button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Delete Selected Subjects Modal ─────────────────────────────────── */}
+      <Modal
+        open={bulkDeleteOpen}
+        onClose={() => { if (!bulkDeleteLoading && !bulkDeleteSuccess) setBulkDeleteOpen(false); }}
+        title="Delete Subjects"
+      >
+        {bulkDeleteSuccess && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-2xl backdrop-blur-md save-success-overlay">
+            <div className="save-success-badge flex flex-col items-center gap-3 px-8 py-7 rounded-2xl bg-white border border-[#E2E8F0] shadow-2xl">
+              <TrashDropAnimation className="bg-red-50 border-red-200" />
+              <p className="text-base font-semibold text-[#0B2A5B]">Subjects deleted!</p>
+            </div>
+          </div>
+        )}
+        <div className="space-y-5">
+          <div className="flex flex-col items-center text-center gap-3 pt-1">
+            <div className="w-16 h-16 rounded-2xl bg-red-50 border border-red-200 flex items-center justify-center">
+              <Trash2 className="w-8 h-8 text-red-500" />
+            </div>
+            <div>
+              <p className="text-base font-bold text-[#0B2A5B]">
+                Delete {selectedVisible.length} subject{selectedVisible.length === 1 ? '' : 's'}?
+              </p>
+              <p className="text-sm text-[#64748B] mt-2">This removes them from the curriculum. This action cannot be undone.</p>
+            </div>
+          </div>
+
+          <div className="flex gap-3 pt-1">
+            <button
+              type="button"
+              onClick={() => setBulkDeleteOpen(false)}
+              disabled={bulkDeleteLoading || bulkDeleteSuccess}
+              className="flex-1 border border-[#E2E8F0] py-2.5 rounded-xl hover:bg-[#F8FAFC] transition text-sm font-medium text-[#64748B] disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={confirmBulkDelete}
+              disabled={bulkDeleteLoading || bulkDeleteSuccess}
+              className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 rounded-xl transition text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-60"
+              style={{ color: '#FFFFFF' }}
+            >
+              {bulkDeleteLoading
+                ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Deleting…</>
+                : <><Trash2 className="w-4 h-4" /> Delete {selectedVisible.length}</>}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
       {/* ── Excel Import Modal ─────────────────────────────────────────────── */}
       {importOpen && (
         <div
@@ -1579,7 +1781,42 @@ export default function CurriculumPage() {
                     </div>
                   )}
 
-                  {validCount === 0 && (
+                  {importNotInFile.length > 0 && (
+                    <div className="rounded-2xl border border-[#FECACA] bg-[#FEF2F2] px-4 py-3 text-sm text-[#991B1B]">
+                      <label className="flex items-start gap-3 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={importRemoveNotInFile}
+                          onChange={e => setImportRemoveNotInFile(e.target.checked)}
+                          className="w-[18px] h-[18px] mt-0.5 accent-[#DC2626] cursor-pointer flex-shrink-0"
+                        />
+                        <span>
+                          <span className="font-semibold">
+                            Remove {importNotInFile.length} subject{importNotInFile.length !== 1 ? 's' : ''} not in this file
+                          </span>
+                          <span className="block text-xs text-[#B91C1C] mt-0.5">
+                            Already saved for these semesters but missing from the Excel — removing them makes the curriculum match the file.
+                          </span>
+                        </span>
+                      </label>
+                      <div className="mt-2.5 ml-[30px] flex flex-wrap gap-1.5">
+                        {importNotInFile.map(c => (
+                          <span
+                            key={c.id}
+                            title={`${c.subject_name} — ${c.year_level}, ${c.semester}`}
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-xs font-mono font-semibold ${
+                              importRemoveNotInFile ? 'bg-white border-[#FECACA] text-[#B91C1C] line-through' : 'bg-white border-[#E2E8F0] text-[#475569]'
+                            }`}
+                          >
+                            {c.subject_code}
+                            <span className="font-sans font-medium text-[#94A3B8] no-underline">· {c.year_level.replace(' Year', '')} {c.semester.replace(' Semester', ' Sem')}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {validCount === 0 && !(importRemoveNotInFile && importNotInFile.length > 0) && (
                     <div className="rounded-2xl border border-[#FECACA] bg-[#FEF2F2] px-4 py-3 flex items-start gap-3 text-sm text-[#B91C1C]">
                       <AlertTriangle className="w-4 h-4 text-[#EF4444] flex-shrink-0 mt-0.5" />
                       <p>No valid rows to import. Check the issues column below.</p>
@@ -1716,11 +1953,14 @@ export default function CurriculumPage() {
                     Back to upload
                   </button>
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 w-full sm:w-auto">
-                    <span className="text-sm text-[#64748B] text-center sm:text-right">{validCount} will be saved</span>
+                    <span className="text-sm text-[#64748B] text-center sm:text-right">
+                      {validCount} will be saved
+                      {removeCount > 0 && <>, {removeCount} removed</>}
+                    </span>
                     <button
                       type="button"
                       onClick={handleConfirmImport}
-                      disabled={importLoading || validCount === 0 || importProgramMismatch}
+                      disabled={importLoading || (validCount === 0 && removeCount === 0) || importProgramMismatch}
                       className="min-h-11 w-full sm:w-auto px-5 py-2.5 text-white rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition text-sm font-semibold flex items-center justify-center gap-2 bg-[#1D5BD6] hover:bg-[#164BB5] shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D5BD6] focus-visible:ring-offset-2"
                     >
                       {importLoading

@@ -67,15 +67,12 @@ Then choose one:
 3. Deploy. When it's live, open `https://<your-service>.onrender.com/api/settings/logo` —
    it should return JSON such as `{"logoUrl":null}`. Copy the service URL for step 3.
 
-### Uploaded photos and logo — the persistent disk
+### Uploaded photos and logo
 
-Render's normal file system is erased on every deploy/restart. `render.yaml` therefore
-attaches a **1 GB disk at `/var/data`** and sets `UPLOAD_DIR=/var/data/uploads`, so profile
-photos and the system logo survive. A disk needs a paid instance (**Starter**).
-
-On the **Free** plan instead: delete the `disk:` block and the `UPLOAD_DIR` entry and set
-`plan: free`. Everything works, but **uploaded photos and the logo are lost on each deploy or
-restart**, and the service sleeps after 15 minutes idle (the first visit then takes ~1 minute).
+Profile photos and the system logo are stored **in the database** (`uploaded_files` table),
+so they survive deploys, restarts and free-plan sleep. No persistent disk is needed — on the
+**Free** plan you can delete the `disk:` block and the `UPLOAD_DIR` entry and set `plan: free`
+(the service then sleeps after 15 minutes idle; the first visit takes ~1 minute).
 
 ---
 

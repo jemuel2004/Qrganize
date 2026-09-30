@@ -6,6 +6,7 @@
 
 import type { WeekDay } from '@shared/dayCombination';
 import { fetchDayCombinations } from '@/lib/dayCombinations';
+import type { WorkloadDocumentKind } from '@/lib/workloadPrintStorage';
 import {
   buildOfficialGroups,
   loadDayPatterns,
@@ -227,7 +228,7 @@ export type BuildRegularLoadPrintInput = {
   academicYear: string;
   logoOrigin?: string;
   /** Which official form to print — same layout, different title/summary. */
-  documentKind?: 'regular' | 'overload' | 'praise';
+  documentKind?: WorkloadDocumentKind;
   /** The semester's day combinations (Settings); none → the fixed MTh/TF/Wed groups */
   dayCombinations?: readonly { days: readonly WeekDay[]; is_active?: boolean }[] | null;
 };
@@ -323,6 +324,32 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
         if (!isP) totalRegularWU += hrs;
         const adjustedRow: SplitRow = { ...row, wu, hours: hrs };
         const pr: PRow = { load, row: adjustedRow, startTime, endTime };
+        const slotId = matchOfficialSlot(dayPat, startTime, endTime, groups);
+        if (slotId) {
+          if (!placed[slotId]) placed[slotId] = [];
+          placed[slotId].push(pr);
+        } else {
+          unmatchedPrint.push(pr);
+        }
+      }
+    }
+  } else if (documentKind === 'deload') {
+    /* Deload: every subject of the term on one form, each at its full Lec/Lab value
+       (Regular, Overload and Praise alike — no split between documents). */
+    for (const load of loads) {
+      const lec = parseFloat(String(load.lecture_hours)) || 0;
+      const lab = parseFloat(String(load.laboratory_hours)) || 0;
+      const hasBoth = lec > 0 && lab > 0;
+      for (const row of splitLoad(load, isP)) {
+        const wu = hasBoth ? (row.type === 'lec' ? lec : lab * 0.75) : calcWorkloadUnits(lec, lab);
+        const hrs = hasBoth ? (row.type === 'lec' ? lec : lab) : lec + lab;
+        if (isP ? wu < 0.001 : hrs < 0.001) continue;
+        totalRegularWU += isP ? wu : hrs;
+        totalRegularHours += hrs;
+        const startTime = row.type === 'lec' ? (load.lec_start_time ?? load.start_time) : (load.lab_start_time ?? load.start_time);
+        const endTime = row.type === 'lec' ? (load.lec_end_time ?? load.end_time) : (load.lab_end_time ?? load.end_time);
+        const dayPat = row.type === 'lec' ? (load.lec_day_pattern ?? load.day_pattern) : (load.lab_day_pattern ?? load.day_pattern);
+        const pr: PRow = { load, row: { ...row, wu, hours: hrs }, startTime, endTime };
         const slotId = matchOfficialSlot(dayPat, startTime, endTime, groups);
         if (slotId) {
           if (!placed[slotId]) placed[slotId] = [];
@@ -525,7 +552,7 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
 
   const totalUnitsRow = row(true, [
     { text: 'Total No. of Units', labelPad: true, colspan: 2 },
-    { text: 'Regular Load', center: true },
+    { text: documentKind === 'deload' ? 'Deload' : 'Regular Load', center: true },
     {}, {},
     { text: netTotal.toFixed(2), center: true },
     {}, {},
@@ -541,8 +568,8 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
   );
 
   let summary: WorkloadFormSummaryRow[];
-  if (documentKind === 'regular') {
-    /* Keep Regular summary identical to the approved official form. */
+  if (documentKind === 'regular' || documentKind === 'deload') {
+    /* Keep Regular summary identical to the approved official form (Deload reuses it). */
     summary = [noOfUnitsRow, designationRow, ...specialRows, noOfPrepRow, totalUnitsRow];
   } else {
     /* Overload / Praise: same row skeleton as Regular; only values + load label differ. */
@@ -581,8 +608,8 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
   }
 
   return {
-    title: documentKind === 'overload' ? 'FACULTY WORKLOAD — OVERLOAD'
-      : documentKind === 'praise' ? 'FACULTY WORKLOAD — PRAISE LOAD'
+    title: documentKind === 'praise' ? 'FACULTY WORKLOAD — PRAISE LOAD'
+      : documentKind === 'deload' ? 'FACULTY WORKLOAD — DELOAD'
       : 'FACULTY WORKLOAD',
     department: NEMSU_OFFICIAL_DEPT,
     semesterHeading: semesterHeading(semester),
@@ -816,7 +843,9 @@ export async function printRegularLoadDocument(
       ? 'faculty-workload-overload.html'
       : documentKind === 'praise'
         ? 'faculty-workload-praise-load.html'
-        : 'faculty-workload-regular-load.html';
+        : documentKind === 'deload'
+          ? 'faculty-workload-deload.html'
+          : 'faculty-workload-regular-load.html';
 
   /* Open first — before HTML build — so mobile browsers still treat it as a gesture. */
   const preOpened = openBlankPrintWindow('width=860,height=1150');

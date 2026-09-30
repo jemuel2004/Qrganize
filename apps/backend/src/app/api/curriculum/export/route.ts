@@ -9,7 +9,7 @@ import {
   type ExportLogo,
 } from '@shared/curriculumExport';
 import { withAudit } from '@/services/audit';
-import { findUploadedFile } from '@/services/uploadStorage';
+import { readUpload } from '@/services/uploadStorage';
 
 interface ExportBody {
   programName?: string;
@@ -62,13 +62,14 @@ async function resolveLogo(clientLogo?: ExportBody['logo']): Promise<ExportLogo 
   try {
     const result = await query("SELECT value FROM system_settings WHERE key = 'logo_url'");
     const stored = String(result.rows[0]?.value ?? '').split('?')[0];
-    const candidates = [
-      findUploadedFile(stored) ?? '',
-      findUploadedFile('/uploads/logo/system-logo.png') ?? '',
-      path.join(process.cwd(), 'public', 'nemlogo', 'NEMSU-logo.png'),
-    ].filter(Boolean);
+    for (const url of [stored, '/uploads/logo/system-logo.png']) {
+      const upload = await readUpload(url);
+      if (!upload || upload.data.byteLength > 1_200_000) continue;
+      if (upload.contentType !== 'image/png' && upload.contentType !== 'image/jpeg') continue;
+      return { buffer: new Uint8Array(upload.data), extension: upload.contentType === 'image/jpeg' ? 'jpeg' : 'png' };
+    }
 
-    for (const file of candidates) {
+    for (const file of [path.join(process.cwd(), 'public', 'nemlogo', 'NEMSU-logo.png')]) {
       const stat = await fs.stat(file).catch(() => null);
       if (!stat?.isFile() || stat.size > 1_200_000) continue;
       const buffer = new Uint8Array(await fs.readFile(file));

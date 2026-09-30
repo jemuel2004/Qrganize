@@ -6,8 +6,9 @@ import { useRouter } from 'next/navigation';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
 import { useToast } from '@/context/ToastContext';
 import { useSchoolYear } from '@/context/SchoolYearContext';
-import { SearchInput, FilterSelect, FilterBar } from '@/components/ui/SearchFilter';
+import { SearchInput, FilterBar } from '@/components/ui/SearchFilter';
 import Modal from '@/components/ui/Modal';
+import FriendlySelect from '@/components/ui/FriendlySelect';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import TrashDropAnimation from '@/components/ui/TrashDropAnimation';
@@ -25,7 +26,7 @@ import { printRegularLoadDocument } from '@/lib/instructorWorkloadPrintDocument'
 import { openWorkloadPrintableVersion } from '@/lib/openPrintHtmlDocument';
 import { coerceSubjectCategory } from '@shared/subjectCategory';
 import { OVERLOAD_MAX_UNITS, REGULAR_LOAD_MAX_UNITS } from '@shared/regularLoad';
-import { blockCurriculumVersion, curriculumVersionAbbrev } from '@shared/curriculumVersion';
+import { blockCurriculumVersion, curriculumVersionLabel } from '@shared/curriculumVersion';
 import { ListSkeleton, Skeleton, TableSkeleton } from '@/components/ui/skeletons';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { EmploymentBadge } from '@/components/ui/EmploymentBadge';
@@ -35,7 +36,7 @@ import { isSameSubject, mergeSameSubjects } from '@shared/subjectCode';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import CountFilterTabs from '@/components/ui/CountFilterTabs';
 import {
-  Plus, X, AlertTriangle,
+  Plus, X, AlertTriangle, Check, Minus,
   Eye, Award, CheckCircle2, Pencil,
   Trash2, ArrowUpCircle, ArrowDownCircle, ArrowRight, ArrowLeft,
 } from 'lucide-react';
@@ -74,6 +75,8 @@ interface Block {
   subject_count?: number; unassigned_count?: number;
   assigned_count?: number; scheduled_count?: number;
   curriculum_version?: string;
+  /** Subjects still unassigned in this block (requested via ?include=unassigned_subjects) */
+  unassigned_subjects?: PrioritySubject[];
 }
 
 /** A block is complete only when it has subjects and none remain unassigned. 0/0 is not complete. */
@@ -81,11 +84,12 @@ function isBlockFullyAssigned(b: Block): boolean {
   return Number(b.subject_count) > 0 && Number(b.unassigned_count) === 0;
 }
 
-function blockDropdownLabel(b: Block): string {
-  const abbr = curriculumVersionAbbrev(blockCurriculumVersion(b.curriculum_version));
-  const available = Number(b.unassigned_count) || 0;
-  return `Block ${b.block_name} — ${abbr} · ${available} Available`;
+/** Open subjects in the block — only the faculty's Subjects to Handle when they have any. */
+function blockAvailableCount(b: Block, handled: PrioritySubject[]): number {
+  if (handled.length === 0 || !b.unassigned_subjects) return Number(b.unassigned_count) || 0;
+  return b.unassigned_subjects.filter(s => handled.some(h => isSameSubject(h, s))).length;
 }
+
 
 interface Program { id: number; code: string; name: string; department?: string | null; }
 
@@ -183,16 +187,6 @@ interface MoveToOverloadContext {
   load: WorkloadLoad;
   /** 'lec' | 'lab' = component-specific; 'full' = entire subject */
   component: 'lec' | 'lab' | 'full';
-}
-
-/* Shown when instructor still has remaining regular load and admin clicks Assign */
-interface RemainingBalanceWarning {
-  msId: number;
-  subjectCode: string;
-  subjectName: string;
-  remaining: number;
-  subjectValue: number;
-  unit: string;
 }
 
 /* Shown when instructor's regular load is full and admin clicks Assign */
@@ -334,6 +328,9 @@ function extractYearNum(yearLevel: string): string {
 }
 
 /* -- Load Deduction types ----------------------------------------------- */
+/** Regular load as shown to users — a whole number (18.25 reads as 18); maths keeps the exact value. */
+const loadDisplay = (units: number) => String(Math.round(units));
+
 interface DeductionEntry { type: string; description: string; units: string; }
 const DEDUCTION_OPTIONS = ['Designation', 'Extension', 'Research/Extension', 'Special Assignment'] as const;
 
@@ -418,14 +415,15 @@ export default function WorkloadPage({
   // Workload form groups follow the term's day combinations (Settings → Day Combinations)
   const { active: dayCombos } = useDayCombinations(listSemester, listYear);
 
-  // Initialize from global school year context once it loads
+  // Follow the global active term — on load and whenever it changes (Settings,
+  // another tab or another admin). Master Schedule → Assign keeps the subject's
+  // own term instead (set below), so it is left alone there.
   useEffect(() => {
-    if (!syLoading && !syInit.current) {
-      syInit.current = true;
-      if (globalYear)    setListYear(globalYear);
-      if (globalSemester) setListSemester(globalSemester);
-    }
-  }, [syLoading, globalYear, globalSemester]);
+    if (syLoading || assignMsId) return;
+    syInit.current = true;
+    setListYear(globalYear);
+    setListSemester(globalSemester);
+  }, [syLoading, globalYear, globalSemester, assignMsId]);
 
   const [assignTarget, setAssignTarget] = useState<AssignTarget | null>(null);
   const [assignTargetLoading, setAssignTargetLoading] = useState(assignMsId != null);
@@ -473,6 +471,18 @@ export default function WorkloadPage({
   const filterSemester    = listSemester;
   const filterAcademicYear = listYear;
 
+  /* A new term has different blocks — drop the old Program / Year / Block picks. */
+  const lastTerm = useRef('');
+  useEffect(() => {
+    const term = `${listSemester}|${listYear}`;
+    if (lastTerm.current && lastTerm.current !== term && !assignMsId) {
+      setFilterProgram('');
+      setFilterYearLevel('');
+      setFilterBlock('');
+    }
+    lastTerm.current = term;
+  }, [listSemester, listYear, assignMsId]);
+
   const [availableSchedules, setAvailableSchedules] = useState<Schedule[]>([]);
   const [availLoading, setAvailLoading] = useState(false);
   const [filtersApplied, setFiltersApplied] = useState(false);
@@ -481,7 +491,6 @@ export default function WorkloadPage({
   const [assignError, setAssignError] = useState('');
 
   /* Assignment confirmation modals */
-  const [remainingBalanceWarning, setRemainingBalanceWarning] = useState<RemainingBalanceWarning | null>(null);
   const [overloadConfirm, setOverloadConfirm] = useState<OverloadConfirmData | null>(null);
 
   /* Move to Overload modal */
@@ -567,7 +576,7 @@ export default function WorkloadPage({
   }, []);
 
   const loadBlocks = useCallback(() => {
-    fetch('/api/blocks')
+    fetch('/api/blocks?include=unassigned_subjects')
       .then(async r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
@@ -622,6 +631,7 @@ export default function WorkloadPage({
     ? faculty.find(f => f.id === selectedFaculty.id) ?? selectedFaculty
     : null;
   const facultyBlockIds = new Set(liveSelectedFaculty?.assigned_block_ids ?? []);
+  const handledSubjects = liveSelectedFaculty?.priority_subjects ?? [];
   const termBlocks = allBlocks.filter(b =>
     (!filterSemester     || b.semester      === filterSemester) &&
     (!filterAcademicYear || b.academic_year === filterAcademicYear)
@@ -629,10 +639,15 @@ export default function WorkloadPage({
   const assignedTermBlocks = termBlocks.filter(b => facultyBlockIds.has(b.id));
   // No blocks assigned for this term → open: every block is available (same rule as the API)
   const facultyBlocks = assignedTermBlocks.length > 0 ? assignedTermBlocks : termBlocks;
+  /* With Subjects to Handle set, only blocks that still offer one of them count —
+     so Program and Year Level list just those. The picked block stays listed. */
+  const handledBlocks = handledSubjects.length === 0
+    ? facultyBlocks
+    : facultyBlocks.filter(b => blockAvailableCount(b, handledSubjects) > 0 || String(b.id) === filterBlock);
 
   /* Master Schedule -> Assign: Program / Year / Block describe the SUBJECT, so their
      options are every block of the term, never narrowed to the faculty's own. */
-  const optionBlocks = keepSubjectContext ? termBlocks : facultyBlocks;
+  const optionBlocks = keepSubjectContext ? termBlocks : handledBlocks;
 
   /* Assigned blocks in the selected program (used to build year-level options) */
   const programBlocks = optionBlocks.filter(b => !filterProgram || String(b.program_id) === filterProgram);
@@ -649,7 +664,7 @@ export default function WorkloadPage({
 
   useEffect(() => {
     if (!selectedFaculty || keepSubjectContext) return;
-    const allowed = [...new Set(facultyBlocks.map(b => String(b.program_id)))];
+    const allowed = [...new Set(handledBlocks.map(b => String(b.program_id)))];
     if (filterProgram && allowed.includes(filterProgram)) return;
     const next = allowed.length === 1 ? allowed[0] : '';
     if (next !== filterProgram) {
@@ -660,7 +675,7 @@ export default function WorkloadPage({
       setFiltersApplied(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedFaculty?.id, liveSelectedFaculty?.assigned_block_ids?.join(','), allBlocks, filterSemester, filterAcademicYear, keepSubjectContext]);
+  }, [selectedFaculty?.id, liveSelectedFaculty?.assigned_block_ids?.join(','), handledSubjects.map(s => s.subject_code).join(','), allBlocks, filterSemester, filterAcademicYear, keepSubjectContext]);
 
   function handleBlockChange(blockId: string) {
     if (blockId) {
@@ -749,7 +764,6 @@ export default function WorkloadPage({
     }
     setAssignMsg('');
     setAssignError('');
-    setRemainingBalanceWarning(null);
     setOverloadConfirm(null);
     setMoveToOverloadTarget(null);
     setMoveToOverloadMode('entire');
@@ -930,27 +944,21 @@ export default function WorkloadPage({
       const data = await res.json();
 
       if (data.requires_confirmation) {
+        // Fits in the remaining regular load — no need to ask, save it straight away.
         if (data.confirmation_type === 'remaining_balance') {
-          setRemainingBalanceWarning({
-            msId,
-            subjectCode:  data.subject_code  || '',
-            subjectName:  data.subject_name  || '',
-            remaining:    data.remaining,
-            subjectValue: data.subject_value,
-            unit:         data.unit,
-          });
-        } else {
-          setOverloadConfirm({
-            msId,
-            subjectCode:  data.subject_code  || '',
-            subjectName:  data.subject_name  || '',
-            subjectValue: data.subject_value,
-            unit:         data.unit,
-            loadLimit:    data.load_limit,
-            currentLoad:  data.current_load,
-            remaining:    data.remaining ?? 0,
-          });
+          return assignSubject(msId, 'regular', opts);
         }
+        // Would go past the regular load — this one still needs the admin's OK.
+        setOverloadConfirm({
+          msId,
+          subjectCode:  data.subject_code  || '',
+          subjectName:  data.subject_name  || '',
+          subjectValue: data.subject_value,
+          unit:         data.unit,
+          loadLimit:    data.load_limit,
+          currentLoad:  data.current_load,
+          remaining:    data.remaining ?? 0,
+        });
         return { ok: false };
       }
 
@@ -964,7 +972,6 @@ export default function WorkloadPage({
       // From a "Continue Adding" dialog the dialog itself shows the success check.
       if (!opts.fromConfirm) {
         toast.success(`Subject assigned successfully.${remainingNote}`);
-        setRemainingBalanceWarning(null);
         setOverloadConfirm(null);
       }
       loadWorkload(); loadAllFacultyLoads(); loadAvailable(); loadFacultySummaries(); loadBlocks();
@@ -1412,7 +1419,7 @@ export default function WorkloadPage({
 
   const selectFaculty = useCallback((f: Faculty) => {
     setAssignMsg(''); setAssignError('');
-    setRemainingBalanceWarning(null); setOverloadConfirm(null);
+    setOverloadConfirm(null);
     setMoveToOverloadTarget(null); setMoveToOverloadMode('entire'); setSplitRegularAmount(0); setComponentSplitUnits(0);
     /* The faculty's own program only seeds the filters in the normal flow. From
        Master Schedule → Assign they describe the subject and are left alone. */
@@ -1500,7 +1507,7 @@ export default function WorkloadPage({
       }
       const total = deductions.reduce((s, e) => s + e.units, 0);
       if (total > REGULAR_LOAD_MAX_UNITS) {
-        setDesignationError(`Total deduction cannot exceed ${REGULAR_LOAD_MAX_UNITS} units.`); return;
+        setDesignationError(`Total deduction cannot exceed ${loadDisplay(REGULAR_LOAD_MAX_UNITS)} units.`); return;
       }
     }
 
@@ -1525,7 +1532,7 @@ export default function WorkloadPage({
       setDesignationPending(null);
       setDeductionMsg('Load deduction saved. Workload updated.');
       const availableLoad = Math.max(0, REGULAR_LOAD_MAX_UNITS - (Number(data.total_deduction) || 0));
-      toast.success(`Load deduction saved successfully. ${availableLoad.toFixed(2)} units remaining.`);
+      toast.success(`Load deduction saved successfully. ${loadDisplay(availableLoad)} units remaining.`);
       loadWorkload();
       loadAllFacultyLoads();
       loadFacultySummaries();
@@ -1709,15 +1716,133 @@ export default function WorkloadPage({
   }
 
 
-  /* Priority Subjects — a visual recommendation from the instructor's profile,
-     not an assignment restriction. Any subject can still be assigned. */
-  const prioritySubjects = selectedFaculty?.priority_subjects ?? [];
+  /* Subjects to Handle (Faculty profile): when set, only those subjects are
+     offered here. Empty → every subject. A Master Schedule → Assign target stays visible. */
+  const prioritySubjects = handledSubjects;
   const isPrioritySubject = (s: { subject_code: string; subject_name: string }) => prioritySubjects.some(p => isSameSubject(p, s));
 
-  /* Subject-table client-side search — scoped to the active Major/Minor tab */
-  const categorySchedules = availableSchedules.filter(s =>
-    coerceSubjectCategory(s.subject_category, 'Minor') === subjectCategory
+  /* Subjects offered to this faculty across both tabs */
+  const offeredSchedules = availableSchedules.filter(s =>
+    prioritySubjects.length === 0 || isPrioritySubject(s) || s.id === assignTarget?.id
   );
+  const categoryOf = (s: Schedule) => coerceSubjectCategory(s.subject_category, 'Minor');
+  const categoryCounts = {
+    Minor: offeredSchedules.filter(s => categoryOf(s) === 'Minor').length,
+    Major: offeredSchedules.filter(s => categoryOf(s) === 'Major').length,
+  };
+  /* Subject-table client-side search — scoped to the active Major/Minor tab */
+  const categorySchedules = offeredSchedules.filter(s => categoryOf(s) === subjectCategory);
+
+  /* Open the tab that has this faculty's subjects: Minor first, Major only when
+     Minor is empty. After each fresh load (e.g. once the last subject of a tab is
+     assigned) an empty tab hands over to the other one. A tab the user clicks is
+     never overridden — this only reacts to new data. */
+  const autoTabKey = useRef('');
+  const wasAvailLoading = useRef(false);
+  useEffect(() => {
+    const justLoaded = wasAvailLoading.current && !availLoading;
+    wasAvailLoading.current = availLoading;
+    if (!selectedFaculty || !filtersApplied || availLoading || assignTarget) return;
+    const key = `${selectedFaculty.id}|${filterBlock}|${filterSemester}|${filterAcademicYear}`;
+    const firstLoad = autoTabKey.current !== key;
+    if (!firstLoad && !justLoaded) return;
+    autoTabKey.current = key;
+    const other = subjectCategory === 'Minor' ? 'Major' : 'Minor';
+    if (firstLoad) {
+      setSubjectCategory(categoryCounts.Minor === 0 && categoryCounts.Major > 0 ? 'Major' : 'Minor');
+    } else if (categoryCounts[subjectCategory] === 0 && categoryCounts[other] > 0) {
+      setSubjectCategory(other);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedFaculty?.id, filtersApplied, availLoading, assignTarget, filterBlock, filterSemester, filterAcademicYear, categoryCounts.Minor, categoryCounts.Major]);
+
+  /* -- Multi-select: pick several subjects (either tab), assign in one save -- */
+  const [pickedIds, setPickedIds] = useState<Set<number>>(() => new Set());
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkState, setBulkState] = useState<'idle' | 'saving' | 'success'>('idle');
+  const [bulkProgress, setBulkProgress] = useState(0);
+  /** Size of the running/finished batch — the picked list empties once the table refreshes */
+  const [bulkTotal, setBulkTotal] = useState(0);
+  const [bulkNote, setBulkNote] = useState('');
+  useEffect(() => { setPickedIds(new Set()); }, [selectedFaculty?.id, filterBlock, filterSemester, filterAcademicYear]);
+  const pickedSchedules = offeredSchedules.filter(s => pickedIds.has(s.id));
+  const loadUnit = isPermanent ? 'units' : 'hours';
+  const scheduleValue = (s: Schedule) => isPermanent
+    ? calcWorkloadUnits(parseFloat(String(s.lecture_hours)) || 0, parseFloat(String(s.laboratory_hours)) || 0)
+    : parseFloat(String(s.total_hours)) || 0;
+  const pickedTotal = pickedSchedules.reduce((sum, s) => sum + scheduleValue(s), 0);
+
+  function togglePicked(id: number) {
+    setPickedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  function setPickedMany(ids: number[], on: boolean) {
+    setPickedIds(prev => {
+      const next = new Set(prev);
+      for (const id of ids) { if (on) next.add(id); else next.delete(id); }
+      return next;
+    });
+  }
+
+  /** The picked subjects all fit in the remaining regular load — no warning needed. */
+  const pickedFits = remainingForWarning !== null && pickedTotal <= remainingForWarning + 0.001;
+
+  /** Saves every picked subject as Regular (over-limit ones can be moved to Overload after).
+   *  `direct` = started from the bar without the dialog, so report with a toast. */
+  async function assignPicked({ direct = false }: { direct?: boolean } = {}) {
+    if (!selectedFaculty || pickedSchedules.length === 0 || bulkState !== 'idle') return;
+    const list = pickedSchedules;
+    setBulkState('saving');
+    setBulkProgress(0);
+    setBulkTotal(list.length);
+    const failed: { id: number; error: string }[] = [];
+    let remaining: number | null = null;
+    for (let i = 0; i < list.length; i++) {
+      const s = list[i];
+      try {
+        const res = await fetch('/api/workload/assign', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ faculty_id: selectedFaculty.id, master_schedule_id: s.id, assign_category: 'regular' }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) failed.push({ id: s.id, error: `${s.subject_code}: ${data.error || 'could not be assigned.'}` });
+        else if (typeof data.remaining === 'number') remaining = data.remaining;
+      } catch {
+        failed.push({ id: s.id, error: `${s.subject_code}: connection error.` });
+      }
+      setBulkProgress(i + 1);
+    }
+    loadWorkload(); loadAllFacultyLoads(); loadAvailable(); loadFacultySummaries(); loadBlocks();
+
+    const done = list.length - failed.length;
+    const note = remaining === null ? ''
+      : remaining < -0.001 ? `${Math.abs(remaining).toFixed(2)} ${loadUnit} over the regular limit.`
+      : `${remaining.toFixed(2)} ${loadUnit} remaining.`;
+    if (failed.length > 0) {
+      setBulkState('idle');
+      setPickedIds(new Set(failed.map(f => f.id)));
+      if (done > 0) toast.success(`${done} subject${done === 1 ? '' : 's'} assigned. ${note}`.trim());
+      toast.error(failed.length === 1 ? failed[0].error : `${failed.length} subjects were not assigned. ${failed[0].error}`);
+      return;
+    }
+    if (direct) {
+      toast.success(`${done === 1 ? 'Subject' : `${done} subjects`} assigned. ${note}`.trim());
+      setBulkState('idle');
+      setPickedIds(new Set());
+      return;
+    }
+    setBulkNote(note);
+    setBulkState('success');
+    setTimeout(() => {
+      setBulkOpen(false);
+      setBulkState('idle');
+      setPickedIds(new Set());
+    }, 1500);
+  }
   const displaySchedules = categorySchedules
     .filter(s =>
       !subjectSearch ||
@@ -1874,7 +1999,7 @@ export default function WorkloadPage({
                 <span className="px-2 py-1 rounded-lg bg-[#EFF6FF] text-[#1D5BD6]">Lec {parseFloat(String(assignTarget.lecture_hours))} hrs</span>
               )}
               {(parseFloat(String(assignTarget.laboratory_hours)) || 0) > 0 && (
-                <span className="px-2 py-1 rounded-lg bg-[#F5F3FF] text-[#7C3AED]">Lab {parseFloat(String(assignTarget.laboratory_hours))} hrs</span>
+                <span className="px-2 py-1 rounded-lg bg-amber-50 text-amber-700">Lab {parseFloat(String(assignTarget.laboratory_hours))} hrs</span>
               )}
               <span className="px-2 py-1 rounded-lg bg-[#F1F5F9] text-[#334155]">{parseFloat(String(assignTarget.units)).toFixed(2)} units</span>
             </div>
@@ -1946,16 +2071,17 @@ export default function WorkloadPage({
             <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
               Employment Type
             </label>
-            <FilterSelect
+            <FriendlySelect
               value={filterEmploymentType}
               onChange={v => { setFilterEmploymentType(v); resetInstructorAndFilters(); }}
               label="Employment Type"
-              className="w-full min-h-[42px]"
-            >
-              <option value="">— All Types —</option>
-              <option value="Permanent">Permanent</option>
-              <option value="Contractual">Contractual</option>
-            </FilterSelect>
+              minPanelWidth={240}
+              options={[
+                { value: '', label: 'All Types' },
+                { value: 'Permanent', label: 'Permanent', hint: 'Load counted in units' },
+                { value: 'Contractual', label: 'Contractual', hint: 'Load counted in hours' },
+              ]}
+            />
           </div>
 
           <div className="min-w-0 w-full order-2 lg:col-span-3">
@@ -2058,20 +2184,18 @@ export default function WorkloadPage({
             >
               Program
             </label>
-            <FilterSelect
+            <FriendlySelect
               value={programEnabled ? filterProgram : ''}
               onChange={handleProgramChange}
               disabled={!programEnabled}
               label="Program"
-              className={`w-full min-h-[42px] ${programEnabled && !filterProgram ? 'qr-guide-pulse' : ''}`}
-            >
-              <option value="">
-                {programEnabled ? '— Select Program —' : 'Select a faculty member first'}
-              </option>
-              {programsForInstructor.map(p => (
-                <option key={p.id} value={p.id}>{p.code} — {p.name}</option>
-              ))}
-            </FilterSelect>
+              placeholder="Select Program"
+              disabledText="Select a faculty first"
+              guide={programEnabled && !filterProgram}
+              minPanelWidth={380}
+              showHintInTrigger
+              options={programsForInstructor.map(p => ({ value: String(p.id), label: p.code, hint: p.name }))}
+            />
 
           </div>
 
@@ -2079,42 +2203,45 @@ export default function WorkloadPage({
             <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
               Year Level
             </label>
-            <FilterSelect
+            <FriendlySelect
               value={filterYearLevel}
               onChange={handleYearLevelChange}
               disabled={!filterProgram}
               label="Year Level"
-              className={`w-full min-h-[42px] ${filterProgram && !filterYearLevel ? 'qr-guide-pulse' : ''}`}
-            >
-              <option value="">— Select Year Level —</option>
-              {programYearLevels.map(yl => (
-                <option key={yl} value={yl}>{yl}</option>
-              ))}
-            </FilterSelect>
+              placeholder="Select Year Level"
+              disabledText="Select a program first"
+              guide={!!filterProgram && !filterYearLevel}
+              minPanelWidth={260}
+              options={programYearLevels.map(yl => ({ value: yl, label: yl }))}
+            />
           </div>
 
           <div className="min-w-0 order-5 lg:col-span-2">
             <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
               Block
             </label>
-            <FilterSelect
+            <FriendlySelect
               value={filterBlock}
               onChange={handleBlockChange}
               disabled={!filterYearLevel}
               label="Block"
-              className={`w-full min-h-[42px] ${filterYearLevel && !filterBlock ? 'qr-guide-pulse' : ''}`}
-            >
-              <option value="">— Select Block —</option>
-              {filteredBlocks
-                .map(b => {
-                  const complete = isBlockFullyAssigned(b);
-                  return (
-                    <option key={b.id} value={b.id} disabled={complete}>
-                      {blockDropdownLabel(b)}
-                    </option>
-                  );
-                })}
-            </FilterSelect>
+              placeholder="Select Block"
+              disabledText="Select a year first"
+              guide={!!filterYearLevel && !filterBlock}
+              minPanelWidth={280}
+              options={filteredBlocks.map(b => {
+                const complete = isBlockFullyAssigned(b);
+                const open = blockAvailableCount(b, handledSubjects);
+                return {
+                  value: String(b.id),
+                  label: `Block ${b.block_name}`,
+                  hint: curriculumVersionLabel(blockCurriculumVersion(b.curriculum_version)),
+                  badge: complete ? 'All assigned' : `${open} available`,
+                  badgeTone: !complete && open > 0 ? 'green' as const : 'muted' as const,
+                  disabled: complete,
+                };
+              })}
+            />
           </div>
         </div>
       </FilterBar>
@@ -2148,25 +2275,41 @@ export default function WorkloadPage({
                 >
                   {(['Minor', 'Major'] as const).map(cat => {
                     const active = subjectCategory === cat;
-                    // Major = light blue, Minor = gray. Selected tab is filled;
-                    // the other stays white with a tinted outline.
+                    // Same colours as Lecture / Laboratory (Scheduling): Minor = Lec blue, Major = Lab amber.
+                    // Selected tab is filled; the other stays white with a tinted outline.
                     const tone = cat === 'Major'
                       ? active
-                        ? 'bg-[#DCE8FB] border-[#8FB3EE] text-[#12408F] shadow-sm ring-2 ring-[#1D5BD6]/15'
-                        : 'bg-white border-[#BFD3F5] text-[#1D5BD6] hover:bg-[#EAF1FC]'
+                        ? 'bg-amber-50 border-amber-500 text-amber-800 shadow-sm ring-2 ring-amber-500/15'
+                        : 'bg-white border-amber-200 text-amber-700 hover:bg-amber-50'
                       : active
-                        ? 'bg-[#E2E8F0] border-[#94A3B8] text-[#334155] shadow-sm ring-2 ring-[#64748B]/15'
-                        : 'bg-white border-[#E2E8F0] text-[#64748B] hover:bg-[#F1F5F9]';
+                        ? 'bg-[#EFF6FF] border-[#1D5BD6] text-[#1D5BD6] shadow-sm ring-2 ring-[#1D5BD6]/15'
+                        : 'bg-white border-[#BFDBFE] text-[#1D5BD6] hover:bg-[#EFF6FF]';
+                    const count = categoryCounts[cat];
+                    const badge = count === 0
+                      ? 'bg-[#F1F5F9] text-[#94A3B8]'
+                      : cat === 'Major'
+                        ? active ? 'bg-amber-600 text-white' : 'bg-amber-50 text-amber-700'
+                        : active ? 'bg-[#1D5BD6] text-white' : 'bg-[#EFF6FF] text-[#1D5BD6]';
                     return (
                       <button
                         key={cat}
                         type="button"
                         role="tab"
                         aria-selected={active}
+                        aria-label={`${cat} Subjects, ${count} available`}
                         onClick={() => handleSubjectCategoryChange(cat)}
-                        className={`min-h-[44px] px-2 sm:px-3 py-2 rounded-xl border text-xs sm:text-sm font-semibold whitespace-nowrap transition-colors duration-200 ${tone}`}
+                        className={`min-h-[44px] px-2 sm:px-3 py-2 rounded-xl border text-xs sm:text-sm font-semibold whitespace-nowrap transition-colors duration-300 inline-flex items-center justify-center gap-2 ${tone}`}
                       >
                         {cat} Subjects
+                        <motion.span
+                          key={count}
+                          initial={reduceMotion ? false : { scale: 0.7, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
+                          className={`min-w-[24px] h-6 px-1.5 rounded-full text-xs font-bold tabular-nums inline-flex items-center justify-center transition-colors duration-300 ${badge}`}
+                        >
+                          {count}
+                        </motion.span>
                       </button>
                     );
                   })}
@@ -2314,6 +2457,8 @@ export default function WorkloadPage({
                 <p className="text-sm text-[#64748B]">
                   {subjectSearch
                     ? 'Try a different search term.'
+                    : prioritySubjects.length > 0 && availableSchedules.length > 0
+                      ? 'Only this faculty\'s Subjects to Handle are listed. Check the other tab or block, or edit them in Faculty.'
                     : categorySchedules.length === 0 && availableSchedules.length > 0
                       ? `Switch to ${subjectCategory === 'Minor' ? 'Major' : 'Minor'} Subjects to see the remaining unassigned subjects.`
                       : 'All subjects in this block may already be assigned to a faculty member.'}
@@ -2324,6 +2469,21 @@ export default function WorkloadPage({
                 <table className="w-full">
                   <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
                     <tr>
+                      <th className="pl-3 sm:pl-5 pr-1 py-3 w-10">
+                        {(() => {
+                          const tabIds = displaySchedules.map(s => s.id);
+                          const pickedHere = tabIds.filter(id => pickedIds.has(id)).length;
+                          const all = pickedHere > 0 && pickedHere === tabIds.length;
+                          return (
+                            <PickBox
+                              checked={all}
+                              mixed={pickedHere > 0 && !all}
+                              onToggle={() => setPickedMany(tabIds, !all)}
+                              label={all ? 'Unselect all subjects in this tab' : 'Select all subjects in this tab'}
+                            />
+                          );
+                        })()}
+                      </th>
                       {['Code', 'Subject Name', 'Lec', 'Lab', isPermanent ? 'Units' : 'Hrs', ''].map(h => (
                         <th key={h} className={`text-left px-3 sm:px-5 py-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide ${h === 'Lec' || h === 'Lab' ? 'hidden sm:table-cell' : ''}`}>{h}</th>
                       ))}
@@ -2338,6 +2498,7 @@ export default function WorkloadPage({
                         remainingForWarning <= 0.001 || wu > remainingForWarning + 0.001
                       );
                       const isPriority = isPrioritySubject(s);
+                      const isPicked = pickedIds.has(s.id);
                       const isAssignTarget = assignTarget?.id === s.id;
                       const animateTarget = isAssignTarget && !reduceMotion;
                       /* Soft ring pulse on the + button so the next step is obvious. */
@@ -2353,13 +2514,19 @@ export default function WorkloadPage({
                           initial={animateTarget ? { backgroundColor: '#FFFFFF' } : false}
                           animate={animateTarget ? { backgroundColor: ['#FFFFFF', '#86EFAC', '#DCFCE7'] } : undefined}
                           transition={animateTarget ? { duration: 1.1, ease: 'easeOut', delay: 0.35 } : undefined}
-                          className={`transition-colors ${
+                          onClick={() => togglePicked(s.id)}
+                          aria-selected={isPicked}
+                          className={`cursor-pointer transition-colors duration-300 ${
                             isAssignTarget ? 'bg-[#DCFCE7] border-l-[3px] border-l-[#22C55E] ring-2 ring-inset ring-[#22C55E]'
+                              : isPicked ? 'bg-[#DBEAFE] hover:bg-[#CFE0FB] border-l-[3px] border-l-[#1D5BD6]'
                               : willExceed ? 'bg-[#FEF2F2] hover:bg-red-50'
                               : isPriority ? 'bg-[#DCFCE7] hover:bg-[#BBF7D0] border-l-[3px] border-l-[#22C55E]'
                               : 'hover:bg-[#F8FAFC]'
                           }`}
                         >
+                          <td className="pl-3 sm:pl-5 pr-1 py-4 align-middle">
+                            <PickBox checked={isPicked} onToggle={() => togglePicked(s.id)} label={`Select ${s.subject_code}`} />
+                          </td>
                           <td className="px-3 sm:px-5 py-4 font-mono font-semibold text-[#0B2A5B] text-sm align-middle whitespace-nowrap">{s.subject_code}</td>
                           <td className="px-3 sm:px-5 py-4 align-middle">
                             <div className="min-w-[120px] sm:min-w-[160px]" style={{ maxWidth: 280 }}>
@@ -2385,7 +2552,7 @@ export default function WorkloadPage({
                                   <span className="px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-[#EFF6FF] text-[#1D5BD6]">Lec</span>
                                 )}
                                 {labH > 0 && (
-                                  <span className="px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-[#F5F3FF] text-[#7C3AED]">Lab</span>
+                                  <span className="px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-amber-50 text-amber-700">Lab</span>
                                 )}
                               </div>
                             </div>
@@ -2399,7 +2566,7 @@ export default function WorkloadPage({
                             {willExceed ? (
                               <motion.button
                                 {...plusPulse}
-                                onClick={() => assignSubject(s.id)}
+                                onClick={e => { e.stopPropagation(); assignSubject(s.id); }}
                                 title="Exceeds remaining regular load — will require confirmation"
                                 className="flex items-center justify-center w-9 h-9 rounded-full bg-[#FEE2E2] text-[#DC2626] border border-[#FECACA] hover:bg-[#FECACA] transition-colors"
                               >
@@ -2408,7 +2575,7 @@ export default function WorkloadPage({
                             ) : (
                               <motion.button
                                 {...plusPulse}
-                                onClick={() => assignSubject(s.id)}
+                                onClick={e => { e.stopPropagation(); assignSubject(s.id); }}
                                 title="Assign to faculty"
                                 className="flex items-center justify-center w-9 h-9 rounded-full transition-colors shadow-sm"
                                 style={{ backgroundColor: '#1D5BD6', color: '#ffffff' }}
@@ -2427,63 +2594,203 @@ export default function WorkloadPage({
               </div>
             )}
         </div>
+        {/* Room for the picked-subjects bar so it never covers the last row */}
+        {selectedFaculty && pickedSchedules.length > 0 && <div className="h-36 sm:h-24" aria-hidden="true" />}
       </PageLoadTransition>
 
-      {/* -- Remaining Balance Warning Modal -----------------------------------
-          Shown when faculty still has remaining load and admin clicks Assign.
-          Admin must explicitly choose to continue or ignore.
-          ------------------------------------------------------------------- */}
-      <Modal open={!!remainingBalanceWarning} onClose={() => { if (continueState !== 'saving') setRemainingBalanceWarning(null); }} title="Confirm Assignment">
-        {continueState === 'success' && remainingBalanceWarning && <AssignSuccess note={continueNote} />}
-        <div className="space-y-4">
-          <div className="bg-[#FFFBEB] border border-[#FDE68A] rounded-xl p-4 flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 text-[#D97706] flex-shrink-0 mt-0.5" />
-            <p className="text-[#0B2A5B] text-sm leading-relaxed">
-              This faculty still has remaining regular load balance. Do you want to continue adding this subject?
-            </p>
-          </div>
-          {remainingBalanceWarning && (
-            <div className="bg-[#F8FAFC] rounded-xl border border-[#E2E8F0] p-4 space-y-2.5">
-              <div className="flex justify-between text-sm">
-                <span className="text-[#64748B]">Subject</span>
-                <span className="font-semibold text-[#0B2A5B] text-right ml-4">
-                  {remainingBalanceWarning.subjectCode}
-                  {remainingBalanceWarning.subjectName ? ` — ${remainingBalanceWarning.subjectName}` : ''}
-                </span>
+      {/* -- Picked subjects bar — slides up once something is ticked -- */}
+      <AnimatePresence>
+        {selectedFaculty && pickedSchedules.length > 0 && !bulkOpen && (() => {
+          const n = pickedSchedules.length;
+          const minor = pickedSchedules.filter(x => categoryOf(x) === 'Minor').length;
+          const ease = [0.4, 0, 0.2, 1] as const;
+          return (
+            <motion.div
+              key="picked-bar"
+              initial={reduceMotion ? false : { opacity: 0, y: 28 }}
+              animate={{ opacity: 1, y: 0, transition: { duration: reduceMotion ? 0 : 0.4, ease } }}
+              exit={{ opacity: 0, y: reduceMotion ? 0 : 28, transition: { duration: reduceMotion ? 0 : 0.3, ease } }}
+              className="fixed inset-x-0 bottom-5 z-40 flex justify-center px-4 pointer-events-none"
+            >
+              <div className="pointer-events-auto w-full max-w-2xl bg-white border border-[#D6E0EF] rounded-2xl shadow-[0_16px_40px_-12px_rgba(11,42,91,0.35)] px-4 sm:px-5 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <motion.span
+                    key={n}
+                    initial={reduceMotion ? false : { scale: 0.7, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ duration: 0.3, ease }}
+                    className="w-10 h-10 rounded-full bg-[#1D5BD6] text-white text-base font-bold flex items-center justify-center tabular-nums flex-shrink-0"
+                  >
+                    {n}
+                  </motion.span>
+                  <div className="min-w-0">
+                    <p className="font-semibold text-[#0B2A5B] text-[15px] leading-tight">
+                      {n} subject{n === 1 ? '' : 's'} selected
+                    </p>
+                    <p className="text-sm text-[#64748B] tabular-nums mt-0.5">
+                      {pickedTotal.toFixed(2)} {loadUnit}
+                      {minor > 0 && ` · ${minor} Minor`}
+                      {n - minor > 0 && ` · ${n - minor} Major`}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <motion.button
+                    type="button"
+                    whileTap={reduceMotion ? undefined : { scale: 0.96 }}
+                    onClick={() => setPickedIds(new Set())}
+                    className="flex-1 sm:flex-none h-11 px-4 rounded-xl border border-[#E2E8F0] text-[#475569] text-sm font-semibold hover:bg-[#F8FAFC] transition-colors duration-300"
+                  >
+                    Clear
+                  </motion.button>
+                  <motion.button
+                    type="button"
+                    whileTap={reduceMotion ? undefined : { scale: 0.96 }}
+                    onClick={() => { if (pickedFits) void assignPicked({ direct: true }); else setBulkOpen(true); }}
+                    disabled={bulkState !== 'idle'}
+                    className="flex-1 sm:flex-none h-11 px-5 rounded-xl bg-[#1D5BD6] hover:bg-[#2E7DD1] text-white text-sm font-bold inline-flex items-center justify-center gap-2 transition-colors duration-300 disabled:cursor-wait disabled:opacity-90"
+                  >
+                    {bulkState === 'saving'
+                      ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Assigning {Math.min(bulkProgress + 1, bulkTotal)} of {bulkTotal}…</>
+                      : <><Plus className="w-4 h-4" /> Assign {n === 1 ? 'Subject' : `${n} Subjects`}</>}
+                  </motion.button>
+                </div>
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-[#64748B]">This subject</span>
-                <span className="font-semibold text-[#1D5BD6]">+{remainingBalanceWarning.subjectValue.toFixed(2)} {remainingBalanceWarning.unit}</span>
-              </div>
-              <div className="flex justify-between text-sm border-t border-[#E2E8F0] pt-2.5">
-                <span className="text-[#64748B]">Remaining balance</span>
-                <span className="font-semibold text-[#16A34A]">
-                  {remainingBalanceWarning.remaining.toFixed(2)} {remainingBalanceWarning.unit} available
-                </span>
-              </div>
-            </div>
-          )}
-          <div className="flex gap-3 pt-1">
-            <button onClick={() => setRemainingBalanceWarning(null)}
-              className="flex-1 border border-[#E2E8F0] text-[#64748B] py-2.5 rounded-xl text-sm font-semibold hover:bg-[#F8FAFC] transition">
+            </motion.div>
+          );
+        })()}
+      </AnimatePresence>
+
+      {/* -- Assign Selected Subjects — one save for every ticked subject -- */}
+      <Modal
+        open={bulkOpen}
+        onClose={() => { if (bulkState === 'idle') setBulkOpen(false); }}
+        title="Assign Selected Subjects"
+        subtitle={selectedFaculty?.name}
+        size="lg"
+        footer={
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => setBulkOpen(false)}
+              disabled={bulkState !== 'idle'}
+              className="flex-1 border border-[#E2E8F0] text-[#64748B] py-2.5 rounded-xl text-sm font-semibold hover:bg-[#F8FAFC] transition-colors duration-300 disabled:opacity-50"
+            >
               Cancel
             </button>
             <button
-              disabled={continueState !== 'idle'}
-              onClick={() => {
-                const w = remainingBalanceWarning;
-                if (w) continueAdding(w.msId, () => setRemainingBalanceWarning(null));
-              }}
-              className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white transition flex items-center justify-center gap-2 disabled:cursor-wait"
-              style={{ backgroundColor: '#1D5BD6', color: '#ffffff' }}
-              onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#2E7DD1')}
-              onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#1D5BD6')}
+              type="button"
+              onClick={() => { void assignPicked(); }}
+              disabled={bulkState !== 'idle' || pickedSchedules.length === 0}
+              className="flex-1 bg-[#1D5BD6] hover:bg-[#2E7DD1] text-white py-2.5 rounded-xl text-sm font-bold transition-colors duration-300 flex items-center justify-center gap-2 disabled:cursor-wait disabled:opacity-80"
             >
-              {continueState === 'saving'
-                ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Adding…</>
-                : 'Continue Adding'}
+              {bulkState === 'saving'
+                ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Assigning {Math.min(bulkProgress + 1, bulkTotal)} of {bulkTotal}…</>
+                : `Assign ${pickedSchedules.length === 1 ? 'Subject' : `${pickedSchedules.length} Subjects`}`}
             </button>
           </div>
+        }
+      >
+        {bulkState === 'success' && (
+          <AssignSuccess note={bulkNote} title={bulkTotal === 1 ? 'Subject assigned!' : `${bulkTotal} subjects assigned!`} />
+        )}
+        <div className="space-y-4">
+          <ul className="rounded-xl border border-[#E2E8F0] divide-y divide-[#F1F5F9] max-h-[320px] overflow-y-auto">
+            <AnimatePresence initial={false}>
+              {pickedSchedules.map(x => {
+                const cat = categoryOf(x);
+                return (
+                  <motion.li
+                    key={x.id}
+                    initial={reduceMotion ? false : { opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={reduceMotion ? { opacity: 0 } : { opacity: 0, height: 0 }}
+                    transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
+                    className="overflow-hidden"
+                  >
+                    <div className="flex items-center gap-3 px-4 py-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-mono font-semibold text-sm text-[#0B2A5B]">{x.subject_code}</span>
+                          <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold ${cat === 'Major' ? 'bg-amber-50 text-amber-700' : 'bg-[#EFF6FF] text-[#1D5BD6]'}`}>
+                            {cat}
+                          </span>
+                        </div>
+                        <p className="text-sm text-[#475569] truncate mt-0.5" title={x.subject_name}>{x.subject_name}</p>
+                      </div>
+                      <span className="font-bold text-[#1D5BD6] tabular-nums text-sm">{scheduleValue(x).toFixed(2)}</span>
+                      <button
+                        type="button"
+                        disabled={bulkState !== 'idle'}
+                        onClick={() => {
+                          togglePicked(x.id);
+                          if (pickedSchedules.length === 1) setBulkOpen(false);
+                        }}
+                        aria-label={`Remove ${x.subject_code}`}
+                        className="w-8 h-8 rounded-lg flex items-center justify-center text-[#94A3B8] hover:text-[#DC2626] hover:bg-[#FEF2F2] transition-colors duration-300 disabled:opacity-40"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </motion.li>
+                );
+              })}
+            </AnimatePresence>
+          </ul>
+
+          {remainingForWarning !== null && (() => {
+            const after = remainingForWarning - pickedTotal;
+            const over = after < -0.001;
+            return (
+              <>
+                <div className="bg-[#F8FAFC] rounded-xl border border-[#E2E8F0] p-4 space-y-2.5 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-[#64748B]">Remaining regular balance</span>
+                    <span className="font-semibold text-[#0B2A5B] tabular-nums">{Math.max(0, remainingForWarning).toFixed(2)} {loadUnit}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[#64748B]">Selected subjects</span>
+                    <span className="font-semibold text-[#1D5BD6] tabular-nums">+{pickedTotal.toFixed(2)} {loadUnit}</span>
+                  </div>
+                  <div className="flex justify-between border-t border-[#E2E8F0] pt-2.5">
+                    <span className="text-[#64748B]">After assigning</span>
+                    <span className={`font-semibold tabular-nums ${over ? 'text-[#DC2626]' : 'text-[#16A34A]'}`}>
+                      {over ? `${Math.abs(after).toFixed(2)} ${loadUnit} over the limit` : `${after.toFixed(2)} ${loadUnit} left`}
+                    </span>
+                  </div>
+                </div>
+                {over && (
+                  <div className="bg-[#FEF2F2] border border-[#FECACA] rounded-xl p-3.5 flex items-start gap-3">
+                    <AlertTriangle className="w-5 h-5 text-[#DC2626] flex-shrink-0 mt-0.5" />
+                    <p className="text-[#0B2A5B] text-sm leading-relaxed">
+                      These go past the regular load. You can move any of them to Overload afterwards in View Workload.
+                    </p>
+                  </div>
+                )}
+              </>
+            );
+          })()}
+
+          <AnimatePresence>
+            {bulkState === 'saving' && (
+              <motion.div
+                initial={reduceMotion ? false : { opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
+                className="overflow-hidden"
+              >
+                <div className="h-2 rounded-full bg-[#E2E8F0] overflow-hidden">
+                  <motion.div
+                    className="h-full rounded-full bg-[#1D5BD6]"
+                    initial={{ width: 0 }}
+                    animate={{ width: `${(bulkProgress / Math.max(1, bulkTotal)) * 100}%` }}
+                    transition={{ duration: 0.4, ease: [0.4, 0, 0.2, 1] }}
+                  />
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </Modal>
 
@@ -3472,12 +3779,27 @@ export default function WorkloadPage({
               // Over the regular base load → the card blinks red
               const regOverBy = modalRegVal - Number(s.regular_load_limit || 0);
               const regExceeded = regOverBy > 0.001;
+              /* Each card opens its section below (Workload / Overload / Praise Load) */
+              const cardButton = (key: 'regular' | 'overload' | 'praise', enabled: boolean) => ({
+                type: 'button' as const,
+                disabled: !enabled,
+                onClick: () => switchModalTab(key, effectiveModalTab),
+                'aria-pressed': effectiveModalTab === key,
+                whileHover: reduceMotion || !enabled ? undefined : { y: -2 },
+                whileTap: reduceMotion || !enabled ? undefined : { scale: 0.98 },
+                transition: { duration: 0.25, ease: [0.4, 0, 0.2, 1] as const },
+              });
+              const cardState = (key: 'regular' | 'overload' | 'praise') =>
+                `w-full text-left transition-[border-color,box-shadow] duration-300 enabled:cursor-pointer enabled:hover:border-[#1D5BD6] disabled:cursor-default ${
+                  effectiveModalTab === key ? '!border-[#1D5BD6] ring-2 ring-[#1D5BD6]/20' : ''
+                }`;
               return (
                 <>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
-                  <div
-                    className={regExceeded ? 'qr-flag-pulse border-2 border-red-400 rounded-xl p-5 min-w-0' : card}
-                    title={regExceeded ? `Regular load is over the limit by ${regOverBy.toFixed(2)} ${unitLabel}` : undefined}
+                  <motion.button
+                    {...cardButton('regular', true)}
+                    className={`${regExceeded ? 'qr-flag-pulse border-2 border-red-400 rounded-xl p-5 min-w-0' : card} ${cardState('regular')}`}
+                    title={regExceeded ? `Regular load is over the limit by ${regOverBy.toFixed(2)} ${unitLabel}` : 'Show Workload'}
                   >
                     <div className={`${labelCls} ${regExceeded ? '!text-red-700' : ''}`}>{isP ? 'Regular Load' : 'Regular Hours'}</div>
                     <div className={`${valueCls} ${regExceeded ? '!text-red-700' : ''}`}>
@@ -3490,8 +3812,12 @@ export default function WorkloadPage({
                         Over by {regOverBy.toFixed(2)} {unitLabel}
                       </div>
                     )}
-                  </div>
-                  <div className={card}>
+                  </motion.button>
+                  <motion.button
+                    {...cardButton('overload', hasOverloadSection)}
+                    className={`${card} ${cardState('overload')}`}
+                    title={hasOverloadSection ? 'Show Overload' : undefined}
+                  >
                     <div className={labelCls}>Overload</div>
                     <div className={`${valueCls} ${isP && modalOlVal >= OVERLOAD_MAX_UNITS - 0.001 ? '!text-red-700' : ''}`}>
                       {modalOlVal.toFixed(2)}{isP && <> / {OVERLOAD_MAX_UNITS}</>}
@@ -3504,14 +3830,18 @@ export default function WorkloadPage({
                           : `${(OVERLOAD_MAX_UNITS - modalOlVal).toFixed(2)} units left`}
                       </div>
                     )}
-                  </div>
-                  <div className={card}>
+                  </motion.button>
+                  <motion.button
+                    {...cardButton('praise', hasPraiseSection)}
+                    className={`${card} ${cardState('praise')}`}
+                    title={hasPraiseSection ? 'Show Praise Load' : undefined}
+                  >
                     <div className={labelCls}>Praise Load</div>
                     <div className={valueCls}>
                       {modalPraiseVal.toFixed(2)}
                       <span className={mutedCls}>{unitLabel}</span>
                     </div>
-                  </div>
+                  </motion.button>
                 </div>
                 {/* Written warning (not only colour/icon) — like a notification */}
                 <AnimatePresence initial={false}>
@@ -4114,7 +4444,7 @@ export default function WorkloadPage({
           Opened via Edit Deduction. Lets the admin set or update load deductions
           for a Permanent faculty without interrupting faculty selection.
           ------------------------------------------------------------------- */}
-      <Modal open={!!designationPending} onClose={() => setDesignationPending(null)} title="Faculty Load Deduction">
+      <Modal open={!!designationPending} onClose={() => setDesignationPending(null)} title="Faculty Deloading">
         {designationPending && (() => {
           const totalDeduction = deductionEntries.reduce((s, e) => s + (parseFloat(e.units) || 0), 0);
           const availableLoad  = Math.max(0, REGULAR_LOAD_MAX_UNITS - totalDeduction);
@@ -4127,7 +4457,7 @@ export default function WorkloadPage({
                   <div className="text-xs text-slate-400">{designationPending.position} · Permanent</div>
                 </div>
                 <div className="text-right text-xs text-slate-500">
-                  Base load: <span className="font-semibold text-slate-300">{REGULAR_LOAD_MAX_UNITS} units</span>
+                  Base load: <span className="font-semibold text-slate-300">{loadDisplay(REGULAR_LOAD_MAX_UNITS)} units</span>
                 </div>
               </div>
 
@@ -4158,8 +4488,9 @@ export default function WorkloadPage({
               <div className="space-y-2">
                 <div className="text-sm font-semibold text-slate-300 mb-3">Deduction Types</div>
 
-                {/* None */}
-                <label className={`flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer transition select-none ${
+                {/* None — a switch that pauses the entries below without erasing them:
+                    checking it stops them being counted or saved, unchecking brings them back. */}
+                <label className={`flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer transition-colors duration-300 select-none ${
                   deductionNone
                     ? 'bg-slate-700/60 border-slate-500/60 text-slate-200'
                     : 'bg-white/[0.03] border-white/10 text-slate-400 hover:border-white/20 hover:text-slate-300'
@@ -4168,24 +4499,38 @@ export default function WorkloadPage({
                     type="checkbox"
                     checked={deductionNone}
                     onChange={e => {
-                      if (e.target.checked) { setDeductionNone(true); setDeductionEntries([]); }
-                      else { setDeductionNone(false); }
+                      setDeductionNone(e.target.checked);
                       setDesignationError('');
                     }}
                     className="w-4 h-4 accent-slate-400 flex-shrink-0"
                   />
-                  <span className="text-sm font-medium">None — No Deduction</span>
+                  <span className="text-sm font-medium flex-1">None</span>
                 </label>
+                <AnimatePresence initial={false}>
+                  {deductionNone && deductionEntries.length > 0 && (
+                    <motion.p
+                      key="deload-paused-note"
+                      initial={reduceMotion ? false : { opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
+                      className="overflow-hidden text-xs text-slate-400 px-1"
+                    >
+                      Your entries are kept. Uncheck None or click an option to use them again.
+                    </motion.p>
+                  )}
+                </AnimatePresence>
 
                 {/* Deduction type options */}
                 {DEDUCTION_OPTIONS.map(opt => {
                   const entry   = deductionEntries.find(e => e.type === opt);
                   const checked = !!entry;
+                  const paused  = deductionNone && checked;
                   return (
                     <div key={opt}>
-                      <label className={`flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer transition select-none ${
+                      <label className={`flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer transition-[background-color,border-color,color,opacity] duration-300 select-none ${
                         deductionNone
-                          ? 'opacity-40 cursor-not-allowed bg-white/[0.02] border-white/5 text-slate-500'
+                          ? 'opacity-60 bg-white/[0.02] border-white/10 text-slate-400 hover:opacity-100 hover:border-white/20'
                           : checked
                             ? 'bg-[#1D5BD6]/10 border-[#1D5BD6]/40 text-blue-300'
                             : 'bg-white/[0.03] border-white/10 text-slate-400 hover:border-white/20 hover:text-slate-300'
@@ -4193,23 +4538,42 @@ export default function WorkloadPage({
                         <input
                           type="checkbox"
                           checked={checked}
-                          disabled={deductionNone}
                           onChange={e => {
-                            setDeductionNone(false);
+                            setDesignationError('');
+                            // Shortcut: while None is on, clicking an option turns None off and
+                            // switches this option on (earlier entries come back as they were).
+                            if (deductionNone) {
+                              setDeductionNone(false);
+                              if (!checked) setDeductionEntries(prev => [...prev, { type: opt, description: '', units: '' }]);
+                              return;
+                            }
                             setDeductionEntries(prev =>
                               e.target.checked
                                 ? [...prev, { type: opt, description: '', units: '' }]
                                 : prev.filter(x => x.type !== opt)
                             );
-                            setDesignationError('');
                           }}
                           className="w-4 h-4 accent-[#1D5BD6] flex-shrink-0"
                         />
                         <span className="text-sm font-medium flex-1">{opt}</span>
+                        {paused && (
+                          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-white/10 text-slate-300">
+                            Paused{entry.units && !isNaN(parseFloat(entry.units)) ? ` · ${parseFloat(entry.units).toFixed(2)} units` : ''}
+                          </span>
+                        )}
                       </label>
 
                       {/* Expanded fields for checked type */}
+                      <AnimatePresence initial={false}>
                       {checked && !deductionNone && (
+                        <motion.div
+                          key={`${opt}-fields`}
+                          initial={reduceMotion ? false : { opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
+                          className="overflow-hidden"
+                        >
                         <div className="ml-4 mt-2 mb-1 pl-4 border-l-2 border-[#1D5BD6]/30 space-y-2">
                           <div>
                             <label className="text-[11px] font-medium text-slate-500 uppercase tracking-wide mb-1 block">
@@ -4253,7 +4617,9 @@ export default function WorkloadPage({
                             )}
                           </div>
                         </div>
+                        </motion.div>
                       )}
+                      </AnimatePresence>
                     </div>
                   );
                 })}
@@ -4269,9 +4635,9 @@ export default function WorkloadPage({
               }`}>
                 {deductionNone || deductionEntries.length === 0 ? (
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-slate-400">Regular Load (no deduction)</span>
+                    <span className="text-sm text-slate-400">Regular Load</span>
                     <span className="font-bold text-emerald-300 text-base">
-                      {REGULAR_LOAD_MAX_UNITS.toFixed(2)} <span className="text-xs font-normal text-emerald-600">units</span>
+                      {loadDisplay(REGULAR_LOAD_MAX_UNITS)} <span className="text-xs font-normal text-emerald-600">units</span>
                     </span>
                   </div>
                 ) : (
@@ -4299,7 +4665,7 @@ export default function WorkloadPage({
                       <div className="flex items-center justify-between">
                         <span className="text-sm font-semibold text-slate-300">Available Regular Load</span>
                         <span className={`font-bold text-base tabular-nums ${totalDeduction > REGULAR_LOAD_MAX_UNITS ? 'text-red-400' : 'text-emerald-300'}`}>
-                          {availableLoad.toFixed(2)}
+                          {loadDisplay(availableLoad)}
                           <span className={`text-xs font-normal ml-1 ${totalDeduction > REGULAR_LOAD_MAX_UNITS ? 'text-red-600' : 'text-emerald-600'}`}>units</span>
                         </span>
                       </div>
@@ -4418,7 +4784,44 @@ export default function WorkloadPage({
 // ─── AssignSuccess ────────────────────────────────────────────────────────────
 
 /** Same success card as Faculty "updated!" — covers the whole dialog after saving. */
-function AssignSuccess({ note }: { note: string }) {
+/** Big, high-contrast checkbox for picking subjects to assign in one save. */
+function PickBox({ checked, mixed = false, onToggle, label }: {
+  checked: boolean; mixed?: boolean; onToggle: () => void; label: string;
+}) {
+  const reduceMotion = useReducedMotion();
+  const on = checked || mixed;
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={mixed ? 'mixed' : checked}
+      aria-label={label}
+      onClick={e => { e.stopPropagation(); onToggle(); }}
+      className={`w-6 h-6 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-colors duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D5BD6]/40 ${
+        on ? 'bg-[#1D5BD6] border-[#1D5BD6]' : 'bg-white border-[#94A3B8] hover:border-[#1D5BD6]'
+      }`}
+    >
+      <AnimatePresence mode="wait" initial={false}>
+        {on && (
+          <motion.span
+            key={mixed ? 'mixed' : 'check'}
+            initial={reduceMotion ? false : { scale: 0.4, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={reduceMotion ? { opacity: 0 } : { scale: 0.4, opacity: 0 }}
+            transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+            className="flex"
+          >
+            {mixed
+              ? <Minus className="w-4 h-4 text-white" strokeWidth={3} />
+              : <Check className="w-4 h-4 text-white" strokeWidth={3} />}
+          </motion.span>
+        )}
+      </AnimatePresence>
+    </button>
+  );
+}
+
+function AssignSuccess({ note, title = 'Subject assigned!' }: { note: string; title?: string }) {
   return (
     <div
       className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-2xl backdrop-blur-md save-success-overlay"
@@ -4436,7 +4839,7 @@ function AssignSuccess({ note }: { note: string }) {
           />
         </svg>
         <div className="text-center">
-          <p className="text-base font-semibold" style={{ color: '#0B2A5B' }}>Subject assigned!</p>
+          <p className="text-base font-semibold" style={{ color: '#0B2A5B' }}>{title}</p>
           {note && <p className="mt-0.5 text-sm text-[#475569]">{note}</p>}
         </div>
       </div>

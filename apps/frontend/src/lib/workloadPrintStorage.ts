@@ -3,18 +3,21 @@
  * Used by the dedicated printable route fallback — no instructor IDs in the URL.
  */
 
+/** Which official workload form — Deload is every schedule of the faculty on one form. */
+export type WorkloadDocumentKind = 'regular' | 'overload' | 'praise' | 'deload';
+
 const STORAGE_KEY = 'qrganize:workload-print-html:v1';
 const MAX_AGE_MS = 15 * 60 * 1000;
 
 type StoredPrintPayload = {
   html: string;
   savedAt: number;
-  kind?: 'regular' | 'overload' | 'praise';
+  kind?: WorkloadDocumentKind;
 };
 
 export function storeWorkloadPrintHtml(
   html: string,
-  kind?: 'regular' | 'overload' | 'praise',
+  kind?: WorkloadDocumentKind,
 ): void {
   if (typeof sessionStorage === 'undefined') return;
   const payload: StoredPrintPayload = {

@@ -8,7 +8,7 @@ import {
   DEFAULT_CURRICULUM_VERSION,
   parseCurriculumVersion,
 } from '@shared/curriculumVersion';
-import { normalizeComparableText } from '@shared/curriculumImport';
+import { normalizeComparableText, normalizeCourseCode } from '@shared/curriculumImport';
 import { getChairAssignedProgramId, isScopedChair } from '@/services/programScope';
 import { withAudit } from '@/services/audit';
 
@@ -82,8 +82,13 @@ async function POST_handler(req: NextRequest) {
     const rows: ImportRow[] = body?.rows ?? [];
     const version = parseCurriculumVersion(body?.curriculum_version) ?? DEFAULT_CURRICULUM_VERSION;
     const applyUpdates = body?.apply_updates === true;
+    // Subjects the preview found missing from the file — only this import's program and version
+    const removeIds = Array.isArray(body?.remove_ids)
+      ? [...new Set((body.remove_ids as unknown[]).map(Number).filter(n => Number.isInteger(n) && n > 0))]
+      : [];
+    const bodyProgramId = Number(body?.program_id);
 
-    if (!Array.isArray(rows) || rows.length === 0) {
+    if (!Array.isArray(rows) || (rows.length === 0 && removeIds.length === 0)) {
       return NextResponse.json({ error: 'No rows to import' }, { status: 400 });
     }
     if (rows.length > 1500) {
@@ -158,11 +163,15 @@ async function POST_handler(req: NextRequest) {
       });
     }
 
-    if (prepared.length === 0) {
-      return NextResponse.json({ imported: 0, reactivated: 0, updated: 0, total: 0, duplicated: 0, errors });
-    }
-
     const programIds = [...new Set(prepared.map(r => r.programId))];
+    // Removal-only import (nothing new or changed): scope it to the program the preview was built for
+    if (programIds.length === 0 && removeIds.length > 0 && Number.isInteger(bodyProgramId) && bodyProgramId > 0
+      && (chairProgramId == null || bodyProgramId === chairProgramId)) {
+      programIds.push(bodyProgramId);
+    }
+    if (programIds.length === 0) {
+      return NextResponse.json({ imported: 0, reactivated: 0, updated: 0, removed: 0, total: 0, duplicated: 0, errors });
+    }
     const existingRes = await query(
       `SELECT id, program_id, year_level, semester, subject_code, subject_name,
               lecture_hours, laboratory_hours, units, prerequisites, grade, is_active
@@ -171,22 +180,32 @@ async function POST_handler(req: NextRequest) {
       [programIds, version],
     );
     const existingByKey = new Map<string, ExistingRow>();
+    // Same code apart from spaces/dashes ("PATH- FIT 1" vs "PATH-FIT 1") — matches the preview
+    const existingByLooseKey = new Map<string, ExistingRow[]>();
     for (const row of existingRes.rows as ExistingRow[]) {
       existingByKey.set(
         identityKey(Number(row.program_id), row.year_level, row.semester, row.subject_code),
         row,
       );
+      const loose = identityKey(Number(row.program_id), row.year_level, row.semester, normalizeCourseCode(row.subject_code));
+      existingByLooseKey.set(loose, [...(existingByLooseKey.get(loose) ?? []), row]);
     }
+    const findExisting = (programId: number, year: string, sem: string, code: string): ExistingRow | undefined => {
+      const exact = existingByKey.get(identityKey(programId, year, sem, code));
+      if (exact) return exact;
+      const loose = existingByLooseKey.get(identityKey(programId, year, sem, normalizeCourseCode(code))) ?? [];
+      return loose.length === 1 ? loose[0] : undefined;
+    };
 
     const result = await transaction(async (client) => {
       let imported = 0;
       let reactivated = 0;
       let duplicated = 0;
       let updated = 0;
+      let removed = 0;
 
       for (const row of prepared) {
-        const key = identityKey(row.programId, row.yearLevel, row.semester, row.subjectCode);
-        const existing = existingByKey.get(key);
+        const existing = findExisting(row.programId, row.yearLevel, row.semester, row.subjectCode);
 
         if (!existing) {
           const insertRes = await client.query(
@@ -242,10 +261,21 @@ async function POST_handler(req: NextRequest) {
         }
       }
 
-      return { imported, reactivated, updated, duplicated };
+      if (removeIds.length > 0) {
+        // Soft delete, same as deleting a subject on the Curriculum page
+        const removeRes = await client.query(
+          `UPDATE curriculums SET is_active = false, updated_at = NOW()
+            WHERE id = ANY($1::int[]) AND program_id = ANY($2::int[])
+              AND curriculum_version = $3 AND is_active = true`,
+          [removeIds, programIds, version],
+        );
+        removed = removeRes.rowCount ?? 0;
+      }
+
+      return { imported, reactivated, updated, duplicated, removed };
     });
 
-    const total = result.imported + result.reactivated + result.updated;
+    const total = result.imported + result.reactivated + result.updated + result.removed;
     return NextResponse.json({ ...result, total, errors });
   } catch (error) {
     console.error('[curriculum/import] Fatal error:', error);

@@ -16,6 +16,8 @@ export interface BlockWithAssignmentCounts {
   unassigned_count: number;
   assigned_count: number;
   scheduled_count: number;
+  /** Only with `includeUnassignedSubjects` — the subjects still open in this block. */
+  unassigned_subjects?: { subject_code: string; subject_name: string }[];
   [key: string]: unknown;
 }
 
@@ -29,6 +31,8 @@ export async function fetchBlocksWithAssignmentCounts(filters: {
   semester?: string | null;
   academicYear?: string | null;
   curriculumVersion?: string | null;
+  /** Adds `unassigned_subjects` so a faculty's own Available count can be computed. */
+  includeUnassignedSubjects?: boolean;
 }): Promise<BlockWithAssignmentCounts[]> {
   await ensureBlockCurriculumVersion();
 
@@ -59,6 +63,7 @@ export async function fetchBlocksWithAssignmentCounts(filters: {
   }
 
   const where = baseFilters.join(' AND ');
+  const withSubjects = !!filters.includeUnassignedSubjects;
   const sql = `
       SELECT b.*,
         p.code         AS program_code,
@@ -67,6 +72,7 @@ export async function fetchBlocksWithAssignmentCounts(filters: {
         COALESCE(stats.unassigned_count, 0) AS unassigned_count,
         COALESCE(stats.assigned_count,   0) AS assigned_count,
         COALESCE(stats.scheduled_count,  0) AS scheduled_count
+        ${withSubjects ? `, COALESCE(stats.unassigned_subjects, '[]'::json) AS unassigned_subjects` : ''}
       FROM blocks b
       JOIN programs p ON b.program_id = p.id
       LEFT JOIN (
@@ -75,6 +81,8 @@ export async function fetchBlocksWithAssignmentCounts(filters: {
           COUNT(CASE WHEN f.id IS NULL THEN 1 END) AS unassigned_count,
           COUNT(CASE WHEN f.id IS NOT NULL AND COALESCE(ms.status, '') <> 'Scheduled' THEN 1 END) AS assigned_count,
           COUNT(CASE WHEN f.id IS NOT NULL AND ms.status = 'Scheduled' THEN 1 END) AS scheduled_count
+          ${withSubjects ? `, json_agg(json_build_object('subject_code', c.subject_code, 'subject_name', c.subject_name))
+              FILTER (WHERE f.id IS NULL) AS unassigned_subjects` : ''}
         FROM block_subjects bs
         JOIN curriculums c ON c.id = bs.curriculum_id AND c.is_active = true
         LEFT JOIN LATERAL (

@@ -224,8 +224,8 @@ async function DELETE_handler(req: NextRequest, { params }: Ctx) {
 
     await releaseAccountEmail('user', uid);
 
-    // Best-effort; only files inside the upload folder can be removed
-    deleteUploadedFile(profile_picture);
+    // Best-effort; never touches bundled files
+    await deleteUploadedFile(profile_picture);
 
     // Department Chair notifications are broadcast (recipient_id = 0, shared
     // across every Department Chair account), not per-user — nothing to clean

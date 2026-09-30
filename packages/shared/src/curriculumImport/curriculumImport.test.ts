@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { compareImportRows } from './compareExisting';
+import { compareImportRows, findSubjectsNotInFile } from './compareExisting';
 import { matchHeader, normalizeHeader, scoreHeaderCells } from './columnMap';
 import { parseCurriculumWorkbook } from './parseWorkbook';
 import type { WorkbookInput } from './types';
@@ -376,6 +376,42 @@ test('hyphenated title vs spaced title is identical, not changed', () => {
     lecture_hours: 3, laboratory_hours: 0, units: 3, prerequisites: '', grade: '',
   }], 1);
   assert.equal(compared[0].status, 'existing');
+});
+
+function fileRow(yearLevel: string, semester: string, subjectCode: string, subjectName = 'Subject') {
+  return {
+    rowNum: 1, sheetName: 'S', yearLevel, semester, subjectCode, subjectName,
+    lectureHours: 3, laboratoryHours: 0, creditUnits: 3, prerequisites: '', grade: '', errors: [],
+  };
+}
+function savedRow(id: number, year_level: string, semester: string, subject_code: string, subject_name = 'Subject') {
+  return {
+    id, program_id: 1, year_level, semester, subject_code, subject_name,
+    lecture_hours: 3, laboratory_hours: 0, units: 3, prerequisites: '', grade: '',
+  };
+}
+
+test('code differing only by spacing matches the saved subject (not blocked, not new)', () => {
+  const saved = [savedRow(1, '1st Year', '2nd Semester', 'PATH-FIT 4', 'Menu of Dance, Sports, Martial Arts')];
+  const same = compareImportRows([fileRow('1st Year', '2nd Semester', 'PATH- FIT 4', 'Menu of Dance, Sports, Martial Arts')], saved, 1);
+  assert.equal(same[0].status, 'existing');
+  const changed = compareImportRows([fileRow('1st Year', '2nd Semester', 'PATH- FIT 4', 'Menu of Dance, Sports')], saved, 1);
+  assert.equal(changed[0].status, 'changed');
+  assert.equal(changed[0].valid, true);
+});
+
+test('subjects not in the file — only in the file\'s year/semesters', () => {
+  const saved = [
+    savedRow(1, '1st Year', '2nd Semester', 'CS 121'),
+    savedRow(2, '1st Year', '2nd Semester', 'CS 124'),      // not in file → listed
+    savedRow(3, '1st Year', '2nd Semester', 'PATH-FIT 2'),  // spacing variant in file → kept
+    savedRow(4, '2nd Year', '1st Semester', 'CS 211'),      // semester not in file → kept
+  ];
+  const rows = [
+    fileRow('1st Year', '2nd Semester', 'CS 121'),
+    fileRow('1st Year', '2nd Semester', 'PATH- FIT 2'),
+  ];
+  assert.deepEqual(findSubjectsNotInFile(rows, saved, 1).map(r => r.id), [2]);
 });
 
 test('header aliases normalize punctuation and case', () => {

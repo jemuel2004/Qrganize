@@ -28,6 +28,7 @@ export default function AnchoredPopover({
   label,
   onKeyDown,
   align = 'start',
+  duration = 0.18,
   children,
 }: {
   open: boolean;
@@ -40,6 +41,8 @@ export default function AnchoredPopover({
   onKeyDown?: (e: React.KeyboardEvent) => void;
   /** 'end' lines the panel up with the trigger's right edge */
   align?: 'start' | 'end';
+  /** Open animation length in seconds (close runs a little quicker) */
+  duration?: number;
   children: ReactNode;
 }) {
   const reduceMotion = useReducedMotion();
@@ -93,8 +96,8 @@ export default function AnchoredPopover({
           aria-label={label}
           onKeyDown={onKeyDown}
           initial={reduceMotion ? false : { opacity: 0, y: pos.up ? 6 : -6, scale: 0.97 }}
-          animate={{ opacity: 1, y: 0, scale: 1, transition: { duration: reduceMotion ? 0 : 0.18, ease: EASE } }}
-          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: pos.up ? 6 : -6, scale: 0.97, transition: { duration: 0.13, ease: EASE } }}
+          animate={{ opacity: 1, y: 0, scale: 1, transition: { duration: reduceMotion ? 0 : duration, ease: EASE } }}
+          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: pos.up ? 6 : -6, scale: 0.97, transition: { duration: duration * 0.72, ease: EASE } }}
           style={{
             position: 'fixed',
             left: pos.left,

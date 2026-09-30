@@ -4,10 +4,8 @@ import { query } from '@/database/db';
 import { validateImageMagicBytes } from '@/infra/validateUpload';
 import { ensureInstructorGooglePicture } from '@/database/schema-guard';
 import { customProfilePicturePath, resolveInstructorProfilePicture } from '@shared/instructorAvatar';
-import fs from 'fs/promises';
-import path from 'path';
 import { withAudit } from '@/services/audit';
-import { uploadDir as storageDir } from '@/services/uploadStorage';
+import { deleteUploadsNamed, saveUpload } from '@/services/uploadStorage';
 
 const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp'] as const;
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -39,16 +37,7 @@ async function POST_handler(req: NextRequest) {
 
     const extMap: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
     const ext = extMap[file.type] ?? 'jpg';
-    const filename = `faculty_${authUser.faculty_id}.${ext}`;
-    const uploadDir = storageDir('profiles');
-
-    const existing = (await fs.readdir(uploadDir)).filter(f => f.startsWith(`faculty_${authUser.faculty_id}.`));
-    for (const f of existing) await fs.unlink(path.join(uploadDir, f));
-
-    const bytes = await file.arrayBuffer();
-    await fs.writeFile(path.join(uploadDir, filename), Buffer.from(bytes));
-
-    const storedPath  = `/uploads/profiles/${filename}`;
+    const storedPath = await saveUpload('profiles', `faculty_${authUser.faculty_id}`, ext, file.type, Buffer.from(await file.arrayBuffer()));
     await query('UPDATE faculty SET profile_picture = $1 WHERE id = $2', [storedPath, authUser.faculty_id]);
 
     return NextResponse.json({
@@ -79,9 +68,7 @@ async function DELETE_handler(req: NextRequest) {
     const stored: string | null = row.rows[0]?.profile_picture ?? null;
 
     if (customProfilePicturePath(stored)) {
-      const uploadDir = storageDir('profiles');
-      const existing = (await fs.readdir(uploadDir)).filter(f => f.startsWith(`faculty_${authUser.faculty_id}.`));
-      for (const f of existing) await fs.unlink(path.join(uploadDir, f));
+      await deleteUploadsNamed('profiles', `faculty_${authUser.faculty_id}`);
     }
 
     await query('UPDATE faculty SET profile_picture = NULL WHERE id = $1', [authUser.faculty_id]);

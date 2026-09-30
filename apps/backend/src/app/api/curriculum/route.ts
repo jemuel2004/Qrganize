@@ -162,5 +162,38 @@ async function POST_handler(req: NextRequest) {
   }
 }
 
+/* Delete All — soft-deletes the listed subjects (the ones shown on the page), like single delete */
+async function DELETE_handler(req: NextRequest) {
+  try {
+    const auth = await getAuthUser(req) as { role?: string; program_id?: number | null } | null;
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const body = await req.json().catch(() => ({}));
+    const programId = Number(body.program_id);
+    const ids = Array.isArray(body.ids)
+      ? [...new Set((body.ids as unknown[]).map(Number).filter(n => Number.isInteger(n) && n > 0))]
+      : [];
+    if (!programId || ids.length === 0) {
+      return NextResponse.json({ error: 'No subjects to delete.' }, { status: 400 });
+    }
+    if (!(await canAccessProgram(auth, programId))) {
+      return NextResponse.json({ error: 'You can only manage curriculum for your assigned program.' }, { status: 403 });
+    }
+
+    // Only subjects of that program are touched, whatever ids are sent
+    const result = await query(
+      `UPDATE curriculums SET is_active = false, updated_at = NOW()
+        WHERE id = ANY($1::int[]) AND program_id = $2 AND is_active = true`,
+      [ids, programId],
+    );
+    return NextResponse.json({ success: true, deleted: result.rowCount ?? 0 });
+  } catch {
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
+
 // Successful writes are recorded in the audit trail (System → Audit Logs).
 export const POST = withAudit(POST_handler);
+export const DELETE = withAudit(DELETE_handler);

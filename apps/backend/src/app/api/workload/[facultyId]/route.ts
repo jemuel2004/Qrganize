@@ -8,11 +8,11 @@ import {
 } from '@shared/regularLoad';
 import { canAccessProgram } from '@/services/programScope';
 import { ensurePraiseSplitColumn } from '@/services/praiseSplit';
+import { ensureSessionTypes } from '@/services/sessionTypeRepair';
 
 /* Module-level flags — DDL and one-time data migrations run once per cold start,
  * not on every request. Avoids unnecessary write overhead on every GET. */
 let schemaReady   = false;
-let migrationDone = false;
 
 async function ensureSchema() {
   if (schemaReady) return;
@@ -36,19 +36,6 @@ async function ensureSchema() {
   schemaReady = true;
 }
 
-async function ensureMigration() {
-  if (migrationDone) return;
-  // Re-type legacy lab sessions that were saved before the type column was introduced.
-  // Identifies them by room type since they defaulted to type='lec'.
-  await query(`
-    UPDATE schedule_sessions
-    SET type = 'lab'
-    WHERE type = 'lec'
-      AND room_id IN (SELECT id FROM rooms WHERE room_type IN ('Laboratory', 'Computer Lab'))
-  `);
-  migrationDone = true;
-}
-
 export async function GET(req: NextRequest, { params }: { params: Promise<{ facultyId: string }> }) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
@@ -62,7 +49,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ facu
     const semester = searchParams.get('semester');
 
     await ensureSchema();
-    await ensureMigration();
+    await ensureSessionTypes();
 
     const facultyResult = await query('SELECT * FROM faculty WHERE id=$1', [facultyId]);
     if (facultyResult.rows.length === 0) return NextResponse.json({ error: 'Faculty not found' }, { status: 404 });
@@ -108,12 +95,12 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ facu
         (SELECT r2.room_name FROM schedule_sessions ss2
          JOIN rooms r2 ON ss2.room_id = r2.id
          WHERE ss2.master_schedule_id = ms.id AND ss2.room_id IS NOT NULL
-           AND r2.room_type NOT IN ('Laboratory', 'Computer Lab')
+           AND ss2.type = 'lec'
          ORDER BY ss2.id LIMIT 1) AS lec_room_name,
         (SELECT r2.room_name FROM schedule_sessions ss2
          JOIN rooms r2 ON ss2.room_id = r2.id
          WHERE ss2.master_schedule_id = ms.id AND ss2.room_id IS NOT NULL
-           AND r2.room_type IN ('Laboratory', 'Computer Lab')
+           AND ss2.type = 'lab'
          ORDER BY ss2.id LIMIT 1) AS lab_room_name,
         (SELECT COALESCE(SUM(o2.units), 0) FROM overloads o2
          WHERE o2.faculty_id = il.faculty_id AND o2.master_schedule_id = il.master_schedule_id) AS split_overload_units,

@@ -3,12 +3,8 @@ import { getAuthUser } from '@/auth/auth';
 import { query } from '@/database/db';
 import { ensureUserProfilePicture } from '@/database/schema-guard';
 import { validateImageMagicBytes } from '@/infra/validateUpload';
-import fs from 'fs';
-import path from 'path';
 import { withAudit } from '@/services/audit';
-import { deleteUploadedFile, uploadDir as storageDir } from '@/services/uploadStorage';
-
-const profileUploadDir = () => storageDir('profiles');
+import { deleteUploadedFile, saveUpload } from '@/services/uploadStorage';
 
 async function POST_handler(req: NextRequest) {
   try {
@@ -39,17 +35,9 @@ async function POST_handler(req: NextRequest) {
     };
     const ext = extMap[file.type] ?? 'jpg';
     const userId = authUser.id!;
-    const filename = `user_${userId}.${ext}`;
-    const uploadDir = profileUploadDir();
 
-    // Remove any existing picture for this user (all extensions)
-    const existing = fs.readdirSync(uploadDir).filter(f => f.startsWith(`user_${userId}.`));
-    for (const f of existing) fs.unlinkSync(path.join(uploadDir, f));
-
-    const bytes = await file.arrayBuffer();
-    fs.writeFileSync(path.join(uploadDir, filename), Buffer.from(bytes));
-
-    const storedPath = `/uploads/profiles/${filename}`;
+    // Replaces any existing picture for this user (all extensions)
+    const storedPath = await saveUpload('profiles', `user_${userId}`, ext, file.type, Buffer.from(await file.arrayBuffer()));
     const pictureUrl = `${storedPath}?t=${Date.now()}`;
 
     // Ensure the column exists before writing (guard is idempotent, cached per process)
@@ -78,7 +66,7 @@ async function DELETE_handler(req: NextRequest) {
     const row = await query('SELECT profile_picture FROM users WHERE id = $1', [userId]);
     const stored: string | null = row.rows[0]?.profile_picture ?? null;
 
-    deleteUploadedFile(stored);
+    await deleteUploadedFile(stored);
 
     await query('UPDATE users SET profile_picture = NULL WHERE id = $1', [userId]);
     return NextResponse.json({ success: true });

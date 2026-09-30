@@ -1,28 +1,20 @@
 import { NextResponse } from 'next/server';
-import fs from 'fs/promises';
-import path from 'path';
-import { findUploadedFile } from '@/services/uploadStorage';
+import { readUpload } from '@/services/uploadStorage';
 
 /*
- * Serves uploaded files (profile photos, system logo) from the upload folder —
- * UPLOAD_DIR in production (e.g. a Render persistent disk), public/uploads
- * locally. Files added after the build are served too. The frontend forwards
- * /uploads/* here. Same public access as the files had under public/.
+ * Serves uploaded files (profile photos, system logo) — from the database
+ * (uploaded_files), falling back to bundled files under public/uploads.
+ * The frontend forwards /uploads/* here. Same public access as the files
+ * had under public/.
  */
-
-const TYPES: Record<string, string> = {
-  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif',
-};
 
 export async function GET(_req: Request, { params }: { params: Promise<{ path: string[] }> }) {
   const { path: parts } = await params;
-  const file = findUploadedFile(`/uploads/${parts.map(p => decodeURIComponent(p)).join('/')}`);
-  const type = file ? TYPES[path.extname(file).toLowerCase()] : undefined;
-  if (!file || !type) return new NextResponse('Not found', { status: 404 });
-  const data = await fs.readFile(file);
-  return new NextResponse(new Uint8Array(data), {
+  const file = await readUpload(`/uploads/${parts.map(p => decodeURIComponent(p)).join('/')}`);
+  if (!file || !file.contentType.startsWith('image/')) return new NextResponse('Not found', { status: 404 });
+  return new NextResponse(new Uint8Array(file.data), {
     headers: {
-      'Content-Type': type,
+      'Content-Type': file.contentType,
       // Uploads are replaced in place (…?t= busts caches), so revalidate each time
       'Cache-Control': 'public, max-age=0, must-revalidate',
       'X-Content-Type-Options': 'nosniff',

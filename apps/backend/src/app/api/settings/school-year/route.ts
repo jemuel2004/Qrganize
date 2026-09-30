@@ -15,7 +15,7 @@ export async function GET() {
   }
 }
 
-// POST — only updates the default semester now.
+// POST — sets the active semester ('' archives it). Semesters page in Settings → School Year.
 // School year activation is managed via PATCH /api/school-years/[id].
 async function POST_handler(req: NextRequest) {
   try {
@@ -27,7 +27,11 @@ async function POST_handler(req: NextRequest) {
     const body = await req.json();
     await ensureSystemSettingsTable();
 
-    const semester = body.semester ?? '';
+    // '' = the active semester was archived (no active semester, like an archived school year)
+    const semester = typeof body.semester === 'string' ? body.semester.trim() : '';
+    if (semester && !['1st Semester', '2nd Semester', 'Summer'].includes(semester)) {
+      return NextResponse.json({ error: 'Unknown semester.' }, { status: 400 });
+    }
     await query(
       `INSERT INTO system_settings (key, value, updated_at)
        VALUES ('current_semester', $1, NOW())

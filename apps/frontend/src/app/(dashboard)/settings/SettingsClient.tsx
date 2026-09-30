@@ -15,7 +15,7 @@ import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import {
   CheckCircle, ImagePlus, Trash2, Upload, AlertTriangle, X,
   Palette, Sun, Moon,
-  CalendarDays, CalendarRange, ShieldAlert, Eye, EyeOff, RotateCcw, Plus,
+  CalendarDays, CalendarRange, CalendarPlus, ShieldAlert, Eye, EyeOff, RotateCcw, Plus, Archive,
   KeyRound, ShieldCheck, Smartphone, Lock, ChevronRight, User,
 } from 'lucide-react';
 import DayCombinationsSection from './DayCombinationsSection';
@@ -712,15 +712,72 @@ function Spinner({ cls = 'border-white/30 border-t-white' }: { cls?: string }) {
   return <div className={`w-4 h-4 border-2 rounded-full animate-spin flex-shrink-0 ${cls}`} />;
 }
 
+const ACTION_EASE = [0.4, 0, 0.2, 1] as const;
+
+/**
+ * School Year action button with one shared, gentle motion: the button lifts a
+ * touch on hover and presses in on click, and its icon nudges up — the Delete
+ * trash can gives a small wiggle instead. Motion is off with reduced motion.
+ */
+function ActionButton({
+  icon: Icon, iconClass = 'w-3.5 h-3.5', wiggle = false, busy, children, disabled, className, style, onClick, title, ariaLabel,
+}: {
+  icon?: React.ElementType;
+  iconClass?: string;
+  /** Trash-can wiggle (Delete) instead of the upward nudge */
+  wiggle?: boolean;
+  /** Shown in place of the icon while the action runs */
+  busy?: React.ReactNode;
+  children?: React.ReactNode;
+  disabled?: boolean;
+  className: string;
+  style?: React.CSSProperties;
+  onClick: () => void;
+  title?: string;
+  ariaLabel?: string;
+}) {
+  const reduceMotion = useReducedMotion();
+  const live = !reduceMotion && !disabled;
+  return (
+    <motion.button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={ariaLabel}
+      style={style}
+      className={className}
+      initial="rest"
+      animate="rest"
+      whileHover={live ? 'hover' : undefined}
+      whileTap={live ? 'tap' : undefined}
+      variants={{ rest: { y: 0, scale: 1 }, hover: { y: -1, scale: 1.04 }, tap: { scale: 0.94 } }}
+      transition={{ duration: 0.25, ease: ACTION_EASE }}
+    >
+      {busy ?? (Icon && (
+        <motion.span
+          className="inline-flex"
+          variants={wiggle
+            ? { rest: { rotate: 0 }, hover: { rotate: [0, -14, 10, -6, 0], transition: { duration: 0.5, ease: 'easeInOut' } } }
+            : { rest: { y: 0 }, hover: { y: -1.5, transition: { duration: 0.25, ease: ACTION_EASE } } }}
+        >
+          <Icon className={iconClass} />
+        </motion.span>
+      ))}
+      {children}
+    </motion.button>
+  );
+}
+
 function SchoolYearSection() {
   const toast = useToast();
   const [years,    setYears]    = useState<SchoolYear[]>([]);
+  /** Active semester ('' = archived, none active — same rule as school years) */
   const [semester, setSemester] = useState('1st Semester');
   const [newLabel, setNewLabel] = useState('');
-  const [savedSemester, setSavedSemester] = useState('1st Semester');
   const [loading,  setLoading]  = useState(true);
   const [creating, setCreating] = useState(false);
-  const [saving,   setSaving]   = useState(false);
+  const [semBusy,  setSemBusy]  = useState<string | null>(null);
   const [actionId, setActionId] = useState<number | null>(null);
   const [addError, setAddError] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
@@ -733,9 +790,7 @@ function SchoolYearSection() {
       if (!res.ok) return;
       const data = await res.json();
       setYears(data.years ?? []);
-      const sem = data.currentSemester ?? '1st Semester';
-      setSemester(sem);
-      setSavedSemester(sem);
+      setSemester(data.currentSemester ?? '1st Semester');
     } catch { /* silent */ }
     finally { setLoading(false); }
   }
@@ -814,23 +869,25 @@ function SchoolYearSection() {
     finally { setDeletingId(null); }
   }
 
-  async function saveSemester() {
-    setSaving(true);
+  /** Set Active (`next` = that semester) or Archive the active one (`next` = ''). */
+  async function setActiveSemester(target: string, next: string) {
+    setSemBusy(target);
     try {
       const res = await fetch('/api/settings/school-year', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ semester }),
+        body:    JSON.stringify({ semester: next }),
       });
       if (!res.ok) { toast.error('Failed to save semester.'); return; }
-      setSavedSemester(semester);
+      setSemester(next);
       const active = years.find(y => y.status === 'Active');
       window.dispatchEvent(new CustomEvent('school-year-changed', {
-        detail: { schoolYear: active?.label ?? '', semester },
+        detail: { schoolYear: active?.label ?? '', semester: next },
       }));
-      toast.success('Default semester updated.');
+      if (next) toast.success(`${next} is now the active semester.`);
+      else toast.info(`${target} archived.`);
     } catch { toast.error('Connection error.'); }
-    finally { setSaving(false); }
+    finally { setSemBusy(null); }
   }
 
   function generateNext() {
@@ -866,7 +923,7 @@ function SchoolYearSection() {
             <p className="text-[10px] font-bold uppercase tracking-widest text-[#64748B]">Active Period</p>
             <p className="text-sm font-bold text-[#0B2A5B] mt-0.5 leading-tight">
               {activeYear.label}
-              <span className="font-normal text-[#64748B] ml-2">· {semester}</span>
+              <span className="font-normal text-[#64748B] ml-2">· {semester || 'No active semester'}</span>
             </p>
           </div>
           <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full bg-[#DCFCE7] text-[#16A34A] flex-shrink-0 tracking-wide">
@@ -876,39 +933,64 @@ function SchoolYearSection() {
         </div>
       )}
 
-      {/* ── Default Semester ── */}
+      {/* ── Semesters — same Active / Archived pattern as School Years ── */}
       <div className="rounded-2xl border border-[#E2E8F0] bg-white shadow-sm overflow-hidden">
         <div className="px-5 py-3.5 border-b border-[#F1F5F9]">
-          <p className="text-sm font-semibold text-[#0B2A5B]">Default Semester</p>
+          <p className="text-sm font-semibold text-[#0B2A5B]">Semesters</p>
           <p className="text-xs text-[#94A3B8] mt-0.5">
-            Applied across all modules when no semester is explicitly selected.
+            Only one semester can be active at a time. It applies across all modules.
           </p>
         </div>
-        <div className="px-5 py-4 flex items-center gap-3">
-          <select
-            value={semester}
-            onChange={e => setSemester(e.target.value)}
-            className="flex-1 border border-[#CBD5E1] rounded-xl px-3.5 py-2.5 text-sm text-[#0B2A5B] bg-white appearance-none focus:outline-none focus:ring-2 focus:ring-[#1D5BD6] focus:border-[#1D5BD6] transition-all duration-150 cursor-pointer"
-          >
-            {SEMESTERS_LIST.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-          {semester !== savedSemester ? (
-            <button
-              onClick={saveSemester}
-              disabled={saving}
-              style={{ color: saving ? '#94A3B8' : '#ffffff' }}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold text-white bg-[#1D5BD6] hover:bg-[#164BB5] transition-all duration-150 flex-shrink-0 shadow-sm disabled:bg-[#CBD5E1] disabled:shadow-none disabled:cursor-not-allowed"
-            >
-              {saving
-                ? <><Spinner />Saving…</>
-                : <><CheckCircle className="w-4 h-4" />Save</>}
-            </button>
-          ) : (
-            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-[#DCFCE7] text-[#16A34A] flex-shrink-0">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#22C55E] inline-block" />
-              Active
-            </span>
-          )}
+        <div className="divide-y divide-[#E2E8F0]">
+          {SEMESTERS_LIST.map(sem => {
+            const isActive = sem === semester;
+            const isBusy   = semBusy === sem;
+            const anyBusy  = !!semBusy;
+            return (
+              <div
+                key={sem}
+                className={`flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3 transition-colors duration-200 ${
+                  isActive ? 'bg-[#F8FAFC]' : 'bg-white hover:bg-[#F8FAFC]'
+                }`}
+              >
+                <span className={`min-w-[5.5rem] sm:min-w-[6.5rem] text-sm font-semibold ${isActive ? 'text-[#0B2A5B]' : 'text-[#64748B]'}`}>
+                  {sem}
+                </span>
+                <span className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-md uppercase tracking-wide flex-shrink-0 ${
+                  isActive ? 'bg-[#DCFCE7] text-[#15803D]' : 'bg-[#F1F5F9] text-[#94A3B8]'
+                }`}>
+                  {isActive ? 'Active' : 'Archived'}
+                </span>
+                <div className="flex items-center gap-2 flex-shrink-0 ml-auto">
+                  {isActive ? (
+                    <ActionButton
+                      onClick={() => setActiveSemester(sem, '')}
+                      disabled={anyBusy}
+                      icon={Archive}
+                      busy={isBusy ? <Spinner cls="border-[#E2E8F0] border-t-[#94A3B8]" /> : undefined}
+                      className="inline-flex items-center justify-center gap-1.5 min-h-[30px] px-3 py-1.5 rounded-lg text-xs font-medium transition-colors duration-200
+                        text-[#64748B] border border-[#E2E8F0] bg-white
+                        hover:text-[#0B2A5B] hover:border-[#CBD5E1] hover:bg-[#F8FAFC]
+                        disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      Archive
+                    </ActionButton>
+                  ) : (
+                    <ActionButton
+                      onClick={() => setActiveSemester(sem, sem)}
+                      disabled={anyBusy}
+                      icon={CheckCircle}
+                      busy={isBusy ? <Spinner /> : undefined}
+                      style={{ color: anyBusy ? '#94A3B8' : '#ffffff' }}
+                      className="inline-flex items-center justify-center gap-1.5 min-h-[30px] px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-[#1D5BD6] hover:bg-[#164BB5] transition-colors duration-200 disabled:bg-[#CBD5E1] disabled:cursor-not-allowed"
+                    >
+                      Set Active
+                    </ActionButton>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -921,16 +1003,16 @@ function SchoolYearSection() {
             <p className="text-sm font-semibold text-[#0B2A5B]">School Years</p>
             <p className="text-xs text-[#94A3B8] mt-0.5">Only one school year can be active at a time.</p>
           </div>
-          <button
-            type="button"
+          <ActionButton
             onClick={generateNext}
             disabled={creating || years.some(y => y.label === next)}
             title={`Create ${next}`}
-            className="inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold text-white bg-[#1D5BD6] hover:bg-[#164BB5] transition-colors duration-150 flex-shrink-0 self-start sm:self-auto disabled:bg-[#CBD5E1] disabled:text-white/80 disabled:cursor-not-allowed"
+            icon={CalendarPlus}
+            busy={creating ? <Spinner /> : undefined}
+            className="inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold text-white bg-[#1D5BD6] hover:bg-[#164BB5] transition-colors duration-200 flex-shrink-0 self-start sm:self-auto disabled:bg-[#CBD5E1] disabled:text-white/80 disabled:cursor-not-allowed"
           >
-            {creating && <Spinner />}
             Generate {next}
-          </button>
+          </ActionButton>
         </div>
 
         {/* List */}
@@ -973,44 +1055,42 @@ function SchoolYearSection() {
                     {/* Actions */}
                     <div className="flex items-center gap-2 flex-shrink-0 ml-auto">
                       {isActive ? (
-                        <button
-                          type="button"
+                        <ActionButton
                           onClick={() => doAction(yr.id, 'archive')}
                           disabled={anyBusy}
-                          className="inline-flex items-center justify-center gap-1.5 min-h-[30px] px-3 py-1.5 rounded-lg text-xs font-medium transition-colors duration-150
+                          icon={Archive}
+                          busy={isLoading ? <Spinner cls="border-[#E2E8F0] border-t-[#94A3B8]" /> : undefined}
+                          className="inline-flex items-center justify-center gap-1.5 min-h-[30px] px-3 py-1.5 rounded-lg text-xs font-medium transition-colors duration-200
                             text-[#64748B] border border-[#E2E8F0] bg-white
                             hover:text-[#0B2A5B] hover:border-[#CBD5E1] hover:bg-[#F8FAFC]
                             disabled:opacity-40 disabled:cursor-not-allowed"
                         >
-                          {isLoading && <Spinner cls="border-[#E2E8F0] border-t-[#94A3B8]" />}
                           Archive
-                        </button>
+                        </ActionButton>
                       ) : (
                         <>
-                          <button
-                            type="button"
+                          <ActionButton
                             onClick={() => doAction(yr.id, 'activate')}
                             disabled={anyBusy}
+                            icon={CheckCircle}
+                            busy={isLoading ? <Spinner /> : undefined}
                             style={{ color: (isLoading || anyBusy) ? '#94A3B8' : '#ffffff' }}
-                            className="inline-flex items-center justify-center gap-1.5 min-h-[30px] px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-[#1D5BD6] hover:bg-[#164BB5] transition-colors duration-150 disabled:bg-[#CBD5E1] disabled:cursor-not-allowed"
+                            className="inline-flex items-center justify-center gap-1.5 min-h-[30px] px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-[#1D5BD6] hover:bg-[#164BB5] transition-colors duration-200 disabled:bg-[#CBD5E1] disabled:cursor-not-allowed"
                           >
-                            {isLoading && <Spinner />}
                             Set Active
-                          </button>
-                          <button
-                            type="button"
+                          </ActionButton>
+                          <ActionButton
                             onClick={() => setConfirmDeleteId(yr.id)}
                             disabled={anyBusy}
                             title="Delete school year"
-                            aria-label={`Delete ${yr.label}`}
-                            className="inline-flex items-center justify-center w-7 h-7 rounded-lg text-[#94A3B8] border border-[#E2E8F0] bg-white
-                              hover:text-red-600 hover:border-red-200 hover:bg-red-50
-                              transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed"
-                          >
-                            {isDeleting
-                              ? <Spinner cls="border-[#E2E8F0] border-t-red-400" />
-                              : <Trash2 className="w-3.5 h-3.5" />}
-                          </button>
+                            ariaLabel={`Delete ${yr.label}`}
+                            icon={Trash2}
+                            wiggle
+                            busy={isDeleting ? <Spinner cls="border-red-200 border-t-red-500" /> : undefined}
+                            className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-red-600 border border-red-200 bg-red-50
+                              hover:bg-red-100 hover:border-red-300
+                              transition-colors duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                          />
                         </>
                       )}
                     </div>
@@ -1026,13 +1106,15 @@ function SchoolYearSection() {
                           This action cannot be undone. The school year will be permanently removed.
                         </p>
                         <div className="flex flex-wrap items-center gap-2 mt-3">
-                          <button
-                            type="button"
+                          <ActionButton
                             onClick={() => deleteYear(yr.id)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors"
+                            icon={Trash2}
+                            iconClass="w-3 h-3"
+                            wiggle
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors duration-200"
                           >
-                            <Trash2 className="w-3 h-3" /> Yes, Delete
-                          </button>
+                            Yes, Delete
+                          </ActionButton>
                           <button
                             type="button"
                             onClick={() => setConfirmDeleteId(null)}
@@ -1075,16 +1157,17 @@ function SchoolYearSection() {
                 }`}
               />
             </div>
-            <button
+            <ActionButton
               onClick={() => addYear(newLabel)}
               disabled={creating || !newLabel.trim()}
+              icon={Plus}
+              iconClass="w-4 h-4"
+              busy={creating ? <Spinner /> : undefined}
               style={{ color: (creating || !newLabel.trim()) ? '#94A3B8' : '#ffffff' }}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-[#1D5BD6] hover:bg-[#164BB5] transition-all duration-150 flex-shrink-0 shadow-sm disabled:bg-[#CBD5E1] disabled:shadow-none disabled:cursor-not-allowed"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-[#1D5BD6] hover:bg-[#164BB5] transition-colors duration-200 flex-shrink-0 shadow-sm disabled:bg-[#CBD5E1] disabled:shadow-none disabled:cursor-not-allowed"
             >
-              {creating
-                ? <><Spinner />Adding…</>
-                : <><Plus className="w-4 h-4" />Add Year</>}
-            </button>
+              {creating ? 'Adding…' : 'Add Year'}
+            </ActionButton>
           </div>
 
           {addError && (

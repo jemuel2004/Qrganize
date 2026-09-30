@@ -235,8 +235,8 @@ async function DELETE_handler(req: NextRequest, { params }: Ctx) {
 
     await releaseAccountEmail('user', uid);
 
-    // Best-effort; only files inside the upload folder can be removed
-    deleteUploadedFile(profile_picture);
+    // Best-effort; never touches bundled files
+    await deleteUploadedFile(profile_picture);
 
     await query(
       `DELETE FROM notifications WHERE recipient_id = $1 AND recipient_role = 'program_chair'`,

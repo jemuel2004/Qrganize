@@ -106,6 +106,8 @@ function Avatar({ user, size = 36, ring = true }: { user: UserData; size?: numbe
   const bgCls   = AVATAR_BG[user.role] ?? 'bg-slate-500';
   const ringCls = ring ? `ring-2 ${AVATAR_RING[user.role] ?? 'ring-slate-500/40'}` : '';
   const px      = `${size}px`;
+  // Photo that failed to load (e.g. file missing) → show initials instead of a broken image
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
 
   if (user.role === 'instructor') {
     return (
@@ -118,11 +120,12 @@ function Avatar({ user, size = 36, ring = true }: { user: UserData; size?: numbe
     );
   }
 
-  if (user.profile_picture) {
+  if (user.profile_picture && failedSrc !== user.profile_picture) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
       <img
         src={user.profile_picture}
+        onError={() => setFailedSrc(user.profile_picture ?? null)}
         alt={name}
         className={`flex-shrink-0 rounded-full ${ringCls} object-cover`}
         style={{ width: px, height: px }}

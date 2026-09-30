@@ -52,7 +52,7 @@ async function DELETE_handler(
       success: true,
       removed: canCancel ? 'cancelled' : 'deleted',
     });
-  } catch (error) {
+  } catch {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

@@ -5,33 +5,15 @@ import { getChairAssignedProgramId, isScopedChair } from '@/services/programScop
 import { findScheduleConflicts, validateSessions, type ScheduleConflict } from '@/services/scheduleConflicts';
 import { termDayCombinationError } from '@/services/dayCombinations';
 import { withAudit } from '@/services/audit';
+import { ensureSessionTypes } from '@/services/sessionTypeRepair';
 
 /* Run once per cold start — avoids DDL + migration overhead on every POST */
 let schedSchemaReady   = false;
-let schedMigrationDone = false;
 
 async function ensureSchedSchema() {
   if (schedSchemaReady) return;
   await query(`ALTER TABLE schedule_sessions ADD COLUMN IF NOT EXISTS type VARCHAR(3) DEFAULT 'lec'`);
   schedSchemaReady = true;
-}
-
-async function ensureSchedMigration() {
-  if (schedMigrationDone) return;
-  // Legacy rows saved before `type` existed. Only lab-only subjects are
-  // relabelled: the Lecture of a Major + Lab subject may now sit in a lab room.
-  await query(`
-    UPDATE schedule_sessions ss
-    SET type = 'lab'
-    FROM master_schedule ms
-    JOIN block_subjects bs ON bs.id = ms.block_subject_id
-    JOIN curriculums c ON c.id = bs.curriculum_id
-    WHERE ss.master_schedule_id = ms.id
-      AND ss.type = 'lec'
-      AND COALESCE(c.lecture_hours, 0) = 0
-      AND ss.room_id IN (SELECT id FROM rooms WHERE room_type IN ('Laboratory', 'Computer Lab'))
-  `);
-  schedMigrationDone = true;
 }
 
 // Returns all master_schedule rows that have an assigned instructor but no saved
@@ -247,7 +229,7 @@ async function POST_handler(req: NextRequest) {
 
     // Ensure type column + legacy migration run once per cold start, not per request
     await ensureSchedSchema();
-    await ensureSchedMigration();
+    await ensureSessionTypes();
 
     // ── Atomic save (transaction) ───────────────────────────────────────────
     // DELETE + INSERT + UPDATE are all-or-nothing: a mid-save failure rolls

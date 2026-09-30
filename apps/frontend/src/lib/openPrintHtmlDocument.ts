@@ -12,6 +12,7 @@
 import {
   storeWorkloadPrintHtml,
   peekWorkloadPrintHtml,
+  type WorkloadDocumentKind,
 } from '@/lib/workloadPrintStorage';
 
 export type OpenPrintHtmlResult = {
@@ -271,7 +272,7 @@ export async function openPrintHtmlDocument(
     printablePath?: string;
     /** Optional filename if download fallback is used */
     downloadFilename?: string;
-    documentKind?: 'regular' | 'overload' | 'praise';
+    documentKind?: WorkloadDocumentKind;
   },
 ): Promise<OpenPrintHtmlResult> {
   const features = options?.windowFeatures ?? DEFAULT_FEATURES;

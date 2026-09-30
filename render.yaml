@@ -6,7 +6,7 @@ services:
   - type: web
     name: qrganize-backend
     runtime: node
-    # Persistent disk (below) needs a paid instance; see DEPLOYMENT.md for the free-tier trade-off
+    # Persistent disk (below) is optional (uploads are stored in the database) and needs a paid instance
     plan: starter
     # npm workspaces: install at the repo root so packages/shared resolves
     # --include=dev: NODE_ENV=production would otherwise skip the build tools (cross-env, TypeScript)
@@ -32,7 +32,7 @@ services:
         generateValue: true
       - key: OTP_SECRET
         generateValue: true
-      # Profile photos + system logo on the persistent disk (survive redeploys)
+      # Optional: photos/logo now live in the database; this only serves older files left on the disk
       - key: UPLOAD_DIR
         value: /var/data/uploads
       # Behind Vercel + Render proxies — read the real client IP for rate limiting

@@ -884,8 +884,14 @@ html:not(.light) [class~="bg-[#FFF5F5]"],
 html:not(.light) [class~="bg-red-50"] {
   background-color: rgba(248, 113, 113, 0.14) !important;
 }
-html:not(.light) [class~="bg-[#EDE9FE]"] {
+html:not(.light) [class~="bg-[#EDE9FE]"],
+html:not(.light) [class~="bg-[#F5F3FF]"] {
   background-color: rgba(139, 92, 246, 0.16) !important;
+}
+/* Lab / Major violet text — lifted so it stays readable on dark surfaces */
+html:not(.light) [class~="text-[#7C3AED]"],
+html:not(.light) [class~="text-[#6D28D9]"] {
+  color: #C4B5FD !important;
 }
 
 /* Hover / subtle fills — schedule rows, lists, tables */
@@ -910,6 +916,18 @@ html:not(.light) [class~="hover:bg-red-50"]:hover {
 }
 html:not(.light) [class~="hover:bg-[#EFF6FF]"]:hover {
   background-color: rgba(29, 91, 214, 0.16) !important;
+}
+html:not(.light) [class~="bg-[#F4F7FC]"] {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+}
+html:not(.light) [class~="border-[#D6E0EF]"] {
+  border-color: var(--border) !important;
+}
+html:not(.light) [class~="hover:bg-amber-50"]:hover {
+  background-color: rgba(251, 191, 36, 0.14) !important;
+}
+html:not(.light) [class~="hover:bg-[#F5F3FF]"]:hover {
+  background-color: rgba(139, 92, 246, 0.14) !important;
 }
 html:not(.light) [class~="hover:border-[#D1D5DB]"]:hover,
 html:not(.light) [class~="hover:border-[#CBD5E1]"]:hover {
@@ -956,6 +974,9 @@ html:not(.light) [class~="border-yellow-200"] {
 }
 html:not(.light) [class~="border-[#BFDBFE]"] {
   border-color: rgba(29, 91, 214, 0.40) !important;
+}
+html:not(.light) [class~="border-[#DDD6FE]"] {
+  border-color: rgba(139, 92, 246, 0.40) !important;
 }
 /* Row dividers — remove near-white light lines in dark mode
    (Tailwind divide can paint border-bottom on :not(:last-child), so target all children) */

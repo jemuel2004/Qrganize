@@ -39,7 +39,7 @@ qr_ganized.session.sql
 *.dump
 
 # User uploads (profile photos, system logo) — personal data, never committed.
-# Production keeps them on the Render disk (UPLOAD_DIR); see DEPLOYMENT.md.
+# Production stores them in the database (uploaded_files); see DEPLOYMENT.md.
 apps/backend/public/uploads/
 
 # MaxMind GeoLite2 local database (download separately; see apps/backend/data/geoip/README.md)

@@ -71,6 +71,33 @@ export async function ensureTrustedDeviceActivityColumns(): Promise<void> {
   ]);
 }
 
+/**
+ * Uploaded images (profile photos, system logo) kept in the database so they
+ * survive restarts on hosts with a temporary filesystem (Render free plan).
+ */
+export function ensureUploadedFilesTable(): Promise<void> {
+  const key = 'uploaded_files.table';
+  if (!_guards.has(key)) {
+    _guards.set(
+      key,
+      query(`
+        CREATE TABLE IF NOT EXISTS uploaded_files (
+          path          VARCHAR(255) PRIMARY KEY,
+          content_type  VARCHAR(50) NOT NULL,
+          data          BYTEA NOT NULL,
+          updated_at    TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        )
+      `)
+        .then(() => void 0)
+        .catch(err => {
+          console.error('[schema-guard] Failed to ensure uploaded_files:', err);
+          _guards.delete(key);
+        }),
+    );
+  }
+  return _guards.get(key)!;
+}
+
 export function ensureSystemSettingsTable(): Promise<void> {
   const key = 'system_settings.table';
   if (!_guards.has(key)) {

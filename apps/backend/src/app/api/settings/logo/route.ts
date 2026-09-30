@@ -3,10 +3,8 @@ import { getAuthUser } from '@/auth/auth';
 import { query } from '@/database/db';
 import { ensureSystemSettingsTable } from '@/database/schema-guard';
 import { validateImageMagicBytes } from '@/infra/validateUpload';
-import fs from 'fs';
-import path from 'path';
 import { withAudit } from '@/services/audit';
-import { uploadDir as storageDir } from '@/services/uploadStorage';
+import { deleteUploadsNamed, saveUpload } from '@/services/uploadStorage';
 
 
 export async function GET() {
@@ -51,18 +49,10 @@ async function POST_handler(req: NextRequest) {
       'image/png':  'png',
       'image/webp': 'webp',
     };
-    const ext       = extMap[file.type] ?? 'png';
-    const uploadDir = storageDir('logo');
+    const ext = extMap[file.type] ?? 'png';
 
-    // Remove any previous logo files
-    const existing = fs.readdirSync(uploadDir).filter(f => f.startsWith('system-logo.'));
-    for (const f of existing) fs.unlinkSync(path.join(uploadDir, f));
-
-    const filename = `system-logo.${ext}`;
-    const bytes    = await file.arrayBuffer();
-    fs.writeFileSync(path.join(uploadDir, filename), Buffer.from(bytes));
-
-    const storedPath = `/uploads/logo/${filename}`;
+    // Replaces any previous logo (other extensions included)
+    const storedPath = await saveUpload('logo', 'system-logo', ext, file.type, Buffer.from(await file.arrayBuffer()));
     const logoUrl    = `${storedPath}?t=${Date.now()}`;
 
     await ensureSystemSettingsTable();
@@ -87,11 +77,7 @@ async function DELETE_handler(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const uploadDir = storageDir('logo');
-    {
-      const existing = fs.readdirSync(uploadDir).filter(f => f.startsWith('system-logo.'));
-      for (const f of existing) fs.unlinkSync(path.join(uploadDir, f));
-    }
+    await deleteUploadsNamed('logo', 'system-logo');
 
     await ensureSystemSettingsTable();
     await query("DELETE FROM system_settings WHERE key = 'logo_url'");

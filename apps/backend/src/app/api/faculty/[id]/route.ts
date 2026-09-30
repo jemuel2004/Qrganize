@@ -350,8 +350,8 @@ async function DELETE_handler(req: NextRequest, { params }: { params: Promise<{ 
       if (deleted.rows.length === 0) throw new Error('NOT_FOUND');
     });
 
-    // Delete profile picture file from disk (best-effort, non-fatal)
-    deleteUploadedFile(profilePicture);
+    // Delete the stored profile picture (best-effort, non-fatal)
+    await deleteUploadedFile(profilePicture);
 
     return NextResponse.json({ success: true });
   } catch (error) {

@@ -55,6 +55,31 @@ function diffFields(row: ParsedSubjectRow, existing: ExistingCurriculumRow): Fie
   return changes;
 }
 
+/**
+ * Existing subjects the file no longer lists. Only year/semesters that appear in
+ * the file are checked, so importing part of a curriculum leaves the rest alone.
+ * Every row with a code counts as "listed" (even invalid ones), so a row the
+ * import skips never causes its existing subject to be removed.
+ */
+export function findSubjectsNotInFile<T extends ExistingCurriculumRow>(
+  rows: ParsedSubjectRow[],
+  existing: T[],
+  programId: number,
+): T[] {
+  const fileSemesters = new Set<string>();
+  const fileCodes = new Set<string>();
+  for (const row of rows) {
+    if (!row.yearLevel || !row.semester) continue;
+    fileSemesters.add(`${normalizeYearLevel(row.yearLevel)}|${normalizeSemester(row.semester)}`);
+    if (row.subjectCode) fileCodes.add(looseCodeKey(programId, row.yearLevel, row.semester, row.subjectCode));
+  }
+  return existing.filter(item =>
+    Number(item.program_id) === programId
+    && fileSemesters.has(`${normalizeYearLevel(item.year_level)}|${normalizeSemester(item.semester)}`)
+    && !fileCodes.has(looseCodeKey(item.program_id, item.year_level, item.semester, item.subject_code)),
+  );
+}
+
 export function compareImportRows(
   rows: ParsedSubjectRow[],
   existing: ExistingCurriculumRow[],
@@ -95,12 +120,15 @@ export function compareImportRows(
         changes = diffFields(row, match);
         status = changes.length === 0 ? 'existing' : 'changed';
       } else {
+        // Same code apart from spaces/dashes ("PATH- FIT 1" vs "PATH-FIT 1") in the same
+        // year/semester is the same subject — compare with it instead of blocking the row.
         const looseMatches = byLoose.get(looseCodeKey(programId, row.yearLevel, row.semester, row.subjectCode)) ?? [];
-        if (looseMatches.length === 1 && normalizeCourseCode(looseMatches[0].subject_code) === normalizeCourseCode(row.subjectCode)
-          && looseMatches[0].subject_code.toUpperCase().trim() !== row.subjectCode) {
-          status = 'possible';
-          errors.push(`Possible match for existing code "${looseMatches[0].subject_code}" — confirm before importing`);
+        if (looseMatches.length === 1) {
           changes = diffFields(row, looseMatches[0]);
+          status = changes.length === 0 ? 'existing' : 'changed';
+        } else if (looseMatches.length > 1) {
+          status = 'possible';
+          errors.push(`Possible match for existing codes ${looseMatches.map(m => `"${m.subject_code}"`).join(', ')} — confirm before importing`);
         }
       }
     }

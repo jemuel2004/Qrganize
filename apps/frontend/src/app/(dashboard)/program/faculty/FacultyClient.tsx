@@ -846,7 +846,7 @@ export default function FacultyPage() {
 
           <div className="sm:col-span-2">
             <FieldLabel>
-              Subjects to Handle&nbsp;<span className="text-slate-500 font-normal">(optional — a priority recommendation, not a restriction)</span>
+              Subjects to Handle&nbsp;<span className="text-slate-500 font-normal">(optional — only these show in Faculty Workload; leave empty to allow all)</span>
             </FieldLabel>
             <SubjectMultiSelect
               options={subjectOptions}

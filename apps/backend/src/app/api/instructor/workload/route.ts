@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUser } from '@/auth/auth';
 import { query } from '@/database/db';
 import { ensurePraiseSplitColumn } from '@/services/praiseSplit';
+import { ensureSessionTypes } from '@/services/sessionTypeRepair';
 import {
   getActiveAcademicPeriod,
   isActivePeriodConfigured,
@@ -20,7 +21,6 @@ import {
  * Query params that do not match the active period are rejected.
  */
 let schemaReady = false;
-let migrationDone = false;
 
 async function ensureInstructorWorkloadSchema() {
   if (!schemaReady) {
@@ -33,15 +33,9 @@ async function ensureInstructorWorkloadSchema() {
       console.error('[instructor/workload] schema DDL failed — will retry:', e);
     }
   }
-  if (!migrationDone && schemaReady) {
+  if (schemaReady) {
     try {
-      await query(`
-        UPDATE schedule_sessions
-        SET type = 'lab'
-        WHERE type = 'lec'
-          AND room_id IN (SELECT id FROM rooms WHERE room_type IN ('Laboratory', 'Computer Lab'))
-      `);
-      migrationDone = true;
+      await ensureSessionTypes();
     } catch (e) {
       console.error('[instructor/workload] session type migration failed — will retry:', e);
     }
@@ -129,12 +123,12 @@ export async function GET(req: NextRequest) {
         (SELECT r2.room_name FROM schedule_sessions ss2
          JOIN rooms r2 ON ss2.room_id = r2.id
          WHERE ss2.master_schedule_id = ms.id AND ss2.room_id IS NOT NULL
-           AND r2.room_type NOT IN ('Laboratory', 'Computer Lab')
+           AND ss2.type = 'lec'
          ORDER BY ss2.id LIMIT 1) AS lec_room_name,
         (SELECT r2.room_name FROM schedule_sessions ss2
          JOIN rooms r2 ON ss2.room_id = r2.id
          WHERE ss2.master_schedule_id = ms.id AND ss2.room_id IS NOT NULL
-           AND r2.room_type IN ('Laboratory', 'Computer Lab')
+           AND ss2.type = 'lab'
          ORDER BY ss2.id LIMIT 1) AS lab_room_name,
         (SELECT COALESCE(SUM(o2.units), 0) FROM overloads o2
          WHERE o2.faculty_id = il.faculty_id AND o2.master_schedule_id = il.master_schedule_id) AS split_overload_units,

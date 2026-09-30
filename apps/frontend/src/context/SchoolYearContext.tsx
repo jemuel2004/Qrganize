@@ -31,8 +31,11 @@ export function SchoolYearProvider({ children }: { children: React.ReactNode }) 
       fetch('/api/settings/school-year', { signal: controller.signal })
         .then(r => r.ok ? r.json() : null)
         .then(data => {
-          if (data?.schoolYear) setSchoolYear(data.schoolYear);
-          if (data?.semester)   setSemester(data.semester);
+          if (data) {
+            // null = archived / none active — clear it so stale terms never linger
+            setSchoolYear(data.schoolYear ?? '');
+            setSemester(data.semester ?? '');
+          }
           setLoading(false);
         })
         .catch(e => {
@@ -53,11 +56,24 @@ export function SchoolYearProvider({ children }: { children: React.ReactNode }) 
       if (sem !== undefined) setSemester(sem);
     }
 
+    // The term can change in another tab, window or by another admin — re-check
+    // whenever this tab comes back into view (at most every 10 s).
+    let lastCheck = Date.now();
+    function onVisible() {
+      if (document.visibilityState !== 'visible' || Date.now() - lastCheck < 10_000) return;
+      lastCheck = Date.now();
+      load(MAX_ATTEMPTS); // one quiet attempt, no retries
+    }
+
     window.addEventListener('school-year-changed', onChanged);
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
     return () => {
       controller.abort();
       if (retryTimer) clearTimeout(retryTimer);
       window.removeEventListener('school-year-changed', onChanged);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
     };
   }, []);
 

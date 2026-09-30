@@ -2,10 +2,8 @@
 import { getAuthUser } from '@/auth/auth';
 import { query } from '@/database/db';
 import { validateImageMagicBytes } from '@/infra/validateUpload';
-import fs from 'fs';
-import path from 'path';
 import { withAudit } from '@/services/audit';
-import { deleteUploadedFile, uploadDir as storageDir } from '@/services/uploadStorage';
+import { deleteUploadedFile, saveUpload } from '@/services/uploadStorage';
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -42,18 +40,10 @@ async function POST_handler(req: NextRequest, { params }: Params) {
     const extMap: Record<string, string> = {
       'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
     };
-    const ext      = extMap[file.type] ?? 'jpg';
-    const filename = `faculty_${facultyId}.${ext}`;
-    const uploadDir = storageDir('profiles');
+    const ext = extMap[file.type] ?? 'jpg';
 
-    // Remove old picture files for this faculty
-    const existing = fs.readdirSync(uploadDir).filter(f => f.startsWith(`faculty_${facultyId}.`));
-    for (const f of existing) fs.unlinkSync(path.join(uploadDir, f));
-
-    const bytes = await file.arrayBuffer();
-    fs.writeFileSync(path.join(uploadDir, filename), Buffer.from(bytes));
-
-    const storedPath  = `/uploads/profiles/${filename}`;
+    // Replaces old picture files for this faculty
+    const storedPath  = await saveUpload('profiles', `faculty_${facultyId}`, ext, file.type, Buffer.from(await file.arrayBuffer()));
     const pictureUrl  = `${storedPath}?t=${Date.now()}`;
 
     await query('UPDATE faculty SET profile_picture = $1 WHERE id = $2', [storedPath, facultyId]);
@@ -80,7 +70,7 @@ async function DELETE_handler(req: NextRequest, { params }: Params) {
 
     const row = await query('SELECT profile_picture FROM faculty WHERE id = $1', [facultyId]);
     // Only files inside the upload folder can be removed — prevents traversal
-    deleteUploadedFile(row.rows[0]?.profile_picture ?? null);
+    await deleteUploadedFile(row.rows[0]?.profile_picture ?? null);
 
     await query('UPDATE faculty SET profile_picture = NULL WHERE id = $1', [facultyId]);
     return NextResponse.json({ success: true });
