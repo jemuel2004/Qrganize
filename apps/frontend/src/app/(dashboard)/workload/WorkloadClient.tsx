@@ -367,7 +367,7 @@ function designationLabel(f: Faculty): string {
 
 /** Praise Load types — picked like Faculty Deloading: tick a type, fill its fields. */
 const PRAISE_TYPES = [
-  'Research', 'Extension', 'Special Assignment',
+  'Research', 'Extension', 'Research/Extension', 'Special Assignment',
   'Administrative Assignment', 'Committee Work', 'Other Non-Teaching Load',
 ] as const;
 /** One praise record in the Praise Load modal — `id` set when it is already saved. */
@@ -1381,6 +1381,7 @@ export default function WorkloadPage({
     for (const r of rows) {
       if (parseNonNegDecimal(r.units) === null) { setPraiseError(`${r.type}: units must be a valid non-negative number.`); return; }
       if (!hasAtMostThreeNumericDigits(r.units)) { setPraiseError(`${r.type}: maximum of 3 digits only (e.g., 1.23).`); return; }
+      if (unitsOf(r.units) > 99.99) { setPraiseError(`${r.type}: units can be at most 99.99.`); return; }
     }
     setPraiseLoading(true); setPraiseError('');
     const fid = selectedFaculty.id;
@@ -3578,18 +3579,9 @@ export default function WorkloadPage({
           unitsText: formatOfficialNumber(olVal),
           hoursText: formatOfficialNumber(overloadContactHours),
           designation: '',
-          // Same Deloading lines as the Regular form
-          designationLines: designationFooterLines(isP ? (workload.deductions ?? []) : []).map(l => ({
-            key: l.key, label: l.label, description: l.description,
-            units: l.units > 0 ? formatOfficialNumber(l.units) : '',
-          })),
-          specialAssignments: (isP ? (workload.deductions ?? []) : [])
-            .filter(d => d.deduction_type === 'Special Assignment')
-            .map(d => ({
-              key: String(d.id),
-              description: d.description || 'Special Assignment',
-              units: formatOfficialNumber(parseFloat(String(d.deducted_units)) || 0),
-            })),
+          // Same row format as the Regular form — Designation / Special Assignment left blank
+          designationLines: [{ key: 'designation-blank', label: 'Designation', description: '', units: '' }],
+          specialAssignments: [] as { key: string; description: string; units: string }[],
           preparations: String(mergeSameSubjects([...overloadPrintLoads, ...splitPrintLoads]).length),
           totalUnitsText: formatOfficialNumber(olVal),
           totalDescription: 'Overload',
@@ -3768,8 +3760,7 @@ export default function WorkloadPage({
                 ? [...praiseSubjectLoads, ...praiseSplitLoads]
                 : (workload.loads ?? []),
             praise: kind === 'praise' ? (workload.praise ?? []) : [],
-            // Regular and Overload both list the Deloading lines
-            deductions: kind !== 'praise' ? (workload.deductions ?? []) : [],
+            deductions: kind === 'regular' ? (workload.deductions ?? []) : [],
             semester: listSemester,
             academicYear: listYear,
             documentKind: kind,

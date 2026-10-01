@@ -654,18 +654,9 @@ export default function InstructorWorkloadClient() {
     unitsText: formatOfficialNumber(olVal),
     hoursText: formatOfficialNumber(overloadContactHours),
     designation: '',
-    // Same Deloading lines as the Regular form
-    designationLines: designationFooterLines(isP ? (workload?.deductions ?? []) : []).map(l => ({
-      key: l.key, label: l.label, description: l.description,
-      units: l.units > 0 ? formatOfficialNumber(l.units) : '',
-    })),
-    specialAssignments: (isP ? (workload?.deductions ?? []) : [])
-      .filter(d => d.deduction_type === 'Special Assignment')
-      .map((d, i) => ({
-        key: String(d.id ?? i),
-        description: d.description || 'Special Assignment',
-        units: formatOfficialNumber(parseFloat(String(d.deducted_units)) || 0),
-      })),
+    // Same row format as the Regular form — Designation / Special Assignment left blank
+    designationLines: [{ key: 'designation-blank', label: 'Designation', description: '', units: '' }],
+    specialAssignments: [] as { key: string; description: string; units: string }[],
     preparations: String(mergeSameSubjects([...overloadPrintLoads, ...splitPrintLoads]).length),
     totalUnitsText: formatOfficialNumber(olVal),
     totalDescription: 'Overload',
@@ -771,8 +762,7 @@ export default function InstructorWorkloadClient() {
           ? [...praiseSubjectLoads, ...praiseSplitLoads]
           : (workload.loads ?? []),
       praise: kind === 'praise' ? (workload.praise ?? []) : (kind === 'regular' ? (workload.praise ?? []) : []),
-      // Regular and Overload both list the Deloading lines
-      deductions: kind !== 'praise' ? (workload.deductions ?? []) : [],
+      deductions: kind === 'regular' ? (workload.deductions ?? []) : [],
       semester,
       academicYear,
       documentKind: kind,

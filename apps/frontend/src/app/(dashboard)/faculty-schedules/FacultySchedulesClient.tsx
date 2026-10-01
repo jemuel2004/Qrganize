@@ -165,8 +165,7 @@ function printDocInput(kind: PrintKind, data: WorkloadPrintData, semester: strin
     faculty: data.faculty,
     loads: printLoadSets(data, semester, academicYear).loadsFor(kind),
     praise: kind === 'praise' ? data.praise : [],
-    // Regular, Actual Load and Overload all list the Deloading lines
-    deductions: kind !== 'praise' ? data.deductions : [],
+    deductions: kind === 'regular' || kind === 'deload' ? data.deductions : [],
     semester,
     academicYear,
     documentKind: kind,

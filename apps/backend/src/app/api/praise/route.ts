@@ -80,6 +80,10 @@ async function POST_handler(req: NextRequest) {
     if (units === null || hours === null) {
       return NextResponse.json({ error: 'Equivalent Units and Equivalent Hours must be non-negative numbers.' }, { status: 400 });
     }
+    // equivalent_units is NUMERIC(4,2) — 100+ would overflow the column
+    if (units > 99.99) {
+      return NextResponse.json({ error: 'Equivalent Units can be at most 99.99.' }, { status: 400 });
+    }
     const hasAtMostThreeNumericDigits = (value: unknown) =>
       (String(value).match(/\d/g) ?? []).length <= 3;
     if (

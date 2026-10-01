@@ -594,7 +594,7 @@ export default function OfficialWorkloadFormTable({
                   showActions={showActions}
                   emphasizeNumbers
                 />
-                {/* Same Deloading lines as the Regular form (info only — Overload total is unchanged) */}
+                {/* Same row format as the Regular form (rows given by the page — blank for Overload) */}
                 {summary.designationLines && (
                   <>
                     {summary.designationLines.map(l => (

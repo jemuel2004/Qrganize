@@ -107,6 +107,10 @@ async function PUT_handler(
     if (!Number.isFinite(units) || units < 0) {
       return NextResponse.json({ error: 'Equivalent Units must be a non-negative number.' }, { status: 400 });
     }
+    // equivalent_units is NUMERIC(4,2) — 100+ would overflow the column
+    if (units > 99.99) {
+      return NextResponse.json({ error: 'Equivalent Units can be at most 99.99.' }, { status: 400 });
+    }
     if ((String(raw ?? '').match(/\d/g) ?? []).length > 3 || (String(units).match(/\d/g) ?? []).length > 3) {
       return NextResponse.json({ error: 'Maximum of 3 digits only (e.g., 1.23).' }, { status: 400 });
     }

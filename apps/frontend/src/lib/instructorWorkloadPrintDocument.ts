@@ -589,7 +589,7 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
     0,
   );
 
-  /* Deloading lines — one per deduction, labelled with its type (Regular and Overload) */
+  /* Deloading lines — one per deduction, labelled with its type (Regular form) */
   const designationRows = designationFooterLines(designationDeds).map(l => row(false, [
     { text: l.label, labelPad: true, colspan: 2 },
     { text: l.description, center: true },
@@ -653,9 +653,15 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
         { text: String(Math.round(hoursVal)), center: true },
         {},
       ]),
-      // Same Deloading lines as the Regular form (info only — Overload total is unchanged)
-      ...designationRows,
-      ...specialRows,
+      // Same row format as the Regular form — Designation / Special Assignment left blank
+      row(false, [
+        { text: 'Designation', labelPad: true, colspan: 2 },
+        {}, {}, {}, {}, {}, {},
+      ]),
+      row(false, [
+        { text: 'Add: Special Assignment', labelPad: true, colspan: 2 },
+        {}, {}, {}, {}, {}, {},
+      ]),
       row(false, [
         { text: 'No. of Preparation', labelPad: true, colspan: 2 },
         { text: String(prepCount), center: true },
