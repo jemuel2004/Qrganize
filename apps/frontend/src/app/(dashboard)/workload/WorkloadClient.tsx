@@ -22,10 +22,14 @@ import {
   occupiedRangeFromScheduleTimes,
 } from '@/lib/officialWorkloadSlots';
 import { useDayCombinations } from '@/lib/dayCombinations';
+import { LOAD_INK, LOAD_TONE } from '@/lib/loadTone';
 import { printRegularLoadDocument } from '@/lib/instructorWorkloadPrintDocument';
 import { openWorkloadPrintableVersion } from '@/lib/openPrintHtmlDocument';
 import { coerceSubjectCategory } from '@shared/subjectCategory';
-import { OVERLOAD_MAX_UNITS, REGULAR_LOAD_MAX_UNITS } from '@shared/regularLoad';
+import {
+  OVERLOAD_MAX_UNITS, REGULAR_LOAD_MAX_UNITS, LOAD_GRACE_UNITS,
+  formatLoadCap, shownUnitsCap, shownUnitsLeft, shownUnitsOver, isRegularLoadComplete,
+} from '@shared/regularLoad';
 import { blockCurriculumVersion, curriculumVersionLabel } from '@shared/curriculumVersion';
 import { ListSkeleton, Skeleton, TableSkeleton } from '@/components/ui/skeletons';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
@@ -51,7 +55,7 @@ interface Faculty {
   major: string | null;
   eligibility: string | null;
   specialization: string | null;
-  /** Blocks this faculty is assigned to teach (Faculty → Blocks to Teach) */
+  /** Blocks this faculty is assigned to teach (Faculty → Blocks to Handle) */
   assigned_block_ids?: number[];
   priority_subjects?: PrioritySubject[];
 }
@@ -68,6 +72,7 @@ interface FacultySummary {
   total_instructor_units: number;
   /** Subjects assigned this term (Regular, Overload or Praise) */
   assigned_count?: number;
+  employment_status?: string;
 }
 interface Block {
   id: number; block_name: string; year_level: string; semester: string;
@@ -328,8 +333,14 @@ function extractYearNum(yearLevel: string): string {
 }
 
 /* -- Load Deduction types ----------------------------------------------- */
-/** Regular load as shown to users — a whole number (18.25 reads as 18); maths keeps the exact value. */
-const loadDisplay = (units: number) => String(Math.round(units));
+/* Load figures as shown — shared display rule (18.25 reads as 18, 6.25 as 6);
+   maths and rules keep the exact values. Contractual hours have no grace. */
+const loadDisplay = (units: number) => formatLoadCap(shownUnitsCap(units));
+const capText = (cap: number, permanent: boolean) => formatLoadCap(permanent ? shownUnitsCap(cap) : cap);
+const leftNum = (left: number, permanent: boolean) => (permanent ? shownUnitsLeft(left) : Math.max(0, left));
+/** How far past the cap, as shown, from a remaining balance (negative = over). */
+const overFromRemaining = (remaining: number, permanent: boolean) =>
+  remaining < -0.001 ? -remaining + (permanent ? LOAD_GRACE_UNITS : 0) : 0;
 
 interface DeductionEntry { type: string; description: string; units: string; }
 const DEDUCTION_OPTIONS = ['Designation', 'Extension', 'Research/Extension', 'Special Assignment'] as const;
@@ -385,11 +396,14 @@ export default function WorkloadPage({
   initialFacultyQuery = '',
   assignMsId = null,
   assignBlockId = null,
+  assignFrom = 'master-schedule',
 }: {
   initialFacultyQuery?: string;
-  /** Master Schedule → Assign: the class to assign, and the block it lives in. */
+  /** Master Schedule / Block → Assign: the class to assign, and the block it lives in. */
   assignMsId?: number | null;
   assignBlockId?: number | null;
+  /** Which page sent the assignment — where "Back" returns to. */
+  assignFrom?: 'master-schedule' | 'block';
 }) {
   const toast = useToast();
   const router = useRouter();
@@ -623,7 +637,7 @@ export default function WorkloadPage({
     loadBlocks();
   }, [loadBlocks, loadFacultyList]);
 
-  /* Only the blocks assigned to the selected faculty (Faculty → Blocks to Teach),
+  /* Only the blocks assigned to the selected faculty (Faculty → Blocks to Handle),
      in the active term — Program, Year Level and Block options all come from these. */
   // Read assignments from the latest faculty list (refreshed every 30 s), not the
   // copy taken when the faculty was picked — so blocks saved in Faculty apply here.
@@ -649,18 +663,13 @@ export default function WorkloadPage({
      options are every block of the term, never narrowed to the faculty's own. */
   const optionBlocks = keepSubjectContext ? termBlocks : handledBlocks;
 
-  /* Assigned blocks in the selected program (used to build year-level options) */
-  const programBlocks = optionBlocks.filter(b => !filterProgram || String(b.program_id) === filterProgram);
-
-  /* Unique year levels available in the selected program, sorted */
-  const programYearLevels = [...new Set(programBlocks.map(b => b.year_level))].sort();
-
-  /* Blocks further filtered by year level, semester, and academic year to prevent duplicates */
-  const filteredBlocks = programBlocks.filter(b =>
-    (!filterYearLevel    || b.year_level    === filterYearLevel)    &&
-    (!filterSemester     || b.semester      === filterSemester)     &&
-    (!filterAcademicYear || b.academic_year === filterAcademicYear)
-  );
+  /* Year & Block options: the selected program's blocks in the active term,
+     ordered 1A, 1B, 2A… (optionBlocks is already narrowed to the term). */
+  const programBlocks = optionBlocks
+    .filter(b => !filterProgram || String(b.program_id) === filterProgram)
+    .sort((a, b) =>
+      extractYearNum(a.year_level).localeCompare(extractYearNum(b.year_level), undefined, { numeric: true }) ||
+      a.block_name.localeCompare(b.block_name, undefined, { numeric: true }));
 
   useEffect(() => {
     if (!selectedFaculty || keepSubjectContext) return;
@@ -677,19 +686,13 @@ export default function WorkloadPage({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFaculty?.id, liveSelectedFaculty?.assigned_block_ids?.join(','), handledSubjects.map(s => s.subject_code).join(','), allBlocks, filterSemester, filterAcademicYear, keepSubjectContext]);
 
-  function handleBlockChange(blockId: string) {
-    if (blockId) {
-      const block = allBlocks.find(b => String(b.id) === blockId);
-      if (block && isBlockFullyAssigned(block) && filterBlock !== blockId) return;
-    }
-    setFilterBlock(blockId);
-    setAvailableSchedules([]);
-    setFiltersApplied(false);
-  }
-
-  function handleYearLevelChange(yl: string) {
-    setFilterYearLevel(yl);
-    setFilterBlock('');            // reset block when year level changes
+  /** Year & Block: one pick (e.g. "1A") fills both the year level and the block. */
+  function handleYearBlockChange(blockId: string) {
+    const block = blockId ? allBlocks.find(b => String(b.id) === blockId) : undefined;
+    if (block && isBlockFullyAssigned(block) && filterBlock !== blockId) return;
+    // Unknown id → clear both, so year level and block never disagree
+    setFilterYearLevel(block?.year_level ?? '');
+    setFilterBlock(block ? blockId : '');
     setAvailableSchedules([]);
     setFiltersApplied(false);
   }
@@ -716,9 +719,10 @@ export default function WorkloadPage({
     setSubjectSearch('');
   }, [filterProgram, filterYearLevel, filterBlock, filterSemester, filterAcademicYear]);
 
-  /* Master Schedule → Assign: Program / Year / Block come from the subject as
-     soon as it loads, before any faculty is picked. They stay editable, and
-     picking a faculty never overwrites them (see selectFaculty). */
+  /* Master Schedule / Block → Assign: Program / Year / Block come from the subject
+     as soon as it loads, before any faculty is picked. They are locked (so the
+     subject can't land in another block), and picking a faculty never overwrites
+     them (see selectFaculty). */
   const prefilledAssign = useRef(false);
   useEffect(() => {
     if (!assignTarget || prefilledAssign.current) return;
@@ -727,7 +731,7 @@ export default function WorkloadPage({
     setFilterYearLevel(assignTarget.year_level);
     setFilterBlock(String(assignTarget.block_id));
   }, [assignTarget]);
-  /** The picked faculty may teach the subject's block (Faculty → Blocks to Teach, the assign API's rule). */
+  /** The picked faculty may teach the subject's block (Faculty → Blocks to Handle, the assign API's rule). */
   const targetBlockAllowed = !!assignTarget && facultyBlocks.some(b => b.id === assignTarget.block_id);
 
   /* …and open the Minor / Major tab the subject belongs to (runs after the reset above). */
@@ -966,8 +970,8 @@ export default function WorkloadPage({
       setAssignMsg(data.message || 'Subject assigned successfully.');
       const remainingNote = typeof data.remaining === 'number' && data.unit
         ? (data.remaining < -0.001
-          ? ` ${Math.abs(data.remaining).toFixed(2)} ${data.unit} over the regular limit.`
-          : ` ${data.remaining.toFixed(2)} ${data.unit} remaining.`)
+          ? ` ${overFromRemaining(data.remaining, data.unit === 'units').toFixed(2)} ${data.unit} over the regular limit.`
+          : ` ${leftNum(data.remaining, data.unit === 'units').toFixed(2)} ${data.unit} remaining.`)
         : '';
       // From a "Continue Adding" dialog the dialog itself shows the success check.
       if (!opts.fromConfirm) {
@@ -1585,7 +1589,7 @@ export default function WorkloadPage({
     const exceeded = Math.max(0, s.current_load - s.regular_load_limit);
     if (exceeded > 0.001)          return { label: 'Exceeded',    dot: 'bg-red-500',    text: 'text-red-400'    } as const;
     if (s.has_overload)            return { label: 'Has Overload', dot: 'bg-orange-500', text: 'text-orange-500' } as const;
-    if (s.remaining_load <= 0.001) return { label: 'Full Load',   dot: 'bg-amber-500',  text: 'text-amber-400'  } as const;
+    if (isRegularLoadComplete(s.remaining_load, s.employment_status === 'Permanent')) return { label: 'Full Load',   dot: 'bg-amber-500',  text: 'text-amber-400'  } as const;
     const pct = s.regular_load_limit > 0 ? s.remaining_load / s.regular_load_limit : 1;
     if (pct <= 0.3)                return { label: 'Near Limit',  dot: 'bg-yellow-400', text: 'text-yellow-400' } as const;
     return                                { label: 'Available',   dot: 'bg-emerald-500', text: 'text-emerald-400' } as const;
@@ -1599,7 +1603,7 @@ export default function WorkloadPage({
   function workloadProblemPriority(s: FacultySummary | undefined): number {
     if (!s) return 2;
     const remaining = s.remaining_load;
-    if (remaining > 0.001)  return 0; // not yet complete
+    if (!isRegularLoadComplete(remaining, s.employment_status === 'Permanent')) return 0; // not yet complete
     if (remaining < -0.001) return 1; // exceeded the limit
     return 3;                          // exactly complete — no problem
   }
@@ -1721,9 +1725,11 @@ export default function WorkloadPage({
   const prioritySubjects = handledSubjects;
   const isPrioritySubject = (s: { subject_code: string; subject_name: string }) => prioritySubjects.some(p => isSameSubject(p, s));
 
-  /* Subjects offered to this faculty across both tabs */
+  /* Subjects offered to this faculty across both tabs. Assigning a specific
+     subject (Master Schedule / Block → Assign) offers only that one. */
   const offeredSchedules = availableSchedules.filter(s =>
-    prioritySubjects.length === 0 || isPrioritySubject(s) || s.id === assignTarget?.id
+    assignTarget ? s.id === assignTarget.id
+      : prioritySubjects.length === 0 || isPrioritySubject(s)
   );
   const categoryOf = (s: Schedule) => coerceSubjectCategory(s.subject_category, 'Minor');
   const categoryCounts = {
@@ -1787,8 +1793,23 @@ export default function WorkloadPage({
     });
   }
 
-  /** The picked subjects all fit in the remaining regular load — no warning needed. */
-  const pickedFits = remainingForWarning !== null && pickedTotal <= remainingForWarning + 0.001;
+  /** The picked subjects go past the remaining regular load (e.g. beyond 18 units). */
+  const pickedOver = remainingForWarning !== null && pickedTotal > remainingForWarning + 0.001;
+  const regularLimitLabel = summary ? `${capText(summary.regular_load_limit, isPermanent)} ${loadUnit}` : `the regular ${loadUnit}`;
+
+  /** Selection bar → Assign. Fits the remaining regular load → saved straight away,
+   *  no pop-up. Goes past it → the dialog warns first. Checks a fresh load, so a
+   *  stale or not-yet-loaded summary never shows the warning by mistake. */
+  const [bulkChecking, setBulkChecking] = useState(false);
+  async function onAssignPickedClick() {
+    if (bulkState !== 'idle' || bulkChecking) return;
+    setBulkChecking(true);
+    const fresh = await loadWorkload();
+    setBulkChecking(false);
+    const remaining = fresh ? fresh.summary.remaining_regular_load : remainingForWarning;
+    if (remaining != null && pickedTotal <= remaining + 0.001) void assignPicked({ direct: true });
+    else setBulkOpen(true);
+  }
 
   /** Saves every picked subject as Regular (over-limit ones can be moved to Overload after).
    *  `direct` = started from the bar without the dialog, so report with a toast. */
@@ -1820,8 +1841,8 @@ export default function WorkloadPage({
 
     const done = list.length - failed.length;
     const note = remaining === null ? ''
-      : remaining < -0.001 ? `${Math.abs(remaining).toFixed(2)} ${loadUnit} over the regular limit.`
-      : `${remaining.toFixed(2)} ${loadUnit} remaining.`;
+      : remaining < -0.001 ? `${overFromRemaining(remaining, isPermanent).toFixed(2)} ${loadUnit} over the regular limit.`
+      : `${leftNum(remaining, isPermanent).toFixed(2)} ${loadUnit} remaining.`;
     if (failed.length > 0) {
       setBulkState('idle');
       setPickedIds(new Set(failed.map(f => f.id)));
@@ -1853,7 +1874,11 @@ export default function WorkloadPage({
        original relative order intact, so this only reorders priority vs not. */
     .slice()
     .sort((a, b) => Number(isPrioritySubject(b)) - Number(isPrioritySubject(a)));
-  const showSubjectsSkeleton = useMinLoading(availLoading, LOADING_DELAY);
+  /* Block picked but its subjects not fetched yet counts as loading too — otherwise
+     the empty "No available subjects" state flashes for a frame on every switch. */
+  const subjectsBusy = availLoading || (allFiltersSet && !filtersApplied);
+  const subjectsBusyHeld = useMinLoading(subjectsBusy, LOADING_DELAY);
+  const showSubjectsSkeleton = subjectsBusy || subjectsBusyHeld;
   const showFacultyListSkeleton = useMinLoading(facultyListLoading, LOADING_DELAY);
   /* Tab switch is instant client-side filtering — only the list area fakes a
      brief load so it feels responsive; the tabs/search/badge stay visible
@@ -1879,9 +1904,10 @@ export default function WorkloadPage({
     : !selectedFaculty ? 'pick'
     : !targetBlockAllowed && allBlocks.length > 0 ? 'blocked'
     : 'ready';
-  function backToMasterSchedule() {
+  const assignReturnLabel = assignFrom === 'block' ? 'Back to Block' : 'Back to Master Schedule';
+  function backToAssignSource() {
     if (window.history.length > 1) router.back();
-    else router.push('/master-schedule');
+    else router.push(assignFrom === 'block' && assignBlockId ? `/program/blocks/${assignBlockId}` : '/master-schedule');
   }
 
   return (
@@ -1978,7 +2004,7 @@ export default function WorkloadPage({
         <WatermarkTitle>Faculty Workload</WatermarkTitle>
       </div>
 
-      {/* -- Master Schedule → Assign: the subject is already known; only the faculty is picked -- */}
+      {/* -- Master Schedule / Block → Assign: the subject is already known; only the faculty is picked -- */}
       {assignMsId && (assignTargetLoading ? (
         <Skeleton className="h-[88px] w-full rounded-2xl mb-5" />
       ) : assignTarget && (
@@ -2018,9 +2044,9 @@ export default function WorkloadPage({
                 <span className="inline-flex items-center gap-1.5 text-[#15803D] font-semibold">
                   <CheckCircle2 className="w-4 h-4" /> Assigned to {selectedFaculty?.name}
                 </span>
-                <button type="button" onClick={backToMasterSchedule}
+                <button type="button" onClick={backToAssignSource}
                   className="min-h-10 px-3.5 rounded-xl text-sm font-semibold bg-[#1D5BD6] text-white hover:bg-[#2E7DD1] transition-colors">
-                  Back to Master Schedule
+                  {assignReturnLabel}
                 </button>
               </div>
             ) : assignTargetTaken ? (
@@ -2062,7 +2088,7 @@ export default function WorkloadPage({
         </div>
       ))}
 
-      {/* -- Filter Card: Instructor → Program → Year → Block ------------------ */}
+      {/* -- Filter Card: Instructor → Program → Year & Block ----------------- */}
       <FilterBar className="relative z-20 min-w-0 overflow-visible mb-0">
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-4">
@@ -2166,7 +2192,7 @@ export default function WorkloadPage({
                           )}
                         </div>
                         {fSummary && (
-                          <div className="mt-1 text-xs text-slate-400">Current Load: {current.toFixed(2)} / {Math.round(limit)} {unit}</div>
+                          <div className="mt-1 text-xs text-slate-400">Current Load: {current.toFixed(2)} / {capText(limit, isP)} {unit}</div>
                         )}
                       </button>
                     );
@@ -2176,7 +2202,7 @@ export default function WorkloadPage({
             </div>
           </div>
 
-          <div className="min-w-0 w-full order-3 lg:col-span-3">
+          <div className="min-w-0 w-full order-3 lg:col-span-4">
             <label
               className={`block text-xs font-semibold uppercase tracking-wide mb-1.5 ${
                 programEnabled ? 'text-slate-500' : 'text-slate-400'
@@ -2187,7 +2213,7 @@ export default function WorkloadPage({
             <FriendlySelect
               value={programEnabled ? filterProgram : ''}
               onChange={handleProgramChange}
-              disabled={!programEnabled}
+              disabled={!programEnabled || keepSubjectContext /* locked to the subject being assigned */}
               label="Program"
               placeholder="Select Program"
               disabledText="Select a faculty first"
@@ -2199,43 +2225,28 @@ export default function WorkloadPage({
 
           </div>
 
-          <div className="min-w-0 order-4 lg:col-span-2">
+          <div className="min-w-0 order-4 lg:col-span-3">
             <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
-              Year Level
-            </label>
-            <FriendlySelect
-              value={filterYearLevel}
-              onChange={handleYearLevelChange}
-              disabled={!filterProgram}
-              label="Year Level"
-              placeholder="Select Year Level"
-              disabledText="Select a program first"
-              guide={!!filterProgram && !filterYearLevel}
-              minPanelWidth={260}
-              options={programYearLevels.map(yl => ({ value: yl, label: yl }))}
-            />
-          </div>
-
-          <div className="min-w-0 order-5 lg:col-span-2">
-            <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
-              Block
+              Year &amp; Block
             </label>
             <FriendlySelect
               value={filterBlock}
-              onChange={handleBlockChange}
-              disabled={!filterYearLevel}
-              label="Block"
-              placeholder="Select Block"
-              disabledText="Select a year first"
-              guide={!!filterYearLevel && !filterBlock}
-              minPanelWidth={280}
-              options={filteredBlocks.map(b => {
+              onChange={handleYearBlockChange}
+              disabled={!filterProgram || keepSubjectContext /* locked to the subject being assigned */}
+              label="Year & Block"
+              placeholder="Select Year & Block"
+              disabledText={keepSubjectContext ? 'Loading…' : 'Select a program first'}
+              guide={!!filterProgram && !filterBlock}
+              minPanelWidth={320}
+              searchable
+              searchPlaceholder="Search, e.g. 1A"
+              options={programBlocks.map(b => {
                 const complete = isBlockFullyAssigned(b);
                 const open = blockAvailableCount(b, handledSubjects);
                 return {
                   value: String(b.id),
-                  label: `Block ${b.block_name}`,
-                  hint: curriculumVersionLabel(blockCurriculumVersion(b.curriculum_version)),
+                  label: `${extractYearNum(b.year_level)}${b.block_name}`,
+                  hint: `${b.year_level}, Block ${b.block_name} · ${curriculumVersionLabel(blockCurriculumVersion(b.curriculum_version))}`,
                   badge: complete ? 'All assigned' : `${open} available`,
                   badgeTone: !complete && open > 0 ? 'green' as const : 'muted' as const,
                   disabled: complete,
@@ -2339,7 +2350,15 @@ export default function WorkloadPage({
             )}
 
             {!selectedFaculty ? (
-              filteredFaculty.length === 0 ? (
+              /* All / Assigned / Unassigned: the old list fades out, the new one fades in */
+              <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={`faculty-list-${assignFilter}`}
+                initial={reduceMotion ? false : { opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0, transition: { duration: reduceMotion ? 0 : 0.28, ease: [0.4, 0, 0.2, 1] } }}
+                exit={reduceMotion ? undefined : { opacity: 0, transition: { duration: 0.14, ease: [0.4, 0, 0.2, 1] } }}
+              >
+              {filteredFaculty.length === 0 ? (
                 <div className="py-14 px-8 text-center">
                   <p className="text-sm text-[#64748B]">
                     {assignFilter === 'unassigned' && searchedFaculty.length > 0
@@ -2370,11 +2389,11 @@ export default function WorkloadPage({
                         const current  = fSummary?.current_load ?? 0;
                         return (
                           <motion.tr
-                            // Keyed by filter too, so rows animate in again on every switch
-                            key={`${assignFilter}-${f.id}`}
-                            initial={reduceMotion ? false : { opacity: 0, y: 8 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ duration: 0.22, ease: [0.4, 0, 0.2, 1], delay: reduceMotion ? 0 : Math.min(rowIdx, 12) * 0.03 }}
+                            // The list remounts per filter (above), so rows ease in once with a light stagger
+                            key={f.id}
+                            initial={reduceMotion ? false : { opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1], delay: reduceMotion ? 0 : Math.min(rowIdx, 10) * 0.025 }}
                             onClick={() => {
                               selectFaculty(f);
                               if (f.employment_status === 'Permanent') void openDeductionModal(f);
@@ -2420,7 +2439,7 @@ export default function WorkloadPage({
                                     className={incomplete ? 'qr-attention-dot font-bold text-red-600' : 'text-slate-600'}
                                     title={incomplete ? 'Incomplete workload — needs attention' : undefined}
                                   >
-                                    {current.toFixed(2)} / {Math.round(limit)} {unit}
+                                    {current.toFixed(2)} / {capText(limit, isP)} {unit}
                                   </span>
                                 );
                               })() : (
@@ -2433,7 +2452,9 @@ export default function WorkloadPage({
                     </tbody>
                   </table>
                 </div>
-              )
+              )}
+              </motion.div>
+              </AnimatePresence>
             ) : !allFiltersSet ? (
               <div className="py-14 px-8 text-center">
                 <p className="text-sm text-[#64748B]">No subjects to display.</p>
@@ -2443,7 +2464,13 @@ export default function WorkloadPage({
                 <ListSkeleton rows={6} />
               </div>
             ) : displaySchedules.length === 0 ? (
-              <div className="py-14 px-8 text-center">
+              <motion.div
+                key={`empty-${filterBlock}-${subjectCategory}`}
+                initial={reduceMotion ? false : { opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
+                className="py-14 px-8 text-center"
+              >
                 <div className="w-14 h-14 bg-[#FEF9C3] rounded-2xl flex items-center justify-center mx-auto mb-4 border border-[#FDE68A]">
                   <AlertTriangle className="w-7 h-7 text-[#CA8A04]" />
                 </div>
@@ -2463,9 +2490,15 @@ export default function WorkloadPage({
                       ? `Switch to ${subjectCategory === 'Minor' ? 'Major' : 'Minor'} Subjects to see the remaining unassigned subjects.`
                       : 'All subjects in this block may already be assigned to a faculty member.'}
                 </p>
-              </div>
+              </motion.div>
             ) : (
-              <div className="overflow-x-auto">
+              <motion.div
+                key={`list-${filterBlock}`}
+                initial={reduceMotion ? false : { opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
+                className="overflow-x-auto"
+              >
                 <table className="w-full">
                   <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
                     <tr>
@@ -2591,7 +2624,7 @@ export default function WorkloadPage({
                     })}
                   </tbody>
                 </table>
-              </div>
+              </motion.div>
             )}
         </div>
         {/* Room for the picked-subjects bar so it never covers the last row */}
@@ -2612,7 +2645,9 @@ export default function WorkloadPage({
               exit={{ opacity: 0, y: reduceMotion ? 0 : 28, transition: { duration: reduceMotion ? 0 : 0.3, ease } }}
               className="fixed inset-x-0 bottom-5 z-40 flex justify-center px-4 pointer-events-none"
             >
-              <div className="pointer-events-auto w-full max-w-2xl bg-white border border-[#D6E0EF] rounded-2xl shadow-[0_16px_40px_-12px_rgba(11,42,91,0.35)] px-4 sm:px-5 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className={`pointer-events-auto w-full max-w-2xl bg-white border rounded-2xl shadow-[0_16px_40px_-12px_rgba(11,42,91,0.35)] px-4 sm:px-5 py-3 flex flex-col sm:flex-row sm:items-center gap-3 transition-colors duration-300 ${
+                pickedOver ? 'border-[#FCA5A5]' : 'border-[#D6E0EF]'
+              }`}>
                 <div className="flex items-center gap-3 min-w-0 flex-1">
                   <motion.span
                     key={n}
@@ -2627,11 +2662,19 @@ export default function WorkloadPage({
                     <p className="font-semibold text-[#0B2A5B] text-[15px] leading-tight">
                       {n} subject{n === 1 ? '' : 's'} selected
                     </p>
-                    <p className="text-sm text-[#64748B] tabular-nums mt-0.5">
-                      {pickedTotal.toFixed(2)} {loadUnit}
-                      {minor > 0 && ` · ${minor} Minor`}
-                      {n - minor > 0 && ` · ${n - minor} Major`}
-                    </p>
+                    {/* Over the regular load: one short red line — the pop-up waits for Assign */}
+                    {pickedOver && remainingForWarning !== null ? (
+                      <p className="flex items-center gap-1.5 text-sm font-semibold text-[#DC2626] tabular-nums mt-0.5">
+                        <AlertTriangle className="w-4 h-4 flex-shrink-0" aria-hidden />
+                        {overFromRemaining(remainingForWarning - pickedTotal, isPermanent).toFixed(2)} {loadUnit} over the {regularLimitLabel} limit
+                      </p>
+                    ) : (
+                      <p className="text-sm text-[#64748B] tabular-nums mt-0.5">
+                        {pickedTotal.toFixed(2)} {loadUnit}
+                        {minor > 0 && ` · ${minor} Minor`}
+                        {n - minor > 0 && ` · ${n - minor} Major`}
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="flex gap-2">
@@ -2646,12 +2689,14 @@ export default function WorkloadPage({
                   <motion.button
                     type="button"
                     whileTap={reduceMotion ? undefined : { scale: 0.96 }}
-                    onClick={() => { if (pickedFits) void assignPicked({ direct: true }); else setBulkOpen(true); }}
-                    disabled={bulkState !== 'idle'}
+                    onClick={() => { void onAssignPickedClick(); }}
+                    disabled={bulkState !== 'idle' || bulkChecking}
                     className="flex-1 sm:flex-none h-11 px-5 rounded-xl bg-[#1D5BD6] hover:bg-[#2E7DD1] text-white text-sm font-bold inline-flex items-center justify-center gap-2 transition-colors duration-300 disabled:cursor-wait disabled:opacity-90"
                   >
                     {bulkState === 'saving'
                       ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Assigning {Math.min(bulkProgress + 1, bulkTotal)} of {bulkTotal}…</>
+                      : bulkChecking
+                      ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Checking load…</>
                       : <><Plus className="w-4 h-4" /> Assign {n === 1 ? 'Subject' : `${n} Subjects`}</>}
                   </motion.button>
                 </div>
@@ -2665,7 +2710,7 @@ export default function WorkloadPage({
       <Modal
         open={bulkOpen}
         onClose={() => { if (bulkState === 'idle') setBulkOpen(false); }}
-        title="Assign Selected Subjects"
+        title={pickedOver ? `Exceeds ${regularLimitLabel} Regular Load` : 'Assign Selected Subjects'}
         subtitle={selectedFaculty?.name}
         size="lg"
         footer={
@@ -2746,7 +2791,7 @@ export default function WorkloadPage({
                 <div className="bg-[#F8FAFC] rounded-xl border border-[#E2E8F0] p-4 space-y-2.5 text-sm">
                   <div className="flex justify-between">
                     <span className="text-[#64748B]">Remaining regular balance</span>
-                    <span className="font-semibold text-[#0B2A5B] tabular-nums">{Math.max(0, remainingForWarning).toFixed(2)} {loadUnit}</span>
+                    <span className="font-semibold text-[#0B2A5B] tabular-nums">{leftNum(remainingForWarning, isPermanent).toFixed(2)} {loadUnit}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-[#64748B]">Selected subjects</span>
@@ -2755,7 +2800,7 @@ export default function WorkloadPage({
                   <div className="flex justify-between border-t border-[#E2E8F0] pt-2.5">
                     <span className="text-[#64748B]">After assigning</span>
                     <span className={`font-semibold tabular-nums ${over ? 'text-[#DC2626]' : 'text-[#16A34A]'}`}>
-                      {over ? `${Math.abs(after).toFixed(2)} ${loadUnit} over the limit` : `${after.toFixed(2)} ${loadUnit} left`}
+                      {over ? `${overFromRemaining(after, isPermanent).toFixed(2)} ${loadUnit} over the limit` : `${leftNum(after, isPermanent).toFixed(2)} ${loadUnit} left`}
                     </span>
                   </div>
                 </div>
@@ -2763,7 +2808,9 @@ export default function WorkloadPage({
                   <div className="bg-[#FEF2F2] border border-[#FECACA] rounded-xl p-3.5 flex items-start gap-3">
                     <AlertTriangle className="w-5 h-5 text-[#DC2626] flex-shrink-0 mt-0.5" />
                     <p className="text-[#0B2A5B] text-sm leading-relaxed">
-                      These go past the regular load. You can move any of them to Overload afterwards in View Workload.
+                      <span className="font-semibold">{selectedFaculty?.name ?? 'This faculty'}</span> will go past the {regularLimitLabel} regular
+                      load by <span className="font-semibold text-[#DC2626]">{overFromRemaining(after, isPermanent).toFixed(2)} {loadUnit}</span>.
+                      You can still assign them, then move any to Overload in View Workload.
                     </p>
                   </div>
                 )}
@@ -2819,7 +2866,7 @@ export default function WorkloadPage({
               <div className="flex justify-between text-sm">
                 <span className="text-[#64748B]">Load limit</span>
                 <span className="font-semibold text-[#0B2A5B]">
-                  {overloadConfirm.loadLimit} {overloadConfirm.unit}
+                  {capText(overloadConfirm.loadLimit, overloadConfirm.unit === 'units')} {overloadConfirm.unit}
                 </span>
               </div>
               <div className="flex justify-between text-sm">
@@ -2830,9 +2877,9 @@ export default function WorkloadPage({
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-[#64748B]">Remaining</span>
-                <span className={`font-semibold ${overloadConfirm.remaining <= 0 ? 'text-[#DC2626]' : 'text-[#16A34A]'}`}>
-                  {Math.max(0, overloadConfirm.remaining).toFixed(2)} {overloadConfirm.unit}
-                  {overloadConfirm.remaining <= 0 && ' — Full'}
+                <span className={`font-semibold ${leftNum(overloadConfirm.remaining, overloadConfirm.unit === 'units') <= 0.001 ? 'text-[#DC2626]' : 'text-[#16A34A]'}`}>
+                  {leftNum(overloadConfirm.remaining, overloadConfirm.unit === 'units').toFixed(2)} {overloadConfirm.unit}
+                  {leftNum(overloadConfirm.remaining, overloadConfirm.unit === 'units') <= 0.001 && ' — Full'}
                 </span>
               </div>
               <div className="flex justify-between text-sm border-t border-[#E2E8F0] pt-2.5">
@@ -3100,7 +3147,7 @@ export default function WorkloadPage({
                       </p>
                       {isAfterExceeded && afterRegular > summary.regular_load_limit + 0.001 && (
                         <p className="text-[13px] text-[#B45309] mt-1.5 leading-relaxed">
-                          Regular will be {overBy.toFixed(2)} {unit} over the maximum of {Math.round(summary.regular_load_limit)}. You can still move this.
+                          Regular will be {(isPermanent ? shownUnitsOver(afterRegular, summary.regular_load_limit) : overBy).toFixed(2)} {unit} over the maximum of {capText(summary.regular_load_limit, isPermanent)}. You can still move this.
                         </p>
                       )}
                       {isAfterExceeded && afterRegular <= summary.regular_load_limit + 0.001 && (
@@ -3108,9 +3155,9 @@ export default function WorkloadPage({
                           Combined load will still be above the regular maximum. You can still move this.
                         </p>
                       )}
-                      {!isAfterExceeded && afterRemaining > 0.001 && (
+                      {!isAfterExceeded && leftNum(afterRemaining, isPermanent) > 0.001 && (
                         <p className="text-[13px] text-[#64748B] mt-1.5">
-                          {afterRemaining.toFixed(2)} {unit} still available under the regular maximum.
+                          {leftNum(afterRemaining, isPermanent).toFixed(2)} {unit} still available under the regular maximum.
                         </p>
                       )}
                     </div>
@@ -3770,15 +3817,16 @@ export default function WorkloadPage({
               const modalOlVal   = olVal;
               const modalPraiseVal = praiseSubjectVal + (isP ? praiseTotal : 0);
               const unitLabel = isP ? 'units' : 'hrs';
-              const limitStr = String(Math.round(Number(s.regular_load_limit)));
+              const limitStr = capText(Number(s.regular_load_limit), isP);
               const regStr = modalRegVal.toFixed(2);
-              const card = 'bg-white border border-slate-200 rounded-xl p-5 min-w-0';
+              const card = 'relative overflow-hidden bg-white border border-slate-200 rounded-xl p-5 min-w-0';
               const labelCls = 'text-xs text-slate-500 uppercase tracking-wide font-semibold mb-1.5';
               const valueCls = 'text-2xl font-bold text-slate-900 tabular-nums';
               const mutedCls = 'text-base font-normal text-slate-500 ml-1.5';
               // Over the regular base load → the card blinks red
               const regOverBy = modalRegVal - Number(s.regular_load_limit || 0);
               const regExceeded = regOverBy > 0.001;
+              const regOverShown = (isP ? shownUnitsOver(modalRegVal, Number(s.regular_load_limit || 0)) : regOverBy).toFixed(2);
               /* Each card opens its section below (Workload / Overload / Praise Load) */
               const cardButton = (key: 'regular' | 'overload' | 'praise', enabled: boolean) => ({
                 type: 'button' as const,
@@ -3789,55 +3837,65 @@ export default function WorkloadPage({
                 whileTap: reduceMotion || !enabled ? undefined : { scale: 0.98 },
                 transition: { duration: 0.25, ease: [0.4, 0, 0.2, 1] as const },
               });
-              const cardState = (key: 'regular' | 'overload' | 'praise') =>
-                `w-full text-left transition-[border-color,box-shadow] duration-300 enabled:cursor-pointer enabled:hover:border-[#1D5BD6] disabled:cursor-default ${
-                  effectiveModalTab === key ? '!border-[#1D5BD6] ring-2 ring-[#1D5BD6]/20' : ''
-                }`;
+              const cardState = 'w-full text-left transition-[border-color,box-shadow] duration-300 enabled:cursor-pointer disabled:cursor-default';
+              /* Each card wears its load colour: top strip, number, and border when open */
+              const cardStyle = (key: 'regular' | 'overload' | 'praise') => effectiveModalTab === key
+                ? { borderColor: LOAD_TONE[key], boxShadow: `0 0 0 3px ${LOAD_TONE[key]}26` }
+                : undefined;
+              const strip = (color: string) => (
+                <span aria-hidden className="absolute inset-x-0 top-0 h-1" style={{ backgroundColor: color }} />
+              );
               return (
                 <>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
                   <motion.button
                     {...cardButton('regular', true)}
-                    className={`${regExceeded ? 'qr-flag-pulse border-2 border-red-400 rounded-xl p-5 min-w-0' : card} ${cardState('regular')}`}
-                    title={regExceeded ? `Regular load is over the limit by ${regOverBy.toFixed(2)} ${unitLabel}` : 'Show Workload'}
+                    className={`${regExceeded ? 'qr-flag-pulse relative overflow-hidden border-2 border-red-400 rounded-xl p-5 min-w-0' : card} ${cardState}`}
+                    style={regExceeded ? undefined : cardStyle('regular')}
+                    title={regExceeded ? `Regular load is over the limit by ${regOverShown} ${unitLabel}` : 'Show Workload'}
                   >
+                    {strip(regExceeded ? '#DC2626' : LOAD_TONE.regular)}
                     <div className={`${labelCls} ${regExceeded ? '!text-red-700' : ''}`}>{isP ? 'Regular Load' : 'Regular Hours'}</div>
-                    <div className={`${valueCls} ${regExceeded ? '!text-red-700' : ''}`}>
+                    <div className={`${valueCls} ${regExceeded ? '!text-red-700' : ''}`} style={regExceeded ? undefined : { color: LOAD_INK.regular }}>
                       {regStr} / {limitStr}
                       <span className={`${mutedCls} ${regExceeded ? '!text-red-500' : ''}`}>{unitLabel}</span>
                     </div>
                     {regExceeded && (
                       <div className="mt-1.5 flex items-center gap-1.5 text-sm font-bold text-red-700">
                         <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-                        Over by {regOverBy.toFixed(2)} {unitLabel}
+                        Over by {regOverShown} {unitLabel}
                       </div>
                     )}
                   </motion.button>
                   <motion.button
                     {...cardButton('overload', hasOverloadSection)}
-                    className={`${card} ${cardState('overload')}`}
+                    className={`${card} ${cardState}`}
+                    style={cardStyle('overload')}
                     title={hasOverloadSection ? 'Show Overload' : undefined}
                   >
+                    {strip(LOAD_TONE.overload)}
                     <div className={labelCls}>Overload</div>
-                    <div className={`${valueCls} ${isP && modalOlVal >= OVERLOAD_MAX_UNITS - 0.001 ? '!text-red-700' : ''}`}>
-                      {modalOlVal.toFixed(2)}{isP && <> / {OVERLOAD_MAX_UNITS}</>}
+                    <div className={valueCls} style={{ color: isP && modalOlVal >= OVERLOAD_MAX_UNITS - 0.001 ? '#B91C1C' : LOAD_INK.overload }}>
+                      {modalOlVal.toFixed(2)}{isP && <> / {loadDisplay(OVERLOAD_MAX_UNITS)}</>}
                       <span className={mutedCls}>{unitLabel}</span>
                     </div>
                     {isP && (
                       <div className={`mt-1.5 text-sm font-semibold ${modalOlVal >= OVERLOAD_MAX_UNITS - 0.001 ? 'text-red-700' : 'text-slate-500'}`}>
-                        {modalOlVal >= OVERLOAD_MAX_UNITS - 0.001
+                        {shownUnitsLeft(OVERLOAD_MAX_UNITS - modalOlVal) <= 0.001
                           ? 'Overload limit reached'
-                          : `${(OVERLOAD_MAX_UNITS - modalOlVal).toFixed(2)} units left`}
+                          : `${shownUnitsLeft(OVERLOAD_MAX_UNITS - modalOlVal).toFixed(2)} units left`}
                       </div>
                     )}
                   </motion.button>
                   <motion.button
                     {...cardButton('praise', hasPraiseSection)}
-                    className={`${card} ${cardState('praise')}`}
+                    className={`${card} ${cardState}`}
+                    style={cardStyle('praise')}
                     title={hasPraiseSection ? 'Show Praise Load' : undefined}
                   >
+                    {strip(LOAD_TONE.praise)}
                     <div className={labelCls}>Praise Load</div>
-                    <div className={valueCls}>
+                    <div className={valueCls} style={{ color: LOAD_INK.praise }}>
                       {modalPraiseVal.toFixed(2)}
                       <span className={mutedCls}>{unitLabel}</span>
                     </div>
@@ -3863,7 +3921,7 @@ export default function WorkloadPage({
                           </p>
                           <p className="text-sm text-red-800 mt-1 leading-relaxed">
                             {selectedFaculty?.name ?? 'This faculty member'} has <strong>{regStr} {unitLabel}</strong> of regular load,
-                            which is <strong>{regOverBy.toFixed(2)} {unitLabel} over</strong> the {limitStr}-{unitLabel === 'units' ? 'unit' : 'hour'} limit.
+                            which is <strong>{regOverShown} {unitLabel} over</strong> the {limitStr}-{unitLabel === 'units' ? 'unit' : 'hour'} limit.
                             Move a subject to Overload (or Praise Load), or remove a subject, to bring it back within the limit.
                           </p>
                         </div>
@@ -3878,9 +3936,9 @@ export default function WorkloadPage({
             {/* Tab pills — one highlight slides to the chosen tab */}
             <div className="flex flex-wrap gap-2 mb-4" role="tablist" aria-label="Workload sections">
               {([
-                { key: 'regular' as const, label: 'Workload', count: regularPrintLoads.length, color: '#1D5BD6', show: true },
-                { key: 'overload' as const, label: 'Overload', count: overloadPrintLoads.length + splitPrintLoads.length, color: '#D97706', show: hasOverloadSection },
-                { key: 'praise' as const, label: 'Praise Load', count: (workload?.praise ?? []).length + praiseSubjectLoads.length + praiseSplitLoads.length, color: '#D97706', show: hasPraiseSection },
+                { key: 'regular' as const, label: 'Workload', count: regularPrintLoads.length, color: LOAD_INK.regular, show: true },
+                { key: 'overload' as const, label: 'Overload', count: overloadPrintLoads.length + splitPrintLoads.length, color: LOAD_INK.overload, show: hasOverloadSection },
+                { key: 'praise' as const, label: 'Praise Load', count: (workload?.praise ?? []).length + praiseSubjectLoads.length + praiseSplitLoads.length, color: LOAD_INK.praise, show: hasPraiseSection },
               ]).filter(t => t.show).map(t => {
                 const active = effectiveModalTab === t.key;
                 return (
@@ -3894,10 +3952,11 @@ export default function WorkloadPage({
                     whileTap={reduceMotion ? undefined : { scale: 0.96 }}
                     transition={{ type: 'spring', stiffness: 420, damping: 28 }}
                     className={`relative isolate inline-flex items-center gap-1.5 px-4 min-h-10 rounded-full text-sm font-semibold transition-colors duration-200 ${
-                      active ? '' : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-[#0B2A5B]'
+                      active ? '' : 'bg-slate-100 hover:bg-slate-200'
                     }`}
-                    // White set inline — the light-mode rule repaints `text-white` as dark ink
-                    style={active ? { color: '#FFFFFF' } : undefined}
+                    // White set inline — the light-mode rule repaints `text-white` as dark ink.
+                    // Inactive tabs keep their load colour so each one is recognisable.
+                    style={{ color: active ? '#FFFFFF' : t.color }}
                   >
                     {active && (
                       <motion.span
@@ -4412,7 +4471,7 @@ export default function WorkloadPage({
                     </div>
                     <div className="text-[11px] text-[#64748B] mt-0.5">
                       {wouldExceed
-                        ? <>This change will bring Regular Load to {newRegular.toFixed(2)} {unit}, which is {overBy.toFixed(2)} {unit} above the configured maximum of {limit.toFixed(2)} {unit}. You can still confirm this classification.</>
+                        ? <>This change will bring Regular Load to {newRegular.toFixed(2)} {unit}, which is {(isPermanent ? shownUnitsOver(newRegular, limit) : overBy).toFixed(2)} {unit} above the configured maximum of {capText(limit, isPermanent)} {unit}. You can still confirm this classification.</>
                         : <>Current Regular {currentRegular.toFixed(2)} {unit} + {amountToReturn.toFixed(2)} {unit} = {newRegular.toFixed(2)} {unit}.</>
                       }
                     </div>

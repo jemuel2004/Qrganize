@@ -33,7 +33,7 @@ async function PUT_handler(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: 'You can only manage curriculum for your assigned program.' }, { status: 403 });
     }
 
-    const category = categoryFromHours(lecture_hours, laboratory_hours);
+    const category = categoryFromHours(lecture_hours, laboratory_hours, subject_code);
 
     const normYear = normalizeYearLevel(year_level) || year_level;
     const normSem  = normalizeSemester(semester)    || semester;

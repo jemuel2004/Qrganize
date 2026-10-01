@@ -133,7 +133,7 @@ async function POST_handler(req: NextRequest) {
       const units = parseFloat(String(row.units)) || 0;
       const prereq = String(row.prerequisites ?? '').trim();
       const grade = String(row.grade ?? '').trim();
-      const category = categoryFromHours(lecHours, labHours);
+      const category = categoryFromHours(lecHours, labHours, subjectCode);
 
       if (!Number.isInteger(programId) || programId <= 0) {
         errors.push(`${subjectCode}: invalid program`);

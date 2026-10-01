@@ -2,7 +2,7 @@ import type { PoolClient } from 'pg';
 import { query } from '@/database/db';
 
 /**
- * Blocks a faculty member is assigned to teach (Faculty → "Blocks to Teach").
+ * Blocks a faculty member is assigned to teach (Faculty → "Blocks to Handle").
  * Faculty Workload only offers these blocks for that faculty, and
  * /api/workload/assign refuses subjects from any other block. A faculty with
  * no blocks assigned for a term is open: every block of that term is allowed.

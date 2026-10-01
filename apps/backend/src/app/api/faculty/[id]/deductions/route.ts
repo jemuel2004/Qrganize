@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
-import { REGULAR_LOAD_MAX_UNITS } from '@shared/regularLoad';
+import { REGULAR_LOAD_MAX_UNITS, formatLoadCap, shownUnitsCap } from '@shared/regularLoad';
 import { canAccessProgram, isScopedChair } from '@/services/programScope';
 import { withAudit } from '@/services/audit';
 
@@ -124,7 +124,7 @@ async function POST_handler(
     );
     if (totalDeduction > REGULAR_LOAD_MAX_UNITS) {
       return NextResponse.json(
-        { error: `Total deduction cannot exceed ${REGULAR_LOAD_MAX_UNITS} units.` },
+        { error: `Total deduction cannot exceed ${formatLoadCap(shownUnitsCap(REGULAR_LOAD_MAX_UNITS))} units.` },
         { status: 400 },
       );
     }

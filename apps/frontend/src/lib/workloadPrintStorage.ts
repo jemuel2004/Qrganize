@@ -3,7 +3,7 @@
  * Used by the dedicated printable route fallback — no instructor IDs in the URL.
  */
 
-/** Which official workload form — Deload is every schedule of the faculty on one form. */
+/** Which official workload form — Actual Load ('deload') is every schedule of the faculty on one form. */
 export type WorkloadDocumentKind = 'regular' | 'overload' | 'praise' | 'deload';
 
 const STORAGE_KEY = 'qrganize:workload-print-html:v1';

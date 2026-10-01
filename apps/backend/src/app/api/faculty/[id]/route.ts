@@ -16,6 +16,8 @@ import { ensureFacultyProfileColumns } from '@/database/schema-guard';
 import {
   CONTRACTUAL_REGULAR_HOURS_LIMIT,
   REGULAR_LOAD_MAX_UNITS,
+  formatLoadCap,
+  shownUnitsCap,
 } from '@shared/regularLoad';
 import {
   assertEmailAvailable,
@@ -300,7 +302,7 @@ async function PATCH_handler(req: NextRequest, { params }: { params: Promise<{ i
       return NextResponse.json({ error: 'Designation units must be a number.' }, { status: 400 });
     }
     if (desUnits > REGULAR_LOAD_MAX_UNITS) {
-      return NextResponse.json({ error: `Total deduction cannot exceed ${REGULAR_LOAD_MAX_UNITS} units.` }, { status: 400 });
+      return NextResponse.json({ error: `Total deduction cannot exceed ${formatLoadCap(shownUnitsCap(REGULAR_LOAD_MAX_UNITS))} units.` }, { status: 400 });
     }
 
     const result = await query(`

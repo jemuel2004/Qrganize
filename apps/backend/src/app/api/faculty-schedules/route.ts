@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { resolveProgramScope, isScopedChair } from '@/services/programScope';
+import { ensurePraiseSplitColumn } from '@/services/praiseSplit';
 
 export async function GET(req: NextRequest) {
   try {
@@ -34,6 +35,7 @@ export async function GET(req: NextRequest) {
     if (programId)         { conditions.push(`p.id = $${idx++}`);               values.push(programId); }
 
     const where = conditions.join(' AND ');
+    await ensurePraiseSplitColumn();
 
     const result = await query(`
       SELECT
@@ -68,7 +70,24 @@ export async function GET(req: NextRequest) {
            WHERE ss.master_schedule_id = ms.id
            ORDER BY ss.id LIMIT 1),
           r.room_name
-        ) AS room_name
+        ) AS room_name,
+        COALESCE(il.overload_component, 'full') AS overload_component,
+        ol.split_units,
+        ol.split_hours,
+        ol.split_is_praise,
+        -- Short names (Mon/Thu) to match master_schedule.day_pattern
+        (SELECT string_agg(LEFT(d.day_of_week, 3), '/' ORDER BY
+            CASE d.day_of_week WHEN 'Monday' THEN 1 WHEN 'Tuesday' THEN 2
+              WHEN 'Wednesday' THEN 3 WHEN 'Thursday' THEN 4
+              WHEN 'Friday' THEN 5 WHEN 'Saturday' THEN 6 WHEN 'Sunday' THEN 7 ELSE 8 END)
+         FROM (SELECT DISTINCT day_of_week FROM schedule_sessions
+               WHERE master_schedule_id = ms.id AND type = il.overload_component) d) AS split_day_pattern,
+        (SELECT ss_c.start_time FROM schedule_sessions ss_c
+         WHERE ss_c.master_schedule_id = ms.id AND ss_c.type = il.overload_component
+         ORDER BY ss_c.id LIMIT 1) AS split_start_time,
+        (SELECT ss_c.end_time FROM schedule_sessions ss_c
+         WHERE ss_c.master_schedule_id = ms.id AND ss_c.type = il.overload_component
+         ORDER BY ss_c.id LIMIT 1) AS split_end_time
       FROM instructor_loads il
       JOIN faculty f        ON il.faculty_id          = f.id
       JOIN master_schedule ms ON il.master_schedule_id = ms.id
@@ -77,13 +96,43 @@ export async function GET(req: NextRequest) {
       JOIN blocks b           ON bs.block_id           = b.id
       JOIN programs p         ON b.program_id          = p.id
       LEFT JOIN rooms r       ON ms.room_id            = r.id
+      -- Split portion (only the Lec or Lab) moved to Overload / Praise: the
+      -- instructor_loads row stays 'Regular' and the moved part lives in overloads.
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(SUM(o.units), 0) AS split_units,
+               COALESCE(SUM(o.hours), 0) AS split_hours,
+               BOOL_OR(o.is_praise)      AS split_is_praise
+        FROM overloads o
+        WHERE o.faculty_id = il.faculty_id AND o.master_schedule_id = il.master_schedule_id
+      ) ol ON il.load_category = 'Regular'
       WHERE ${where}
       ORDER BY f.name, il.load_category, c.subject_code
     `, values);
 
-    const rows = result.rows;
+    // Emit each split portion as its own Overload / Praise row so it is counted
+    // and listed like the Faculty Workload page does.
+    const rows: Record<string, unknown>[] = [];
+    for (const r of result.rows as Record<string, unknown>[]) {
+      const { overload_component, split_units, split_hours, split_is_praise,
+              split_day_pattern, split_start_time, split_end_time, ...base } = r;
+      rows.push(base);
+      const isPerm = base.employment_status === 'Permanent';
+      const portion = parseFloat(String((isPerm ? split_units : split_hours) ?? 0)) || 0;
+      if (base.load_category !== 'Regular' || portion <= 0.001) continue;
+      const component = overload_component === 'lec' || overload_component === 'lab' ? overload_component : null;
+      rows.push({
+        ...base,
+        load_category: split_is_praise ? 'Praise' : 'Overload',
+        units: isPerm ? portion : 0,
+        hours: isPerm ? 0 : portion,
+        split_component: component,
+        ...(component && split_start_time
+          ? { day_pattern: split_day_pattern, start_time: split_start_time, end_time: split_end_time }
+          : {}),
+      });
+    }
 
-    const totalSchedules   = rows.length;
+    const totalSchedules   = new Set(rows.map(r => r.load_id)).size;
     const totalInstructors = new Set(rows.map((r: Record<string, unknown>) => r.faculty_id)).size;
     const totalRegular     = rows.filter((r: Record<string, unknown>) => r.load_category === 'Regular').length;
     const totalOverload    = rows.filter((r: Record<string, unknown>) => r.load_category === 'Overload').length;

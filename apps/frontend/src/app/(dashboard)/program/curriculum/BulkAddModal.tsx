@@ -71,7 +71,7 @@ function emptyRow(prev?: BulkRow): BulkRow {
     year_level:     prev?.year_level     ?? '',
     semester:       prev?.semester       ?? '',
     subject_type:   prev?.subject_type   ?? '',
-    subject_category: prev?.subject_type ? categoryFromSubjectType(prev.subject_type) : 'Minor',
+    subject_category: prev?.subject_type ? categoryFromSubjectType(prev.subject_type, '') : 'Minor',
     subject_code:   '',
     subject_name:   '',
     units:          '',
@@ -302,7 +302,7 @@ export default function BulkAddModal({ programs, curriculumVersion, onClose, onS
         year_level:      YEAR_LEVELS.includes(yl ?? '') ? (yl ?? '') : '',
         semester:        SEMESTERS.includes(sem ?? '') ? (sem ?? '') : '',
         subject_type:    (SUBJECT_TYPES as string[]).includes(stype ?? '') ? (stype as SubjectType) : '',
-        subject_category: categoryFromSubjectType(stype ?? ''),
+        subject_category: categoryFromSubjectType(stype ?? '', code),
         subject_code:    (code ?? '').toUpperCase(),
         subject_name:    name ?? '',
         units:           units ?? '',
@@ -397,7 +397,7 @@ export default function BulkAddModal({ programs, curriculumVersion, onClose, onS
         units:            pn(r.units),
         prerequisites:    r.prerequisites.trim(),
         grade:            r.grade.trim(),
-        subject_category: categoryFromHours(pn(r.lecture_hours), pn(r.laboratory_hours)),
+        subject_category: categoryFromHours(pn(r.lecture_hours), pn(r.laboratory_hours), r.subject_code),
       }));
 
       const res  = await fetch('/api/curriculum/import', {
@@ -680,7 +680,7 @@ export default function BulkAddModal({ programs, curriculumVersion, onClose, onS
                             const t = v as SubjectType;
                             updateRow(row._id, {
                               subject_type: t,
-                              subject_category: categoryFromSubjectType(t),
+                              subject_category: categoryFromSubjectType(t, row.subject_code),
                               lecture_hours:    t === 'Laboratory' ? '0' : row.lecture_hours,
                               laboratory_hours: t === 'Lecture'    ? '0' : row.laboratory_hours,
                             });
@@ -695,7 +695,7 @@ export default function BulkAddModal({ programs, curriculumVersion, onClose, onS
                       <td className="px-1.5 py-1.5">
                         <div className="px-2 py-1.5 text-xs font-semibold rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] text-center"
                           style={{ color: row.subject_type ? '#0B2A5B' : '#94A3B8' }}>
-                          {row.subject_type ? categoryFromSubjectType(row.subject_type) : '—'}
+                          {row.subject_type ? categoryFromSubjectType(row.subject_type, row.subject_code) : '—'}
                         </div>
                       </td>
 

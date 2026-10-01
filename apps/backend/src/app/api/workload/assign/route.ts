@@ -59,10 +59,10 @@ async function POST_handler(req: NextRequest) {
     }
     const sched = schedResult.rows[0];
 
-    // Only blocks assigned to this faculty (Faculty → Blocks to Teach)
+    // Only blocks assigned to this faculty (Faculty → Blocks to Handle)
     if (!(await isBlockAssignedToFaculty(Number(faculty_id), Number(sched.block_id)))) {
       return NextResponse.json({
-        error: `Block ${sched.block_name} is not assigned to ${faculty.name}. Add it under Faculty → Blocks to Teach first.`,
+        error: `Block ${sched.block_name} is not assigned to ${faculty.name}. Add it under Faculty → Blocks to Handle first.`,
       }, { status: 403 });
     }
 
@@ -158,10 +158,20 @@ async function POST_handler(req: NextRequest) {
       });
       if (capError) return NextResponse.json({ error: capError, overload_limit_reached: true }, { status: 409 });
     }
-    await query(
-      'UPDATE master_schedule SET faculty_id=$1, status=$2, updated_at=NOW() WHERE id=$3',
+    // Claim the subject atomically — two admins assigning at once can't both pass the checks above
+    const claimed = await query(
+      `UPDATE master_schedule SET faculty_id=$1, status=$2, updated_at=NOW()
+       WHERE id=$3 AND faculty_id IS NULL
+         AND COALESCE(status, 'Unassigned') NOT IN ('Assigned', 'Scheduled', 'Completed')
+       RETURNING id`,
       [faculty_id, 'Assigned', master_schedule_id]
     );
+    if (claimed.rows.length === 0) {
+      return NextResponse.json(
+        { error: 'This subject is already assigned to a faculty member and cannot be assigned again.' },
+        { status: 409 },
+      );
+    }
 
     if (assign_category === 'overload') {
       // Full subject goes into instructor_loads as Overload

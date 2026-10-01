@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
-import { Check, ChevronDown, Lock } from 'lucide-react';
+import { Check, ChevronDown, Lock, Search } from 'lucide-react';
 import AnchoredPopover from '@/components/ui/AnchoredPopover';
 
 /*
@@ -25,6 +25,15 @@ export interface FriendlyOption {
 }
 
 const EASE = [0.4, 0, 0.2, 1] as const;
+
+/** Lower-case, letters and digits only — so "1a", "1 A" and "1-A" all find "1A". */
+const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/** Label match always; hint match from 3 characters on, so "a" doesn't hit every "Year". */
+function matches(o: FriendlyOption, q: string): boolean {
+  if (normalize(o.label).includes(q)) return true;
+  return q.length >= 3 && !!o.hint && normalize(o.hint).includes(q);
+}
 
 const BADGE_TONES: Record<NonNullable<FriendlyOption['badgeTone']>, string> = {
   green: 'bg-[#ECFDF5] text-[#047857]',
@@ -52,6 +61,8 @@ export default function FriendlySelect({
   guide = false,
   minPanelWidth = 300,
   showHintInTrigger = false,
+  searchable = false,
+  searchPlaceholder = 'Type to search…',
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -68,30 +79,47 @@ export default function FriendlySelect({
   minPanelWidth?: number;
   /** Also print the chosen option's hint in the closed box */
   showHintInTrigger?: boolean;
+  /** Search box at the top of the list (case-insensitive, ignores spaces/dashes) */
+  searchable?: boolean;
+  searchPlaceholder?: string;
 }) {
   const reduceMotion = useReducedMotion();
   const id = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
   const [panelWidth, setPanelWidth] = useState(minPanelWidth);
+  const [query, setQuery] = useState('');
 
   const selected = options.find(o => o.value === value) ?? null;
-  const firstEnabled = () => options.findIndex(o => !o.disabled);
+  /** The rows on screen — every option, or the search matches. */
+  const shown = useMemo(() => {
+    const q = searchable ? normalize(query) : '';
+    return q ? options.filter(o => matches(o, q)) : options;
+  }, [options, query, searchable]);
+  const firstEnabled = (list = shown) => list.findIndex(o => !o.disabled);
 
   function openList() {
     if (disabled) return;
     setPanelWidth(Math.max(minPanelWidth, triggerRef.current?.offsetWidth ?? 0));
+    setQuery('');
     const idx = options.findIndex(o => o.value === value && !o.disabled);
-    setActive(idx >= 0 ? idx : firstEnabled());
+    setActive(idx >= 0 ? idx : firstEnabled(options));
     setOpen(true);
   }
 
   function close(refocus = true) {
     setOpen(false);
     if (refocus) triggerRef.current?.focus();
+  }
+
+  function onQueryChange(next: string) {
+    setQuery(next);
+    const q = normalize(next);
+    setActive(firstEnabled(q ? options.filter(o => matches(o, q)) : options));
   }
 
   function pick(o: FriendlyOption) {
@@ -102,9 +130,10 @@ export default function FriendlySelect({
 
   useEffect(() => {
     if (!open) return;
-    const raf = requestAnimationFrame(() => listRef.current?.focus({ preventScroll: true }));
+    const raf = requestAnimationFrame(() =>
+      (searchable ? searchRef.current : listRef.current)?.focus({ preventScroll: true }));
     return () => cancelAnimationFrame(raf);
-  }, [open]);
+  }, [open, searchable]);
 
   useEffect(() => {
     if (!open || active < 0) return;
@@ -114,12 +143,12 @@ export default function FriendlySelect({
   useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
 
   function move(dir: 1 | -1) {
-    const n = options.length;
+    const n = shown.length;
     if (n === 0) return;
     let i = active;
     for (let step = 0; step < n; step++) {
       i = (i + dir + n) % n;
-      if (!options[i].disabled) { setActive(i); return; }
+      if (!shown[i].disabled) { setActive(i); return; }
     }
   }
 
@@ -130,17 +159,22 @@ export default function FriendlySelect({
       case 'Home':      e.preventDefault(); setActive(firstEnabled()); break;
       case 'End': {
         e.preventDefault();
-        for (let i = options.length - 1; i >= 0; i--) if (!options[i].disabled) { setActive(i); break; }
+        for (let i = shown.length - 1; i >= 0; i--) if (!shown[i].disabled) { setActive(i); break; }
         break;
       }
       case 'Enter':
       case ' ':
         e.preventDefault();
-        if (options[active]) pick(options[active]);
+        if (shown[active]) pick(shown[active]);
         break;
       case 'Escape': e.preventDefault(); e.stopPropagation(); close(); break;
       case 'Tab': close(false); break;
     }
+  }
+
+  /** Search box: arrows / Enter / Esc drive the list; every other key types. */
+  function onSearchKey(e: React.KeyboardEvent) {
+    if (['ArrowDown', 'ArrowUp', 'Enter', 'Escape', 'Tab'].includes(e.key)) onListKey(e);
   }
 
   const triggerTone = disabled
@@ -205,6 +239,30 @@ export default function FriendlySelect({
         label={label}
         duration={0.28}
       >
+        {searchable && (
+          <div className="flex-shrink-0 p-1.5 pb-0">
+            <div className="flex items-center gap-2 rounded-xl border border-[#D6E0EF] bg-white px-3 min-h-[44px] focus-within:border-[#1D5BD6] transition-colors duration-200">
+              <Search className="w-4 h-4 text-slate-400 flex-shrink-0" aria-hidden="true" />
+              <input
+                ref={searchRef}
+                type="text"
+                value={query}
+                onChange={e => onQueryChange(e.target.value)}
+                onKeyDown={onSearchKey}
+                placeholder={searchPlaceholder}
+                role="combobox"
+                aria-expanded={open}
+                aria-controls={`${id}-list`}
+                aria-autocomplete="list"
+                aria-activedescendant={active >= 0 ? `${id}-opt-${active}` : undefined}
+                aria-label={`Search ${label}`}
+                autoComplete="off"
+                spellCheck={false}
+                className="flex-1 min-w-0 text-[15px] text-slate-800 placeholder:text-slate-400 bg-transparent border-0 outline-none"
+              />
+            </div>
+          </div>
+        )}
         <div
           ref={listRef}
           id={`${id}-list`}
@@ -215,9 +273,11 @@ export default function FriendlySelect({
           onKeyDown={onListKey}
           className="min-h-0 overflow-y-auto overscroll-contain p-1.5 outline-none"
         >
-          {options.length === 0 ? (
-            <p className="px-4 py-6 text-center text-[15px] text-slate-500">{emptyText}</p>
-          ) : options.map((o, i) => {
+          {shown.length === 0 ? (
+            <p className="px-4 py-6 text-center text-[15px] text-slate-500">
+              {options.length > 0 && query ? `No match for “${query.trim()}”.` : emptyText}
+            </p>
+          ) : shown.map((o, i) => {
             const isSel = o.value === value;
             const isActive = i === active && !o.disabled;
             return (

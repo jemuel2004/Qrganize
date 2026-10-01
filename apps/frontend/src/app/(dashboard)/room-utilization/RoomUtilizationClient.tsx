@@ -10,6 +10,9 @@
  *  • Room Activity: scheduled vs. actual (QR check-in) per class; Expand
  *    gives it the full width; View opens a room's own usage-history page
  *  • Utilization Summary: hours used per room — foldable
+ *  • Classroom Construction Recommendation: classrooms the schedule needs
+ *    (peak simultaneous classes) vs. usable lecture rooms — schedule-based,
+ *    not QR; fetched on its own, not polled
  */
 
 import React, { useMemo, useState } from 'react';
@@ -31,6 +34,7 @@ import {
   ROOM_TONE, roomStatusFor, RowStatusPill, useApplyingDate, useUtilization, WHITE,
   type RoomStatus, type UtilRow, type View,
 } from './shared';
+import ClassroomDemandSection from './ClassroomDemand';
 
 type CardFilter = 'Occupied' | 'Available' | 'PendingNoScan' | null;
 
@@ -99,6 +103,7 @@ export default function RoomUtilizationClient() {
   const [expanded, setExpanded] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(true);
   const [page, setPage] = useState(0);
+  const [demandKey, setDemandKey] = useState(0);
 
   const { data, loading, error, reload } = useUtilization(date, view);
   const [applying, startApplying, applied] = useApplyingDate(loading, () => setCalOpen(false));
@@ -217,7 +222,7 @@ export default function RoomUtilizationClient() {
               <option value="Laboratory">Laboratory</option>
             </FilterSelect>
           </div>
-          <RefreshButton onRefresh={reload} loading={loading} />
+          <RefreshButton onRefresh={() => { reload(); setDemandKey(k => k + 1); }} loading={loading} />
         </div>
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
       </div>
@@ -486,6 +491,11 @@ export default function RoomUtilizationClient() {
               </motion.section>
             )}
           </AnimatePresence>
+        </div>
+
+        {/* ── Classroom Construction Recommendation (term schedule — not affected by the date / room filters) ── */}
+        <div className="mt-5">
+          <ClassroomDemandSection refreshKey={demandKey} />
         </div>
       </PageLoadTransition>
 

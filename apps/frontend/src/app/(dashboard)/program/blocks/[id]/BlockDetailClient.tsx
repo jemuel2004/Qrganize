@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useToast } from '@/context/ToastContext';
+import { useSchoolYear } from '@/context/SchoolYearContext';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -10,12 +11,16 @@ import {
   GraduationCap, Hash, ChevronRight, Clock,
   ChevronDown,
 } from 'lucide-react';
-import { SearchInput, FilterSelect } from '@/components/ui/SearchFilter';
+import { SearchInput } from '@/components/ui/SearchFilter';
+import FriendlySelect from '@/components/ui/FriendlySelect';
 import {
   blockCurriculumVersion,
   curriculumVersionLabel,
 } from '@shared/curriculumVersion';
 import { useScrollLock } from '@/hooks/useScrollLock';
+import { motion, useReducedMotion, type Variants } from 'framer-motion';
+import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
+import { Skeleton } from '@/components/ui/skeletons';
 
 interface BlockDetail {
   id: number; program_id: number; program_code: string; program_name: string;
@@ -45,6 +50,100 @@ interface BlockSummary {
   id: number; block_name: string; year_level: string; semester: string;
   academic_year: string; program_id: number;
   curriculum_version?: string;
+}
+
+/** "3rd Year" → "3" — with the block letter this makes the short code 3A. */
+const yearNum = (yearLevel: string) => (yearLevel.match(/\d+/) ?? [yearLevel])[0];
+
+/* Switch Block field styles — read-only term boxes match the dropdowns' height */
+const switchLabelCls = 'block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5';
+const termBoxCls = 'min-h-[48px] flex items-center rounded-xl bg-slate-50 border border-slate-100 px-3.5 text-[15px] font-semibold text-[#0B2A5B] cursor-default select-none';
+
+/* Page enter: sections fade up one after another once the block is loaded. */
+const ENTER_EASE = [0.16, 1, 0.3, 1] as const;
+const pageStagger: Variants = {
+  hidden: { opacity: 0 },
+  show: { opacity: 1, transition: { duration: 0.25, staggerChildren: 0.08 } },
+};
+const pageItem: Variants = {
+  hidden: { opacity: 0, y: 12 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.5, ease: ENTER_EASE } },
+};
+
+/* Subjects table columns: # · code · title · hrs · units · faculty · day/time · room · status · next step · delete */
+const SKELETON_COLS = '1.5rem 5rem minmax(0,2fr) 3.5rem 3.5rem minmax(0,1.3fr) 5rem 3.5rem 7rem 7.5rem 2rem';
+
+/** Loading placeholder laid out like the real page, section for section. */
+function BlockDetailSkeleton() {
+  return (
+    <div className="p-6 max-w-7xl mx-auto w-full min-w-0 space-y-5" role="status" aria-live="polite" aria-label="Loading block">
+      {/* Back link */}
+      <Skeleton className="h-5 w-48 rounded" />
+
+      {/* Switch Block bar */}
+      <div className="bg-white rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.06)] px-5 py-[21px] flex items-center gap-2">
+        <div className="w-1.5 h-5 rounded-full bg-[#1D5BD6]/30 flex-shrink-0" />
+        <Skeleton className="h-4 w-28 rounded" />
+        <Skeleton className="h-3 w-36 rounded ml-1 hidden sm:block" />
+        <Skeleton className="h-4 w-4 rounded ml-auto" />
+      </div>
+
+      {/* Block title card */}
+      <div className="w-fit max-w-full flex items-center gap-2.5 bg-white rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.06)] px-4 py-[18px]">
+        <Skeleton className="h-6 w-44 rounded" />
+        <Skeleton className="h-4 w-28 rounded" />
+      </div>
+
+      {/* Stat cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
+        {Array.from({ length: 5 }, (_, i) => (
+          <div key={i} className="bg-white border border-[#E2E8F0] rounded-2xl p-4 shadow-sm flex flex-col items-center justify-center gap-3 min-h-[130px]">
+            <Skeleton className="h-8 w-16 rounded-md" />
+            <Skeleton className="h-3.5 w-24 rounded" />
+          </div>
+        ))}
+      </div>
+
+      {/* Subjects table */}
+      <div className="bg-white rounded-2xl border border-[#E2E8F0] overflow-hidden shadow-sm">
+        <div className="px-6 py-5 bg-[#1D5BD6] flex items-center justify-between gap-4">
+          <div className="space-y-2.5">
+            <div className="h-5 w-40 rounded bg-white/30 animate-pulse" />
+            <div className="h-3.5 w-32 rounded bg-white/20 animate-pulse" />
+          </div>
+          <div className="h-12 w-72 rounded-full bg-white/90 hidden sm:block" />
+        </div>
+        <div className="overflow-hidden">
+          <div className="min-w-[860px]">
+            <div className="grid gap-4 items-center px-5 py-6 bg-[#F8FAFC] border-b border-[#E2E8F0]" style={{ gridTemplateColumns: SKELETON_COLS }}>
+              {Array.from({ length: 10 }, (_, c) => <Skeleton key={c} className="h-3 w-[70%] rounded" />)}
+              <span />
+            </div>
+            <div className="divide-y divide-[#F1F5F9]">
+              {Array.from({ length: 5 }, (_, r) => (
+                <div key={r} className="grid gap-4 items-center px-5 py-7" style={{ gridTemplateColumns: SKELETON_COLS }}>
+                  <Skeleton className="h-3.5 w-3 rounded" />
+                  <Skeleton className="h-7 w-16 rounded" />
+                  <div className="space-y-2">
+                    <Skeleton className="h-3.5 w-[85%] rounded" />
+                    <Skeleton className="h-3.5 w-[55%] rounded" />
+                  </div>
+                  <Skeleton className="h-3.5 w-8 rounded mx-auto" />
+                  <Skeleton className="h-3.5 w-10 rounded mx-auto" />
+                  <Skeleton className="h-3.5 w-24 rounded" />
+                  <Skeleton className="h-3.5 w-6 rounded" />
+                  <Skeleton className="h-3.5 w-6 rounded" />
+                  <Skeleton className="h-9 w-28 rounded-full" />
+                  <Skeleton className="h-4 w-28 rounded" />
+                  <Skeleton className="h-5 w-5 rounded" />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -97,6 +196,7 @@ export default function BlockDetailPage() {
   const toast  = useToast();
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
+  const { schoolYear: globalYear, semester: globalSemester } = useSchoolYear();
 
   const [block,   setBlock]   = useState<BlockDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -117,7 +217,6 @@ export default function BlockDetailPage() {
   const [programs,     setPrograms]     = useState<Program[]>([]);
   const [allBlocks,    setAllBlocks]    = useState<BlockSummary[]>([]);
   const [selProgram,   setSelProgram]   = useState('');
-  const [selYear,      setSelYear]      = useState('');
   const [selSemester,  setSelSemester]  = useState('');
   const [selSchoolYear,setSelSchoolYear]= useState('');
   const [selBlock,     setSelBlock]     = useState('');
@@ -179,57 +278,46 @@ export default function BlockDetailPage() {
       .then(d => {
         setBlock(d.block ?? null);
         setLoading(false);
-      });
+      })
+      .catch(() => setLoading(false));
   }, []);
 
   useEffect(() => { loadBlock(id); }, [id, loadBlock]);
 
-  /* once block is loaded, pre-fill filters */
+  /* Skeleton (held for the shared minimum so it never just flashes) only on first
+     open or a block switch — refreshes after adding/removing subjects keep the page up. */
+  const showSkeleton = useMinLoading(loading && (!block || String(block.id) !== id), LOADING_DELAY);
+  const reduceMotion = useReducedMotion();
+
+  /* once block is loaded, pre-fill filters — the term is the block's own, falling
+     back to the active semester / school year when the block has none */
   useEffect(() => {
     if (block && !filtersReady) {
       setSelProgram(String(block.program_id));
-      setSelYear(block.year_level);
-      setSelSemester(block.semester);
-      setSelSchoolYear(block.academic_year);
+      setSelSemester(block.semester || globalSemester);
+      setSelSchoolYear(block.academic_year || globalYear);
       setSelBlock(String(block.id));
       setFiltersReady(true);
     }
-  }, [block, filtersReady]);
+  }, [block, filtersReady, globalSemester, globalYear]);
+  // Active term arrived after the block — fill whatever is still empty
+  useEffect(() => {
+    if (!filtersReady) return;
+    setSelSemester(v => v || globalSemester);
+    setSelSchoolYear(v => v || globalYear);
+  }, [filtersReady, globalSemester, globalYear]);
 
-  /* derived dropdown options from allBlocks */
-  const yearOptions = [...new Set(
-    allBlocks
-      .filter(b => !selProgram || String(b.program_id) === selProgram)
-      .map(b => b.year_level)
-  )].sort();
+  /* Switch Block: Semester / School Year stay on this block's term (shown read-only,
+     like Block Creation) — only Program → Year Level → Block are picked. */
+  const inTerm = (b: BlockSummary) =>
+    (!selSemester || b.semester === selSemester) && (!selSchoolYear || b.academic_year === selSchoolYear);
 
-  const semesterOptions = [...new Set(
-    allBlocks
-      .filter(b =>
-        (!selProgram || String(b.program_id) === selProgram) &&
-        (!selYear    || b.year_level === selYear)
-      )
-      .map(b => b.semester)
-  )].sort();
-
-  const schoolYearOptions = [...new Set(
-    allBlocks
-      .filter(b =>
-        (!selProgram   || String(b.program_id) === selProgram) &&
-        (!selYear      || b.year_level === selYear) &&
-        (!selSemester  || b.semester === selSemester)
-      )
-      .map(b => b.academic_year)
-  )].sort().reverse();
-
+  /* Year & Block options: the program's blocks this term, ordered 1A, 1B, 2A… */
   const blockOptions = allBlocks
-    .filter(b =>
-      (!selProgram    || String(b.program_id) === selProgram) &&
-      (!selYear       || b.year_level === selYear) &&
-      (!selSemester   || b.semester === selSemester) &&
-      (!selSchoolYear || b.academic_year === selSchoolYear)
-    )
-    .sort((a, b) => a.block_name.localeCompare(b.block_name));
+    .filter(b => (!selProgram || String(b.program_id) === selProgram) && inTerm(b))
+    .sort((a, b) =>
+      yearNum(a.year_level).localeCompare(yearNum(b.year_level), undefined, { numeric: true }) ||
+      a.block_name.localeCompare(b.block_name, undefined, { numeric: true }));
 
   /* keep sessionStorage in sync so panel stays open across block navigation */
   useEffect(() => {
@@ -247,19 +335,10 @@ export default function BlockDetailPage() {
     }
   }
 
-  /* reset downstream filters when upstream changes */
+  /* reset downstream picks when upstream changes (the term stays) */
   function handleProgramChange(v: string) {
     if (isChair) return;
-    setSelProgram(v); setSelYear(''); setSelSemester(''); setSelSchoolYear(''); setSelBlock('');
-  }
-  function handleYearChange(v: string) {
-    setSelYear(v); setSelSemester(''); setSelSchoolYear(''); setSelBlock('');
-  }
-  function handleSemesterChange(v: string) {
-    setSelSemester(v); setSelSchoolYear(''); setSelBlock('');
-  }
-  function handleSchoolYearChange(v: string) {
-    setSelSchoolYear(v); setSelBlock('');
+    setSelProgram(v); setSelBlock('');
   }
 
   async function handleRemove(bs: SubjectRow) {
@@ -324,11 +403,7 @@ export default function BlockDetailPage() {
 
   // ── loading / not found ───────────────────────────────────────────────────
 
-  if (loading) return (
-    <div className="flex items-center justify-center h-64">
-      <div className="w-8 h-8 border-4 border-[#1D5BD6] border-t-transparent rounded-full animate-spin" />
-    </div>
-  );
+  if (showSkeleton || (loading && !block)) return <BlockDetailSkeleton />;
   if (!block) return <div className="p-8 text-red-400 font-medium">Block not found.</div>;
 
   // ── derived values ────────────────────────────────────────────────────────
@@ -360,16 +435,23 @@ export default function BlockDetailPage() {
   // ── render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-5">
+    <motion.div
+      className="p-6 max-w-7xl mx-auto w-full min-w-0 space-y-5"
+      variants={pageStagger}
+      initial={reduceMotion ? false : 'hidden'}
+      animate="show"
+    >
 
-      {/* Back */}
-      <Link href="/program/blocks"
-        className="inline-flex items-center gap-2 text-[#1D5BD6] hover:text-[#60A5FA] text-sm font-medium transition">
-        <ArrowLeft className="w-4 h-4" /> Back to Block Creation
-      </Link>
+      {/* Back to the same Program / Year Level list this block belongs to */}
+      <motion.div variants={pageItem}>
+        <Link href={`/program/blocks?${new URLSearchParams({ programId: String(block.program_id), yearLevel: block.year_level })}`}
+          className="inline-flex items-center gap-2 text-[#1D5BD6] hover:text-[#60A5FA] text-sm font-medium transition">
+          <ArrowLeft className="w-4 h-4" /> Back to Block Creation
+        </Link>
+      </motion.div>
 
       {/* ── Block Navigation Filters ── */}
-      <div className="bg-white rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
+      <motion.div variants={pageItem} className="bg-white rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
         <button
           type="button"
           aria-expanded={filtersOpen}
@@ -410,80 +492,66 @@ export default function BlockDetailPage() {
                 filtersOpen ? 'opacity-100' : 'opacity-0'
               }`}
             >
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-4 pt-3">
 
-          {/* Program */}
-          <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Program</label>
-            {isChair ? (
-              <div className="bg-slate-50 border border-slate-100 rounded-xl px-3 py-2.5 text-sm text-slate-600 font-medium cursor-default select-none truncate">
-                {programs.find(p => String(p.id) === selProgram)
-                  ? `${programs.find(p => String(p.id) === selProgram)!.code} — ${programs.find(p => String(p.id) === selProgram)!.name}`
-                  : '—'}
-              </div>
-            ) : (
-              <FilterSelect value={selProgram} onChange={handleProgramChange} label="Program">
-                <option value="">— Program —</option>
-                {programs.map(p => (
-                  <option key={p.id} value={p.id}>{p.code} — {p.name}</option>
-                ))}
-              </FilterSelect>
-            )}
+          {/* Program — locked for a Program Chair */}
+          <div className="min-w-0 lg:col-span-4">
+            <label className={switchLabelCls}>Program</label>
+            <FriendlySelect
+              value={selProgram}
+              onChange={handleProgramChange}
+              disabled={isChair}
+              label="Program"
+              placeholder="Select a program"
+              guide={!selProgram}
+              showHintInTrigger
+              minPanelWidth={380}
+              options={programs.map(p => ({ value: String(p.id), label: p.code, hint: p.name }))}
+            />
           </div>
 
-          {/* Year Level */}
-          <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Year Level</label>
-            <FilterSelect value={selYear} onChange={handleYearChange} label="Year Level">
-              <option value="">— Year Level —</option>
-              {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
-            </FilterSelect>
-          </div>
-
-          {/* Semester */}
-          <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Semester</label>
-            <FilterSelect value={selSemester} onChange={handleSemesterChange} label="Semester">
-              <option value="">— Semester —</option>
-              {semesterOptions.map(s => <option key={s} value={s}>{s}</option>)}
-            </FilterSelect>
-          </div>
-
-          {/* School Year */}
-          <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">School Year</label>
-            <FilterSelect value={selSchoolYear} onChange={handleSchoolYearChange} label="School Year">
-              <option value="">— School Year —</option>
-              {schoolYearOptions.map(y => <option key={y} value={y}>{y}</option>)}
-            </FilterSelect>
-          </div>
-
-          {/* Block */}
-          <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Block</label>
-            <FilterSelect
+          {/* Year & Block in one pick (e.g. 3A) — picking one opens it */}
+          <div className="min-w-0 lg:col-span-4">
+            <label className={switchLabelCls}>Year &amp; Block</label>
+            <FriendlySelect
               value={selBlock}
               onChange={handleBlockSelect}
-              disabled={blockOptions.length === 0}
-              label="Block"
-            >
-              <option value="">Select Block</option>
-              {blockOptions.map(b => (
-                <option key={b.id} value={b.id}>
-                  Block {b.block_name} · {curriculumVersionLabel(blockCurriculumVersion(b.curriculum_version))}
-                </option>
-              ))}
-            </FilterSelect>
+              disabled={!selProgram}
+              disabledText="Select a program first"
+              label="Year & Block"
+              placeholder="Select year & block"
+              guide={!!selProgram && !selBlock}
+              minPanelWidth={320}
+              searchable
+              searchPlaceholder="Search, e.g. 3A"
+              emptyText="No blocks for this program this term."
+              options={blockOptions.map(b => ({
+                value: String(b.id),
+                label: `${yearNum(b.year_level)}${b.block_name}`,
+                hint: `${b.year_level}, Block ${b.block_name} · ${curriculumVersionLabel(blockCurriculumVersion(b.curriculum_version))}`,
+                ...(String(b.id) === id ? { badge: 'Viewing', badgeTone: 'blue' as const } : {}),
+              }))}
+            />
+          </div>
+
+          {/* Semester / School Year — this block's term, read-only (same as Block Creation) */}
+          <div className="min-w-0 lg:col-span-2">
+            <span className={switchLabelCls}>Semester</span>
+            <div className={termBoxCls}>{selSemester || '—'}</div>
+          </div>
+          <div className="min-w-0 lg:col-span-2">
+            <span className={switchLabelCls}>School Year</span>
+            <div className={termBoxCls}>{selSchoolYear || '—'}</div>
           </div>
 
         </div>
             </div>
           </div>
         </div>
-      </div>
+      </motion.div>
 
       {/* ── Block header card ── */}
-      <div className="w-fit max-w-full inline-flex items-center gap-2.5 bg-white rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.06)] px-4 py-2.5">
+      <motion.div variants={pageItem} className="w-fit max-w-full inline-flex items-center gap-2.5 bg-white rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.06)] px-4 py-2.5">
         <h1 className="text-lg font-bold text-[#0B2A5B] whitespace-nowrap" title={block.program_name}>
           {block.program_code} — Block {block.block_name}
         </h1>
@@ -491,7 +559,7 @@ export default function BlockDetailPage() {
           {curriculumVersionLabel(blockCurriculumVersion(block.curriculum_version))}
         </span>
         <span className="sr-only">{block.program_name}</span>
-      </div>
+      </motion.div>
 
       {/* Reload feedback */}
       {reloadMsg && (
@@ -509,7 +577,7 @@ export default function BlockDetailPage() {
 
 
       {/* ── Stats ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
+      <motion.div variants={pageItem} className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
         {([
           { key: 'unassigned', label: 'Unassigned',     value: unassignedCount },
           { key: 'assigned',   label: 'Assigned',       value: assignedCount },
@@ -540,10 +608,10 @@ export default function BlockDetailPage() {
           <div className="text-2xl sm:text-3xl font-bold mb-1 tabular-nums tracking-tight" style={{ color: '#0B2A5B' }}>{totalUnits.toFixed(2)}</div>
           <div className="text-sm" style={{ color: '#64748B' }}>Total Units</div>
         </div>
-      </div>
+      </motion.div>
 
       {/* ── Subjects table ── */}
-      <div className="bg-[#111827] rounded-2xl border border-white/10 overflow-hidden">
+      <motion.div variants={pageItem} className="bg-[#111827] rounded-2xl border border-white/10 overflow-hidden">
 
         <div className="px-6 py-4 bg-[#1D5BD6]">
           <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -656,7 +724,13 @@ export default function BlockDetailPage() {
                     </td>
                     <td className="px-4 py-4">
                       {(!s.schedule_status || s.schedule_status === 'Unassigned') && (
-                        <NextStepLink href="/workload">Assign faculty</NextStepLink>
+                        <NextStepLink
+                          href={s.master_schedule_id && block
+                            ? `/workload?assign=${s.master_schedule_id}&block=${block.id}&from=block`
+                            : '/workload'}
+                        >
+                          Assign faculty
+                        </NextStepLink>
                       )}
                       {s.schedule_status === 'Assigned' && (
                         <NextStepLink href="/scheduling">Set schedule</NextStepLink>
@@ -686,7 +760,7 @@ export default function BlockDetailPage() {
             </table>
           </div>
         )}
-      </div>
+      </motion.div>
 
       {/* ── Add Subject Modal ── */}
       {addOpen && (
@@ -768,6 +842,6 @@ export default function BlockDetailPage() {
         </div>
       )}
 
-    </div>
+    </motion.div>
   );
 }

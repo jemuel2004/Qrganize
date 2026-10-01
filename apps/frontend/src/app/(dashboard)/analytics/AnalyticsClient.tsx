@@ -10,6 +10,7 @@ import {
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
+import { shownUnitsCap } from '@shared/regularLoad';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import { CardSkeleton } from '@/components/ui/skeletons';
@@ -304,7 +305,7 @@ function FacultyLoadPanel({ rows, ring }: { rows: FacultyLoad[]; ring?: number }
                                 animate={{ width: `${f.limit ? Math.min(100, (f.current / f.limit) * 100) : 0}%` }}
                                 transition={{ duration: reduceMotion ? 0 : 0.5, ease: EASE, delay: reduceMotion ? 0 : Math.min(i, 8) * 0.03 }} />
                             </div>
-                            <span className="text-[11px] text-[#64748B] tabular-nums whitespace-nowrap">{fmt(f.current)}/{fmt(f.limit)} {f.unit === 'units' ? 'u' : 'h'}</span>
+                            <span className="text-[11px] text-[#64748B] tabular-nums whitespace-nowrap">{fmt(f.current)}/{fmt(f.unit === 'units' ? shownUnitsCap(f.limit) : f.limit)} {f.unit === 'units' ? 'u' : 'h'}</span>
                           </div>
                           {f.needs_schedule && <p className="text-[11px] font-semibold text-[#C2410C] mt-0.5">Needs a class schedule</p>}
                         </Link>

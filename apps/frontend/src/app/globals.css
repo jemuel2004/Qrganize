@@ -1,5 +1,40 @@
 @import "tailwindcss";
 
+/* ── Clickable cursor, system-wide ───────────────── */
+/* Tailwind's reset gives buttons the arrow cursor. Everything clickable shows the
+   hand instead, and anything disabled shows "not allowed", so users can tell at a
+   glance. In the base layer, so a page's own cursor-* class still wins. */
+@layer base {
+  button:not(:disabled),
+  a[href],
+  summary,
+  label[for],
+  select:not(:disabled),
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled),
+  input[type="file"]:not(:disabled),
+  input[type="range"]:not(:disabled),
+  input[type="color"]:not(:disabled),
+  input[type="button"]:not(:disabled),
+  input[type="submit"]:not(:disabled),
+  input[type="reset"]:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [role="tab"]:not([aria-disabled="true"]),
+  [role="option"]:not([aria-disabled="true"]),
+  [role="menuitem"]:not([aria-disabled="true"]),
+  [role="switch"]:not([aria-disabled="true"]),
+  [role="checkbox"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+  button:disabled,
+  select:disabled,
+  input:disabled,
+  textarea:disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+}
+
 /* ── Toast notification animation ───────────────── */
 @keyframes toast-in {
   from { opacity: 0; transform: translateX(1rem) scale(0.97); }

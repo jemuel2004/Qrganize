@@ -9,6 +9,7 @@ import Modal from '@/components/ui/Modal';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import TrashDropAnimation from '@/components/ui/TrashDropAnimation';
+import SelectBox from '@/components/ui/SelectBox';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { CardSkeleton, ListSkeleton, Skeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
@@ -16,8 +17,9 @@ import {
   Pencil, Trash2, Eye, BookOpen, CheckCircle,
   AlertTriangle, Users, X, ChevronRight, Plus,
 } from 'lucide-react';
-import { SearchInput, FilterSelect, FilterBar } from '@/components/ui/SearchFilter';
-import Link from 'next/link';
+import { SearchInput, FilterBar } from '@/components/ui/SearchFilter';
+import FriendlySelect from '@/components/ui/FriendlySelect';
+import Link, { useLinkStatus } from 'next/link';
 import {
   CURRICULUM_VERSIONS,
   blockCurriculumVersion,
@@ -116,6 +118,14 @@ function computeNextBlockName(
   });
 }
 
+/** View button icon — a same-size spinner while the block page opens. */
+function ViewLinkIcon() {
+  const { pending } = useLinkStatus();
+  return pending
+    ? <span className="w-4 h-4 border-2 border-emerald-700/30 border-t-emerald-700 rounded-full animate-spin" aria-label="Opening block" />
+    : <Eye className="w-4 h-4" aria-hidden />;
+}
+
 export default function BlocksPage() {
   const toast = useToast();
   const router = useRouter();
@@ -138,6 +148,13 @@ export default function BlocksPage() {
   const [deletingId,     setDeletingId]     = useState<number | null>(null);
   const [deleteTarget,   setDeleteTarget]   = useState<{ id: number; name: string } | null>(null);
   const [deleteSuccess,  setDeleteSuccess]  = useState(false);
+  /* Gmail-style multi-select: tick any blocks (or a whole group from the header) and
+     delete them together. A removed letter can be re-created later — creating a
+     block only needs the letter before it to exist. */
+  const [selectedIds,       setSelectedIds]       = useState<Set<number>>(new Set());
+  const [bulkDeleteOpen,    setBulkDeleteOpen]    = useState(false);
+  const [bulkDeleteLoading, setBulkDeleteLoading] = useState(false);
+  const [bulkDeleteSuccess, setBulkDeleteSuccess] = useState(false);
   // Create mode: consecutive block letters to create in one save (e.g. A, B, C)
   const [selectedBlocks, setSelectedBlocks] = useState<string[]>([]);
   const [createdCount,   setCreatedCount]   = useState(0);
@@ -210,11 +227,30 @@ export default function BlocksPage() {
     setProgramFilter(prev => (prev === pid ? prev : pid));
   }, [roleReady, searchParams, userRole, chairProgramId]);
 
+  /* ?yearLevel= is applied once, after the program's blocks load (i.e. after the
+     program-change reset below) — never again, so picking another program
+     doesn't bring the old year back. */
+  const restoredYear = useRef(false);
   useEffect(() => {
+    if (restoredYear.current) return;
     const yl = searchParams.get('yearLevel');
-    if (!yl || !programFilter || blocks.length === 0) return;
-    setYearFilter(prev => prev || yl);
+    if (!yl || !YEAR_LEVELS.includes(yl)) { restoredYear.current = true; return; }
+    if (!programFilter || blocks.length === 0) return;
+    restoredYear.current = true;
+    setYearFilter(yl);
   }, [searchParams, programFilter, blocks.length]);
+
+  /* Keep Program / Year Level in the URL, so Back from a block (link or the
+     browser button) returns to the same list instead of empty filters. */
+  useEffect(() => {
+    if (!roleReady || !restoredYear.current) return;
+    const url = new URL(window.location.href);
+    if (programFilter) url.searchParams.set('programId', programFilter);
+    else url.searchParams.delete('programId');
+    if (yearFilter) url.searchParams.set('yearLevel', yearFilter);
+    else url.searchParams.delete('yearLevel');
+    if (url.href !== window.location.href) window.history.replaceState(null, '', url);
+  }, [roleReady, programFilter, yearFilter]);
 
   useEffect(() => {
     if (appliedBlockNav.current) return;
@@ -479,6 +515,56 @@ export default function BlocksPage() {
     }
   }
 
+  function toggleBlock(block: Block, on: boolean) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (on) next.add(block.id); else next.delete(block.id);
+      return next;
+    });
+  }
+
+  function toggleBlocks(list: Block[], on: boolean) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      for (const b of list) { if (on) next.add(b.id); else next.delete(b.id); }
+      return next;
+    });
+  }
+
+  async function confirmBulkDelete() {
+    const ids = selectedVisible.map(b => b.id);
+    if (bulkDeleteLoading || ids.length === 0) return;
+    setBulkDeleteLoading(true);
+    try {
+      const res = await fetch('/api/blocks', {
+        method: 'DELETE',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(res.status === 401
+          ? 'Your session has expired. Please log in again and retry.'
+          : data.error || 'Failed to delete blocks. Please try again.');
+        return;
+      }
+      const count = data.deleted ?? ids.length;
+      setBulkDeleteSuccess(true);
+      reloadBlocks();
+      setTimeout(() => {
+        setBulkDeleteOpen(false);
+        setBulkDeleteSuccess(false);
+        setSelectedIds(new Set());
+        toast.delete(`${count} block${count === 1 ? '' : 's'} deleted.`);
+      }, 1300);
+    } catch {
+      toast.error('Network error. Please check your connection and try again.');
+    } finally {
+      setBulkDeleteLoading(false);
+    }
+  }
+
   // ── Derived values ────────────────────────────────────────────────────────
 
   const selectedProgram = programs.find(p => String(p.id) === form.program_id);
@@ -551,6 +637,11 @@ export default function BlocksPage() {
   });
 
   const groups          = buildGroups(filtered);
+  /* Ticked blocks still shown (a deleted/reloaded block drops out on its own) */
+  const selectedVisible    = filtered.filter(b => selectedIds.has(b.id));
+  const allVisibleSelected = filtered.length > 0 && selectedVisible.length === filtered.length;
+  // A different list → start a fresh selection
+  useEffect(() => { setSelectedIds(new Set()); }, [programFilter, yearFilter, search, globalSemester, globalYear]);
   const totalBlocks     = filtered.length;
   const totalReady      = filtered.filter(b => b.subject_count > 0 && b.scheduled_count === b.subject_count).length;
   const totalInProgress = filtered.filter(b => b.subject_count > 0 && b.scheduled_count < b.subject_count).length;
@@ -714,22 +805,33 @@ export default function BlocksPage() {
                     : '—'}
               </div>
             ) : (
-              <FilterSelect value={programFilter} onChange={setProgramFilter} label="Program" className="w-full">
-                <option value="">— Select a Program —</option>
-                {programs.map(p => (
-                  <option key={p.id} value={p.id}>{p.code} — {p.name}</option>
-                ))}
-              </FilterSelect>
+              <FriendlySelect
+                value={programFilter}
+                onChange={setProgramFilter}
+                label="Program"
+                placeholder="Select a program"
+                guide={!programFilter}
+                showHintInTrigger
+                minPanelWidth={380}
+                options={programs.map(p => ({ value: String(p.id), label: p.code, hint: p.name }))}
+              />
             )}
           </div>
 
           {/* Year Level */}
-          <div className="w-full sm:min-w-36 sm:w-auto">
+          <div className="w-full sm:min-w-44 sm:w-auto">
             <label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide text-slate-500">Year Level</label>
-            <FilterSelect value={yearFilter} onChange={setYearFilter} disabled={!programFilter} label="Year Level" className="w-full">
-              <option value="">— Year Level —</option>
-              {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
-            </FilterSelect>
+            <FriendlySelect
+              value={yearFilter}
+              onChange={setYearFilter}
+              disabled={!programFilter}
+              disabledText="Select a program first"
+              label="Year Level"
+              placeholder="Select year level"
+              guide={!!programFilter && !yearFilter}
+              minPanelWidth={220}
+              options={yearOptions.map(y => ({ value: y, label: y }))}
+            />
           </div>
 
           {/* Semester — read-only */}
@@ -877,7 +979,9 @@ export default function BlocksPage() {
           transition={resultsTransition}
           className="space-y-6"
         >
-          {groups.map(group => (
+          {groups.map(group => {
+            const groupSelected = group.blocks.filter(b => selectedIds.has(b.id)).length;
+            return (
             <div key={group.key} className="bg-white rounded-xl border border-[#E2E8F0] overflow-hidden">
 
               {/* Group header — calm surface + blue accent, not a saturated bar */}
@@ -900,7 +1004,15 @@ export default function BlocksPage() {
                 <table className="w-full text-sm min-w-[920px]">
                   <thead>
                     <tr className="border-b border-[color:var(--table-row-line)] bg-[#F8FAFC]">
-                      <th className="text-left px-4 sm:px-6 py-2.5 text-xs font-semibold uppercase tracking-wide whitespace-nowrap min-w-[11rem] text-[#64748B]">Block</th>
+                      <th className="pl-4 sm:pl-6 pr-1 py-2.5 w-10 text-left">
+                        <SelectBox
+                          checked={groupSelected === group.blocks.length}
+                          indeterminate={groupSelected > 0}
+                          onChange={on => toggleBlocks(group.blocks, on)}
+                          label={`Select all ${group.program} ${group.yearLevel} blocks`}
+                        />
+                      </th>
+                      <th className="text-left px-3 py-2.5 text-xs font-semibold uppercase tracking-wide whitespace-nowrap min-w-[11rem] text-[#64748B]">Block</th>
                       <th className="text-left px-3 py-2.5 text-xs font-semibold uppercase tracking-wide whitespace-nowrap min-w-[6rem] text-[#64748B]">Students</th>
                       <th className="text-left px-3 py-2.5 text-xs font-semibold uppercase tracking-wide whitespace-nowrap min-w-[16rem] text-[#64748B]">Subject Status</th>
                       <th className="text-left px-3 py-2.5 text-xs font-semibold uppercase tracking-wide whitespace-nowrap min-w-[9rem] text-[#64748B]">Readiness</th>
@@ -918,8 +1030,18 @@ export default function BlocksPage() {
                       const lastBlockName     = sortedGroupBlocks[sortedGroupBlocks.length - 1].block_name;
 
                       return (
-                        <tr key={b.id} className="hover:bg-[#F8FAFC] transition-colors">
-                          <td className="px-4 sm:px-6 py-4 align-middle whitespace-nowrap">
+                        <tr
+                          key={b.id}
+                          className={`transition-colors ${selectedIds.has(b.id) ? 'bg-[#EFF6FF] hover:bg-[#E0EDFF]' : 'hover:bg-[#F8FAFC]'}`}
+                        >
+                          <td className="pl-4 sm:pl-6 pr-1 py-4 align-middle">
+                            <SelectBox
+                              checked={selectedIds.has(b.id)}
+                              onChange={on => toggleBlock(b, on)}
+                              label={`Select Block ${b.block_name}`}
+                            />
+                          </td>
+                          <td className="px-3 py-4 align-middle whitespace-nowrap">
                             <div className="flex items-center gap-3">
                               <div className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-base flex-shrink-0 bg-[#EFF6FF]" style={{ color: '#1D5BD6' }}>
                                 {b.block_name}
@@ -991,7 +1113,7 @@ export default function BlocksPage() {
                                 className="inline-flex items-center justify-center gap-1.5 px-3 min-h-11 text-sm font-semibold text-emerald-700 bg-[#ECFDF5] hover:bg-[#D1FAE5] border border-[#A7F3D0] rounded-xl transition"
                                 title="View block details"
                               >
-                                <Eye className="w-4 h-4" /> View
+                                <ViewLinkIcon /> View
                               </Link>
                               <button
                                 type="button"
@@ -1027,7 +1149,8 @@ export default function BlocksPage() {
               </div>
 
             </div>
-          ))}
+            );
+          })}
 
           <div className="text-xs text-right pr-1" style={{ color: '#94A3B8' }}>
             Showing {filtered.length} block{filtered.length !== 1 ? 's' : ''} in {groups.length} group{groups.length !== 1 ? 's' : ''}
@@ -1517,6 +1640,124 @@ export default function BlocksPage() {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Selection bar (Gmail-style) — slides up while blocks are ticked */}
+      <AnimatePresence>
+        {selectedVisible.length > 0 && !bulkDeleteOpen && (
+          <motion.div
+            key="block-selection-bar"
+            initial={reduceMotion ? false : { opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 24 }}
+            transition={{ duration: reduceMotion ? 0 : 0.25, ease: [0.16, 1, 0.3, 1] }}
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 w-[calc(100%-2rem)] max-w-xl"
+          >
+            <div className="flex items-center gap-3 bg-[#0B2A5B] rounded-2xl shadow-xl pl-5 pr-2 py-2">
+              <span className="text-base font-semibold flex-1" style={{ color: '#FFFFFF' }}>
+                {selectedVisible.length} selected
+              </span>
+              {!allVisibleSelected && (
+                <button
+                  type="button"
+                  onClick={() => toggleBlocks(filtered, true)}
+                  className="px-4 py-2.5 rounded-xl text-sm font-semibold hover:bg-white/10 transition whitespace-nowrap"
+                  style={{ color: '#FFFFFF' }}
+                >
+                  Select all {filtered.length}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setSelectedIds(new Set())}
+                className="px-4 py-2.5 rounded-xl text-sm font-semibold hover:bg-white/10 transition"
+                style={{ color: '#FFFFFF' }}
+              >
+                Clear
+              </button>
+              <motion.button
+                type="button"
+                onClick={() => { setBulkDeleteSuccess(false); setBulkDeleteOpen(true); }}
+                whileTap={reduceMotion ? undefined : { scale: 0.97 }}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-sm font-semibold transition"
+                style={{ color: '#FFFFFF' }}
+              >
+                <Trash2 className="w-4 h-4" /> Delete
+              </motion.button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete Selected Blocks Modal */}
+      <Modal
+        open={bulkDeleteOpen}
+        onClose={() => { if (!bulkDeleteLoading && !bulkDeleteSuccess) setBulkDeleteOpen(false); }}
+        title="Delete Blocks"
+      >
+        {bulkDeleteSuccess && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-2xl backdrop-blur-md save-success-overlay">
+            <div className="save-success-badge flex flex-col items-center gap-3 px-8 py-7 rounded-2xl bg-white border border-[#E2E8F0] shadow-2xl">
+              <TrashDropAnimation className="bg-red-50 border-red-200" />
+              <p className="text-base font-semibold" style={{ color: '#0B2A5B' }}>Blocks deleted!</p>
+            </div>
+          </div>
+        )}
+        <div className="space-y-5">
+          <div className="flex flex-col items-center text-center gap-3 pt-1">
+            <div className="w-16 h-16 rounded-2xl bg-red-50 border border-red-200 flex items-center justify-center">
+              <Trash2 className="w-8 h-8 text-red-500" />
+            </div>
+            <div>
+              <p className="text-base font-bold" style={{ color: '#0B2A5B' }}>
+                Delete {selectedVisible.length} block{selectedVisible.length === 1 ? '' : 's'}?
+              </p>
+              <p className="text-sm mt-1" style={{ color: '#64748B' }}>
+                {buildGroups(selectedVisible).map(g =>
+                  `${g.program} ${g.yearLevel}: ${[...g.blocks].sort((a, b) => a.block_name.localeCompare(b.block_name)).map(b => b.block_name).join(', ')}`,
+                ).join(' · ')}
+              </p>
+              <p className="text-sm mt-2" style={{ color: '#64748B' }}>This action cannot be undone. You can re-create the blocks afterwards.</p>
+            </div>
+          </div>
+
+          <div className="bg-red-50 border border-red-200 rounded-xl px-5 py-4 space-y-2">
+            <p className="text-xs font-bold text-red-600 uppercase tracking-wide mb-2">The following will be permanently removed:</p>
+            {[
+              'Loaded subjects (block subjects)',
+              'Master schedule entries',
+              'Faculty load assignments',
+            ].map(item => (
+              <div key={item} className="flex items-center gap-2.5 text-sm text-red-700">
+                <Trash2 className="w-3.5 h-3.5 flex-shrink-0 text-red-500" />
+                {item}
+              </div>
+            ))}
+          </div>
+
+          <div className="flex gap-3 pt-1">
+            <button
+              type="button"
+              onClick={() => setBulkDeleteOpen(false)}
+              disabled={bulkDeleteLoading || bulkDeleteSuccess}
+              className="flex-1 border border-[#E2E8F0] py-2.5 rounded-xl hover:bg-[#F8FAFC] transition text-sm font-medium disabled:opacity-50"
+              style={{ color: '#64748B' }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={confirmBulkDelete}
+              disabled={bulkDeleteLoading || bulkDeleteSuccess}
+              className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 rounded-xl transition text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-60"
+              style={{ color: '#FFFFFF' }}
+            >
+              {bulkDeleteLoading
+                ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Deleting…</>
+                : <><Trash2 className="w-4 h-4" /> Delete {selectedVisible.length}</>}
+            </button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

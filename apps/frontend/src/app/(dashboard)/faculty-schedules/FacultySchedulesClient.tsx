@@ -51,6 +51,8 @@ interface FacultyScheduleRow {
   end_time: string | null;
   status: string;
   room_name: string | null;
+  /** Set on the split portion (only the Lec or Lab) moved to Overload / Praise */
+  split_component?: 'lec' | 'lab' | null;
 }
 
 interface Summary {
@@ -97,7 +99,6 @@ const LOAD_META: Record<LoadKey, { category: string; label: string; color: strin
 };
 
 function rowValue(row: FacultyScheduleRow): number {
-  if (row.load_category === 'Praise') return 0;
   if (row.employment_status === 'Permanent') {
     const u = (row.units !== null && Number(row.units) > 0) ? Number(row.units) : row.curriculum_units;
     return u ?? 0;
@@ -148,16 +149,17 @@ function printLoadSets(data: WorkloadPrintData | null, semester: string, academi
       regular:  termLoads.filter(l => l.load_category === 'Regular').length,
       overload: overloadLoads.length + splitLoads.length,
       praise:   praiseLoads.length + (data?.praise.length ?? 0),
-      deload:   termLoads.length,
+      // Actual Load: every load — Regular + Overload + Praise (a split subject counts in both)
+      deload:   termLoads.length + termLoads.filter(isSplit).length,
     } satisfies Record<PrintKind, number>,
     loadsFor: (kind: PrintKind) =>
       kind === 'overload' ? [...overloadLoads, ...splitLoads]
         : kind === 'praise' ? praiseLoads
-        : termLoads, // Regular (the form drops Overload rows itself) and Deload (every schedule)
+        : termLoads, // Regular (the form drops Overload rows itself) and Actual Load (every schedule)
   };
 }
 
-/** Input for one official form — Deload is every schedule of the faculty on one form. */
+/** Input for one official form — Actual Load is every schedule of the faculty on one form. */
 function printDocInput(kind: PrintKind, data: WorkloadPrintData, semester: string, academicYear: string) {
   return {
     faculty: data.faculty,
@@ -227,7 +229,7 @@ export function WorkloadPrintMenu({ facultyId, semester, academicYear, mode = 'p
     { kind: 'regular',  label: 'Regular Load', count: counts.regular,  dot: 'var(--load-regular)' },
     { kind: 'overload', label: 'Overload',     count: counts.overload, dot: 'var(--load-overload)' },
     { kind: 'praise',   label: 'Praise Load',  count: counts.praise,   dot: 'var(--load-praise)' },
-    { kind: 'deload',   label: 'Deload',       count: counts.deload,   dot: '#0B2A5B' },
+    { kind: 'deload',   label: 'Actual Load',  count: counts.deload,   dot: '#0B2A5B' },
   ];
 
   async function handlePrint(kind: PrintKind) {
@@ -375,16 +377,23 @@ export function WorkloadPrintMenu({ facultyId, semester, academicYear, mode = 'p
 
 /* ── Sub-components ─────────────────────────────────────────────────────── */
 
-function LoadBadge({ cat }: { cat: string }) {
+function LoadBadge({ cat, part }: { cat: string; part?: 'lec' | 'lab' | null }) {
   const styles: Record<string, string> = {
     Regular:  'bg-[#EFF6FF] text-[#1D5BD6] border border-[#BFDBFE]',
-    Overload: 'bg-orange-50 text-orange-700 border border-orange-200',
-    Praise:   'bg-yellow-50 text-yellow-800 border border-yellow-300',
   };
-  const cls = styles[cat] ?? 'bg-slate-50 text-slate-600 border border-[#E2E8F0]';
+  // Overload / Praise use the Load Breakdown colours
+  const tone = LOAD_COLOR[cat];
+  const cls = styles[cat] ?? (tone ? 'border' : 'bg-slate-50 text-slate-600 border border-[#E2E8F0]');
   return (
-    <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${cls}`}>
-      {cat}
+    <span
+      className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${cls}`}
+      style={tone ? {
+        color: tone,
+        backgroundColor: `color-mix(in srgb, ${tone} 10%, transparent)`,
+        borderColor: `color-mix(in srgb, ${tone} 35%, transparent)`,
+      } : undefined}
+    >
+      {cat}{part ? ` · ${part === 'lec' ? 'Lec' : 'Lab'}` : ''}
     </span>
   );
 }
@@ -392,9 +401,15 @@ function LoadBadge({ cat }: { cat: string }) {
 
 
 /** Which subjects the Schedule Details table shows — picked with the stat cards. */
-type CardFilter = 'all' | 'Regular' | 'Overload';
+type CardFilter = 'all' | 'Regular' | 'Overload' | 'Praise';
 
-/** Stat card that filters the Schedule Details table (Deload = every subject). */
+/** Table text colour per load type — matches the Load Breakdown colours */
+const LOAD_COLOR: Record<string, string> = {
+  Overload: 'var(--load-overload)',
+  Praise:   'var(--load-praise)',
+};
+
+/** Stat card that filters the Schedule Details table (Actual Load = every subject). */
 function FilterCard({ label, value, color, active, onClick }: {
   label: string; value: number; color: string; active: boolean; onClick: () => void;
 }) {
@@ -446,7 +461,7 @@ export default function FacultySchedulesClient({
   useScrollLock(Boolean(viewFaculty) || Boolean(loadPick));
 
   /* Stat-card filter for the open Schedule Details. Remembered per faculty, so
-     opening someone else always starts on Deload (every subject). */
+     opening someone else always starts on Actual Load (every subject). */
   const [cardPick, setCardPick] = useState<{ facultyId: number; filter: CardFilter } | null>(null);
   const cardFilter: CardFilter = viewFaculty && cardPick?.facultyId === viewFaculty.id ? cardPick.filter : 'all';
   const reduceMotion = useReducedMotion();
@@ -790,7 +805,6 @@ export default function FacultySchedulesClient({
 
                       <td className="px-4 sm:px-5 py-4 min-w-0">
                         <div className="font-semibold text-[14px] leading-snug truncate" style={{ color: '#0B2A5B' }}>{group.facultyName}</div>
-                        <div className="text-xs mt-0.5 truncate" style={{ color: '#94A3B8' }}>{group.empId}</div>
                       </td>
 
                       <td className="px-4 sm:px-5 py-4 text-sm min-w-0" style={{ color: '#64748B' }}>
@@ -843,6 +857,7 @@ export default function FacultySchedulesClient({
         const isPerm       = viewFaculty.empStatus === 'Permanent';
         const regularRows  = viewFaculty.rows.filter(r => r.load_category === 'Regular');
         const overloadRows = viewFaculty.rows.filter(r => r.load_category === 'Overload');
+        const praiseRows   = viewFaculty.rows.filter(r => r.load_category === 'Praise');
         const totalVal     = viewFaculty.rows.reduce((s, r) => s + rowValue(r), 0);
         const shownRows    = cardFilter === 'all' ? viewFaculty.rows : viewFaculty.rows.filter(r => r.load_category === cardFilter);
         const shownTotal   = shownRows.reduce((s, r) => s + rowValue(r), 0);
@@ -892,14 +907,12 @@ export default function FacultySchedulesClient({
                     {viewFaculty.name}
                   </h2>
                   <div className="flex items-center gap-2 mt-1 flex-wrap">
-                    <span className="text-xs font-mono" style={{ color: '#94A3B8' }}>{viewFaculty.empId}</span>
-                    <span aria-hidden="true" style={{ color: '#CBD5E1' }}>·</span>
                     <span className="text-xs" style={{ color: '#64748B' }}>{viewFaculty.position || '—'}</span>
                     <span aria-hidden="true" style={{ color: '#CBD5E1' }}>·</span>
                     <EmploymentBadge status={viewFaculty.empStatus} />
                   </div>
                 </div>
-                {/* Quiet header actions: Print menu (Regular / Overload / Praise / Deload) · Close */}
+                {/* Quiet header actions: Print menu (Regular / Overload / Praise / Actual Load) · Close */}
                 <div className="sm:ml-4 flex items-center gap-2 sm:gap-1 sm:flex-shrink-0">
                   <WorkloadPrintMenu
                     key={`excel-${viewFaculty.id}`}
@@ -934,11 +947,12 @@ export default function FacultySchedulesClient({
 
               {/* ── Statistics Grid ── */}
               <div className="px-4 sm:px-6 py-3 border-b border-[#F1F5F9] flex-shrink-0" style={{ backgroundColor: '#F8FAFC' }}>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-3">
                   {([
-                    { filter: 'all' as const,      label: 'Deload',       value: viewFaculty.rows.length, color: '#0B2A5B' },
-                    { filter: 'Regular' as const,  label: 'Regular Load', value: regularRows.length,      color: '#1D5BD6' },
-                    { filter: 'Overload' as const, label: 'Overload',     value: overloadRows.length,     color: '#D97706' },
+                    { filter: 'all' as const,      label: 'Actual Load',  value: viewFaculty.rows.length, color: '#0B2A5B' },
+                    { filter: 'Regular' as const,  label: 'Regular Load', value: regularRows.length,      color: 'var(--load-regular)' },
+                    { filter: 'Overload' as const, label: 'Overload',     value: overloadRows.length,     color: 'var(--load-overload)' },
+                    { filter: 'Praise' as const,   label: 'Praise Load',  value: praiseRows.length,       color: 'var(--load-praise)' },
                   ]).map(c => (
                     <FilterCard
                       key={c.filter}
@@ -996,7 +1010,8 @@ export default function FacultySchedulesClient({
                   </thead>
                   <tbody key={cardFilter}>
                     {shownRows.map((row, i) => {
-                      const val = row.load_category === 'Praise' ? null : rowValue(row);
+                      const val = rowValue(row);
+                      const valColor = LOAD_COLOR[row.load_category] ?? unitColor;
                       return (
                         <motion.tr
                           key={`view-${row.load_id}-${row.subject_code}-${row.load_category}`}
@@ -1033,10 +1048,10 @@ export default function FacultySchedulesClient({
                             )}
                           </td>
                           <td className="px-4 py-2.5 whitespace-nowrap">
-                            <LoadBadge cat={row.load_category} />
+                            <LoadBadge cat={row.load_category} part={row.split_component} />
                           </td>
-                          <td className="px-4 py-2.5 whitespace-nowrap font-semibold text-right" style={{ color: val != null ? unitColor : '#94A3B8' }}>
-                            {val != null ? val.toFixed(2) : '—'}
+                          <td className="px-4 py-2.5 whitespace-nowrap font-semibold text-right" style={{ color: valColor }}>
+                            {val.toFixed(2)}
                           </td>
                         </motion.tr>
                       );
@@ -1065,8 +1080,8 @@ export default function FacultySchedulesClient({
               {/* ── Footer ── */}
               <div className="px-6 py-3 border-t border-[#F1F5F9] flex items-center justify-between flex-shrink-0">
                 <span className="text-xs" style={{ color: '#94A3B8' }}>
-                  {shownRows.length} schedule{shownRows.length !== 1 ? 's' : ''}
-                  {cardFilter === 'all' ? ' total' : ` · ${cardFilter === 'Regular' ? 'Regular Load' : 'Overload'} only`}
+                  {shownRows.length} load{shownRows.length !== 1 ? 's' : ''}
+                  {cardFilter === 'all' ? ' total' : ` · ${cardFilter === 'Overload' ? 'Overload' : `${cardFilter} Load`} only`}
                 </span>
                 <motion.button
                   type="button"

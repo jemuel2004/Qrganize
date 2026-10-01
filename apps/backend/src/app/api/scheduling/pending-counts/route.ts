@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { getActiveAcademicPeriod } from '@/services/activeAcademicPeriod';
+import { isRegularLoadComplete } from '@shared/regularLoad';
 import { loadFacultyLoadSummaries } from '@/services/facultyLoadSummaries';
 import { fetchBlocksWithAssignmentCounts } from '@/services/blockAssignmentCounts';
 import { getChairAssignedProgramId, isScopedChair } from '@/services/programScope';
@@ -51,8 +52,9 @@ export async function GET(req: NextRequest) {
     ]);
 
     // Faculty Workload — instructors who haven't yet reached their required load.
-    // A small epsilon avoids floating-point noise flagging an exact match as incomplete.
-    const workload = Object.values(summaries).filter(s => s.remaining_load > 0.01).length;
+    // 18 of 18.25 counts as complete for Permanent (shared rule).
+    const workload = Object.values(summaries)
+      .filter(s => !isRegularLoadComplete(s.remaining_load, s.employment_status === 'Permanent')).length;
 
     // Master Schedule — blocks with subjects loaded that aren't fully Scheduled yet.
     const masterSchedule = blocks.filter(b => b.subject_count > 0 && b.scheduled_count < b.subject_count).length;

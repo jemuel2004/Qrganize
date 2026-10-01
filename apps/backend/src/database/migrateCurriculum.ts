@@ -185,7 +185,7 @@ export async function ensureCurriculumFields(): Promise<void> {
   await ensureCurriculumVersion();
   await ensureWideHourColumns();
 
-  /* Lecture only (no lab hours) → Minor; any laboratory hours → Major.
+  /* CS / CPE / IT course code or any laboratory hours → Major; otherwise Minor.
      Idempotent: only rewrites rows that do not already match the rule. */
   if (!categorySynced) {
     try {

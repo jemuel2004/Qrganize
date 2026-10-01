@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query, transaction } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
-import { resolveProgramScope, isScopedChair } from '@/services/programScope';
+import { resolveProgramScope, isScopedChair, assertBlockProgramAccess } from '@/services/programScope';
 import { ensureBlockCurriculumVersion } from '@/database/migrateCurriculum';
 import { fetchBlocksWithAssignmentCounts } from '@/services/blockAssignmentCounts';
 import {
@@ -257,3 +257,39 @@ async function POST_handler(req: NextRequest) {
 
 // Successful writes are recorded in the audit trail (System → Audit Logs).
 export const POST = withAudit(POST_handler);
+
+/*
+ * Delete several blocks at once (multi-select on Block Creation). Same hard
+ * delete + cascade as DELETE /api/blocks/:id. Any blocks may be picked — a
+ * removed letter can be re-created later (creation only needs the letter before).
+ */
+async function DELETE_handler(req: NextRequest) {
+  try {
+    const auth = await getAuthUser(req) as { id?: number; role?: string } | null;
+    if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const body = await req.json().catch(() => ({}));
+    const ids = Array.isArray(body.ids)
+      ? [...new Set((body.ids as unknown[]).map(Number).filter(n => Number.isInteger(n) && n > 0))]
+      : [];
+    if (ids.length === 0) return NextResponse.json({ error: 'No blocks selected.' }, { status: 400 });
+
+    for (const id of ids) {
+      const access = await assertBlockProgramAccess(auth, id, { chairOwnProgram: true });
+      if (!access.ok) return access.response;
+    }
+
+    // Cascades to block_subjects → master_schedule → instructor_loads / overloads / schedule_sessions
+    const result = await transaction(client =>
+      client.query('DELETE FROM blocks WHERE id = ANY($1::int[]) RETURNING id', [ids]),
+    );
+    return NextResponse.json({ success: true, deleted: result.rowCount ?? 0 });
+  } catch (error) {
+    console.error('[DELETE /api/blocks]', error);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
+
+export const DELETE = withAudit(DELETE_handler);

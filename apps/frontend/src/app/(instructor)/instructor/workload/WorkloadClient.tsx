@@ -14,7 +14,8 @@ import { buildOfficialGroups, loadDayPatterns, matchOfficialSlot, formatOfficial
 import { useDayCombinations } from '@/lib/dayCombinations';
 import { printRegularLoadDocument } from '@/lib/instructorWorkloadPrintDocument';
 import { openWorkloadPrintableVersion } from '@/lib/openPrintHtmlDocument';
-import { REGULAR_LOAD_MAX_UNITS } from '@shared/regularLoad';
+import { REGULAR_LOAD_MAX_UNITS, formatLoadCap, shownUnitsCap, shownUnitsOver } from '@shared/regularLoad';
+import { LOAD_TONE } from '@/lib/loadTone';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { CardSkeleton, PageBodySkeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
@@ -214,12 +215,12 @@ function splitLoad(load: WorkloadLoad, isPermanent = false): SplitRow[] {
 
 /* ─── Main Component ─────────────────────────────────────────────────────── */
 /** Load colours shared by the cards and the tabs */
-const TAB_TONE = { regular: '#1D5BD6', overload: '#DC4A0A', praise: '#C99A06', total: '#0B2A5B' } as const;
+const TAB_TONE = LOAD_TONE;
 type WorkloadTab = keyof typeof TAB_TONE;
 
 /** Summary card tinted in its load colour (Regular blue · Overload orange · Praise gold · Total navy) */
 function LoadCard({ tone, label, unit, value, of, note, index, onClick, active = false, onPrint }: {
-  tone: string; label: string; unit: string; value: string; of?: number; note?: string; index: number;
+  tone: string; label: string; unit: string; value: string; of?: number | string; note?: string; index: number;
   /** Arrow shortcut: prints this load straight away */
   onPrint?: () => void;
   /** Opens this load's table below */
@@ -893,6 +894,10 @@ export default function InstructorWorkloadClient() {
         const modalTotal   = modalRegVal + olVal + praiseTotal;
         const modalExceeded = Math.max(0, modalRegVal - (s?.regular_load_limit || REGULAR_LOAD_MAX_UNITS));
         const modalIsExceeded = modalExceeded > 0.001;
+        // Shown as 18 (not 18.25) — the grace stays in the maths
+        const regLimit = Number(s?.regular_load_limit ?? 0);
+        const regLimitShown = isP ? formatLoadCap(shownUnitsCap(regLimit)) : formatLoadCap(regLimit);
+        const regOverShown = isP ? shownUnitsOver(modalRegVal, s?.regular_load_limit || REGULAR_LOAD_MAX_UNITS) : modalExceeded;
         const overloadCount = overloadPrintLoads.length + splitPrintLoads.length;
         const praiseCount = (workload.praise ?? []).length + praiseSubjectLoads.length + praiseSplitLoads.length;
 
@@ -901,8 +906,8 @@ export default function InstructorWorkloadClient() {
             {/* ── Summary cards: Regular · Overload · Praise (if any) · Total — click to open that table ── */}
             <div className={`grid grid-cols-2 gap-3 sm:gap-4 mb-5 ${hasPraiseSection ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
               <LoadCard index={0} tone={TAB_TONE.regular} label={isP ? 'Regular Load' : 'Regular Hours'} unit={isP ? 'units' : 'hours'}
-                value={modalRegVal.toFixed(2)} of={Math.round(Number(s?.regular_load_limit ?? 0))}
-                note={modalIsExceeded ? `Exceeded by ${modalExceeded.toFixed(2)}` : undefined}
+                value={modalRegVal.toFixed(2)} of={regLimitShown}
+                note={modalIsExceeded ? `Exceeded by ${regOverShown.toFixed(2)}` : undefined}
                 active={effectiveTab === 'regular' && tableVisible} onClick={() => selectTab('regular')}
                 onPrint={() => handlePrint('regular')} />
               <LoadCard index={1} tone={TAB_TONE.overload} label="Overload" unit={isP ? 'units' : 'hours'} value={olVal.toFixed(2)}

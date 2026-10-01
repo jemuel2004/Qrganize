@@ -4,6 +4,7 @@ import { loadFacultyLoadSummaries } from '@/services/facultyLoadSummaries';
 import { fetchBlocksWithAssignmentCounts } from '@/services/blockAssignmentCounts';
 import { CONDITION_TYPES_SQL, ensureNotificationsTable } from '@/services/notifications';
 import { expireStaleRoomRequests } from '@/services/ensureRoomOccupancy';
+import { isRegularLoadComplete, shownUnitsCap, shownUnitsLeft } from '@shared/regularLoad';
 import {
   blockCurriculumVersion,
   curriculumVersionAbbrev,
@@ -105,8 +106,8 @@ function fmtQty(n: number): string {
   return v.toFixed(2);
 }
 
-function instructorStatus(remaining: number, hasOverload: boolean): InstructorCompletionStatus {
-  if (remaining > INCOMPLETE_EPS) return 'INCOMPLETE';
+function instructorStatus(remaining: number, hasOverload: boolean, isPermanent: boolean): InstructorCompletionStatus {
+  if (!isRegularLoadComplete(remaining, isPermanent)) return 'INCOMPLETE';
   if (hasOverload) return 'OVERLOAD';
   return 'COMPLETE';
 }
@@ -120,7 +121,10 @@ function instructorMessage(a: {
 }): string {
   const unit = a.isPermanent ? 'units' : 'hours';
   const kind = a.isPermanent ? 'workload' : 'contractual workload';
-  return `${a.name} has an incomplete ${kind}. Current: ${fmtQty(a.current)} / ${fmtQty(a.limit)} ${unit}. Remaining: ${fmtQty(a.remaining)} ${unit}.`;
+  // Shown as 18, not 18.25 (shared display rule)
+  const limit = a.isPermanent ? shownUnitsCap(a.limit) : a.limit;
+  const remaining = a.isPermanent ? shownUnitsLeft(a.remaining) : a.remaining;
+  return `${a.name} has an incomplete ${kind}. Current: ${fmtQty(a.current)} / ${fmtQty(limit)} ${unit}. Remaining: ${fmtQty(remaining)} ${unit}.`;
 }
 
 export function filterSnapshotForProgram(
@@ -257,7 +261,7 @@ export async function computeWorkloadMonitoring(): Promise<WorkloadMonitoringSna
     const s = summaries[f.id];
     if (!s) continue;
     const remaining = s.remaining_load;
-    const status = instructorStatus(remaining, s.has_overload);
+    const status = instructorStatus(remaining, s.has_overload, f.employment_status === 'Permanent');
     facultyLoads.push({
       faculty_id: f.id, name: f.name, current_load: s.current_load, regular_load_limit: s.regular_load_limit,
       unit: f.employment_status === 'Permanent' ? 'units' : 'hours', status,
@@ -412,7 +416,7 @@ function alertsFor(snapshot: WorkloadMonitoringSnapshot, requests: PendingReques
     alerts.push({
       type: 'workload_incomplete', module: FACULTY_MODULE, id: i.faculty_id,
       title: 'Faculty Workload Incomplete',
-      message: `${i.name} has an incomplete workload (${fmtQty(i.current_load)} of ${fmtQty(i.regular_load_limit)} ${i.unit}) and requires review.`,
+      message: `${i.name} has an incomplete workload (${fmtQty(i.current_load)} of ${fmtQty(i.unit === 'units' ? shownUnitsCap(i.regular_load_limit) : i.regular_load_limit)} ${i.unit}) and requires review.`,
     });
   }
   for (const i of snapshot.schedule_needed_instructors) {

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { createPortal } from 'react-dom';
+import { motion, useReducedMotion } from 'framer-motion';
 import { useToast } from '@/context/ToastContext';
 import Modal from '@/components/ui/Modal';
 import BackButton from '@/components/ui/BackButton';
@@ -10,10 +11,12 @@ import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import TrashDropAnimation from '@/components/ui/TrashDropAnimation';
 import {
   Plus, Pencil, Trash2,
-  User, Briefcase, Lock, Eye, EyeOff, ChevronDown, AlertTriangle, Star,
+  User, Eye, EyeOff, ChevronDown, AlertTriangle, Star,
 } from 'lucide-react';
 import SubjectMultiSelect, { type PrioritySubject } from '@/components/ui/SubjectMultiSelect';
 import BlockMultiSelect, { type BlockOption } from '@/components/ui/BlockMultiSelect';
+import FriendlySelect from '@/components/ui/FriendlySelect';
+import { formatLoadCap, shownUnitsCap } from '@shared/regularLoad';
 import { useSchoolYear } from '@/context/SchoolYearContext';
 import { SearchInput, FilterSelect } from '@/components/ui/SearchFilter';
 import { ListSkeleton, CardSkeleton, Skeleton } from '@/components/ui/skeletons';
@@ -238,17 +241,15 @@ function PositionSelect({ value, onChange, error }: { value: string; onChange: (
         aria-label="Position / Academic Rank"
         onClick={() => setOpen(prev => !prev)}
         className={[
-          'w-full border rounded-xl px-4 py-3 text-base text-left text-white bg-[#0b0f1a]',
-          'focus:outline-none focus:ring-2 focus:ring-[#1D5BD6] focus:border-transparent transition',
-          'flex items-center justify-between gap-3',
-          error ? 'border-red-500/50' : 'border-white/10',
-          open ? 'ring-2 ring-[#1D5BD6] border-transparent' : '',
+          FIELD_BASE, 'text-left flex items-center justify-between gap-3',
+          error ? FIELD_ERROR : '',
+          open ? '!border-[#1D5BD6] ring-4 ring-[#1D5BD6]/15' : '',
         ].join(' ')}
       >
-        <span className={`truncate ${value ? '' : 'text-slate-500'}`}>
-          {value || '— Select Position —'}
+        <span className={`truncate ${value ? 'font-semibold' : 'text-[#94A3B8]'}`}>
+          {value || 'Select position'}
         </span>
-        <ChevronDown className={`w-4 h-4 text-slate-400 flex-shrink-0 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown className={`w-5 h-5 flex-shrink-0 transition-transform duration-200 ${open ? 'rotate-180 text-[#1D5BD6]' : 'text-[#64748B]'}`} />
       </button>
 
       {open && createPortal(
@@ -258,11 +259,11 @@ function PositionSelect({ value, onChange, error }: { value: string; onChange: (
           aria-label="Position / Academic Rank"
           data-scroll-portal
           style={dropStyle}
-          className="overflow-y-auto overscroll-contain rounded-xl border border-white/15 bg-[#111827] py-1.5 shadow-[0_12px_32px_rgba(15,23,42,0.18)] qr-fade-in"
+          className="overflow-y-auto overscroll-contain rounded-xl border border-[#E2E8F0] bg-white p-1.5 shadow-[0_12px_32px_rgba(11,42,91,0.16)] qr-fade-in"
         >
           {POSITION_GROUPS.map((group, index) => (
-            <div key={group.label} className={index > 0 ? 'mt-1 pt-1 border-t border-white/10' : ''}>
-              <p className="px-3 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            <div key={group.label} className={index > 0 ? 'mt-1 pt-1 border-t border-[#F1F5F9]' : ''}>
+              <p className="px-3 pt-2 pb-1 text-[11px] font-bold uppercase tracking-wider text-[#64748B]">
                 {group.label}
               </p>
               {group.items.map(p => {
@@ -275,11 +276,11 @@ function PositionSelect({ value, onChange, error }: { value: string; onChange: (
                     aria-selected={isSelected}
                     onClick={() => { onChange(p); closeMenu(); }}
                     className={[
-                      'w-full text-left px-3 py-2 text-sm transition-colors duration-150',
-                      'flex items-center gap-2',
+                      'w-full text-left px-3 py-2.5 rounded-lg text-[15px] transition-colors duration-150',
+                      'flex items-center',
                       isSelected
-                        ? 'bg-[#1D5BD6]/15 text-[#164BB5] font-semibold'
-                        : 'text-slate-200 hover:bg-white/5',
+                        ? 'bg-[#EFF6FF] text-[#1D5BD6] font-bold'
+                        : 'text-[#0B2A5B] font-medium hover:bg-[#F4F7FC]',
                     ].join(' ')}
                   >
                     <span className="truncate">{p}</span>
@@ -295,61 +296,69 @@ function PositionSelect({ value, onChange, error }: { value: string; onChange: (
   );
 }
 
-function SectionHeader({ icon, title, subtitle }: { icon: React.ReactNode; title: string; subtitle?: string }) {
+/* Explicit light colours — the old dark classes were repainted to a flat grey by the light-mode rules */
+const FIELD_BASE =
+  'w-full min-h-[50px] rounded-xl border border-[#CBD5E1] bg-white px-4 py-3 text-base text-[#0B2A5B] ' +
+  'placeholder:text-[#94A3B8] hover:border-[#94A3B8] focus:outline-none focus:border-[#1D5BD6] ' +
+  'focus:ring-4 focus:ring-[#1D5BD6]/15 disabled:bg-[#F1F5F9] disabled:cursor-not-allowed transition';
+const FIELD_ERROR = '!border-[#EF4444] focus:!ring-[#EF4444]/15';
+
+/** One numbered card per part of the form: 1 Personal, 2 Employment, … */
+function FormSection({ step, title, subtitle, children }: {
+  step: number; title: string; subtitle?: string; children: React.ReactNode;
+}) {
   return (
-    <div className="flex items-start gap-3 mb-6">
-      <div className="w-8 h-8 rounded-xl bg-[#1D5BD6]/10 flex items-center justify-center text-[#1D5BD6] flex-shrink-0 mt-0.5">
-        {icon}
+    <section className="rounded-2xl border border-[#E2E8F0] bg-white overflow-hidden">
+      <div className="flex items-center gap-3.5 px-5 sm:px-6 py-4 bg-[#F8FAFC] border-b border-[#E2E8F0]">
+        <span
+          className="w-9 h-9 rounded-full bg-[#0B2A5B] flex items-center justify-center text-[15px] font-bold flex-shrink-0"
+          style={{ color: '#FFFFFF' }}
+        >
+          {step}
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 className="text-[17px] font-bold text-[#0B2A5B] leading-tight">{title}</h3>
+          {subtitle && <p className="text-sm text-[#64748B] mt-0.5">{subtitle}</p>}
+        </div>
       </div>
-      <div className="flex-1">
-        <h3 className="text-base font-bold text-white">{title}</h3>
-        {subtitle && <p className="text-sm text-slate-400 mt-0.5">{subtitle}</p>}
-      </div>
-      <div className="flex-1 h-px bg-white/10 mt-4 ml-2 max-w-[60%]" />
-    </div>
+      <div className="px-5 sm:px-6 py-5">{children}</div>
+    </section>
   );
 }
 
-function FieldLabel({ children, required }: { children: React.ReactNode; required?: boolean }) {
+function FieldLabel({ children, required, optional }: { children: React.ReactNode; required?: boolean; optional?: boolean }) {
   return (
-    <label className="block text-sm font-semibold text-slate-200 mb-2">
+    <label className="flex items-center gap-1.5 text-[15px] font-semibold text-[#0B2A5B] mb-2">
       {children}
-      {required && <span className="text-red-400 ml-1">*</span>}
+      {required && <span className="text-[#DC2626]">*</span>}
+      {optional && <span className="text-[13px] font-normal text-[#64748B]">(optional)</span>}
     </label>
   );
 }
 
+/** Short helper line under a field */
+function FieldHint({ children }: { children: React.ReactNode }) {
+  return <p className="mt-1.5 text-[13px] text-[#64748B] leading-snug">{children}</p>;
+}
+
 function FieldError({ message }: { message?: string }) {
   if (!message) return null;
-  return <p className="mt-2 text-sm text-red-400 flex items-center gap-1">⚠ {message}</p>;
+  return (
+    <p className="mt-2 text-sm font-medium text-[#DC2626] flex items-center gap-1.5">
+      {message}
+    </p>
+  );
 }
 
 function InputBase({ className = '', ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
-  return (
-    <input
-      {...props}
-      className={`w-full border border-white/10 rounded-xl px-4 py-3 text-base text-white
-        placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#1D5BD6] focus:border-transparent
-        bg-[#0b0f1a] disabled:opacity-50 transition ${className}`}
-    />
-  );
-}
-
-function SelectBase({ className = '', ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
-  return (
-    <select
-      {...props}
-      className={`w-full border border-white/10 rounded-xl px-4 py-3 text-base text-white
-        focus:outline-none focus:ring-2 focus:ring-[#1D5BD6] focus:border-transparent
-        bg-[#0b0f1a] transition ${className}`}
-    />
-  );
+  return <input {...props} className={`${FIELD_BASE} ${className}`} />;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function FacultyPage() {
   const toast = useToast();
+  const reduceMotion = useReducedMotion();
   const [faculty, setFaculty] = useState<Faculty[]>([]);
   const [programs, setPrograms] = useState<Program[]>([]);
   const [userRole, setUserRole] = useState<'admin' | 'department_chair' | 'program_chair'>('admin');
@@ -414,7 +423,7 @@ export default function FacultyPage() {
       .finally(() => setSubjectOptionsLoading(false));
   }, [modalOpen]);
 
-  /* Blocks to Teach — this semester's blocks (assignments from other terms are kept). */
+  /* Blocks to Handle — this semester's blocks (assignments from other terms are kept). */
   const { semester: activeSemester, schoolYear: activeYear } = useSchoolYear();
   const [blockOptions, setBlockOptions] = useState<BlockOption[]>([]);
   const [blockOptionsLoading, setBlockOptionsLoading] = useState(false);
@@ -734,18 +743,13 @@ export default function FacultyPage() {
 
   // ── Form ─────────────────────────────────────────────────────────────────────
 
-  const errorBorder = (field: string) => fieldErrors[field] ? 'border-red-500/50 focus:ring-red-500' : '';
+  const errorBorder = (field: string) => fieldErrors[field] ? FIELD_ERROR : '';
 
   const formContent = (
-    <div className="space-y-10">
+    <div className="space-y-5">
 
       {/* ── 1. Personal Information ── */}
-      <section>
-        <SectionHeader
-          icon={<User className="w-4 h-4" />}
-          title="Personal Information"
-          subtitle="Enter the faculty member's full name."
-        />
+      <FormSection step={1} title="Personal Information">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
 
           <div>
@@ -761,9 +765,7 @@ export default function FacultyPage() {
           </div>
 
           <div>
-            <FieldLabel>
-              Middle Name&nbsp;<span className="text-slate-500 font-normal">(optional)</span>
-            </FieldLabel>
+            <FieldLabel optional>Middle Name</FieldLabel>
             <InputBase
               value={form.middle_name}
               onChange={e => setField('middle_name', e.target.value)}
@@ -785,56 +787,47 @@ export default function FacultyPage() {
 
           <div>
             <FieldLabel>
-              Full Name&nbsp;
-              <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-white/10 text-slate-400 font-normal">
-                Auto-generated
+              Full Name
+              <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold bg-[#EFF6FF] text-[#1D5BD6] border border-[#BFDBFE]">
+                Automatic
               </span>
             </FieldLabel>
-            <div className="w-full border border-white/10 rounded-xl px-4 py-3 text-base bg-white/5 text-slate-300 min-h-[50px] flex items-center">
+            <div className="w-full min-h-[50px] rounded-xl border border-[#BFDBFE] bg-[#F5F9FF] px-4 py-3 flex items-center">
               {fullName
-                ? <span className="font-medium text-white">{fullName}</span>
-                : <span className="text-slate-500 italic text-sm">Will fill automatically from name above</span>}
+                ? <span className="text-base font-bold text-[#0B2A5B]">{fullName}</span>
+                : <span className="text-sm text-[#94A3B8]">Fills in from the name fields</span>}
             </div>
           </div>
 
         </div>
-      </section>
+      </FormSection>
 
       {/* ── 2. Employment Information ── */}
-      <section>
-        <SectionHeader
-          icon={<Briefcase className="w-4 h-4" />}
-          title="Employment Information"
-          subtitle="Select the program and position of this faculty member."
-        />
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+      <FormSection step={2} title="Employment Information">
+        <div className="space-y-5">
 
-          <div className="sm:col-span-2">
+          <div data-field="program_id" tabIndex={-1} className="outline-none">
             <FieldLabel required>Program</FieldLabel>
-            <SelectBase
-              value={form.program_id}
-              onChange={e => setField('program_id', e.target.value)}
-              className={errorBorder('program_id')}
-              data-field="program_id"
-              disabled={userRole === 'program_chair'}
-            >
-              <option value="">— Select Program —</option>
-              {(userRole === 'program_chair'
-                ? programs.filter(p => p.id === chairProgramId)
-                : programs
-              ).map(p => (
-                <option key={p.id} value={p.id}>{p.code} — {p.name}</option>
-              ))}
-            </SelectBase>
-            {userRole === 'program_chair' && (
-              <p className="text-xs text-slate-500 mt-1.5">
-                Locked to your assigned program.
-              </p>
-            )}
+            <div className={`rounded-xl ${fieldErrors.program_id ? 'ring-2 ring-[#EF4444]' : ''}`}>
+              <FriendlySelect
+                value={form.program_id}
+                onChange={v => setField('program_id', v)}
+                label="Program"
+                placeholder="Select a program"
+                disabled={userRole === 'program_chair'}
+                showHintInTrigger
+                minPanelWidth={380}
+                options={(userRole === 'program_chair'
+                  ? programs.filter(p => p.id === chairProgramId)
+                  : programs
+                ).map(p => ({ value: String(p.id), label: p.code, hint: p.name }))}
+              />
+            </div>
+            {userRole === 'program_chair' && <FieldHint>Locked to your assigned program.</FieldHint>}
             <FieldError message={fieldErrors.program_id} />
           </div>
 
-          <div className="sm:col-span-2">
+          <div>
             <FieldLabel required>Position / Academic Rank</FieldLabel>
             <PositionSelect
               value={form.position}
@@ -844,22 +837,19 @@ export default function FacultyPage() {
             <FieldError message={fieldErrors.position} />
           </div>
 
-          <div className="sm:col-span-2">
-            <FieldLabel>
-              Subjects to Handle&nbsp;<span className="text-slate-500 font-normal">(optional — only these show in Faculty Workload; leave empty to allow all)</span>
-            </FieldLabel>
+          <div>
+            <FieldLabel optional>Subjects to Handle</FieldLabel>
             <SubjectMultiSelect
               options={subjectOptions}
               selected={form.priority_subjects}
               onChange={next => setField('priority_subjects', next)}
               loading={subjectOptionsLoading}
             />
+            <FieldHint>Only these show for this faculty in Faculty Workload. Leave empty to allow all.</FieldHint>
           </div>
 
-          <div className="sm:col-span-2">
-            <FieldLabel>
-              Blocks to Teach&nbsp;<span className="text-slate-500 font-normal">({activeSemester || 'this semester'} — optional; leave empty to allow all blocks)</span>
-            </FieldLabel>
+          <div>
+            <FieldLabel optional>Blocks to Handle</FieldLabel>
             <BlockMultiSelect
               blocks={blockOptions}
               selected={form.block_ids ?? []}
@@ -867,24 +857,18 @@ export default function FacultyPage() {
               loading={blockOptionsLoading}
               defaultProgram={programs.find(pr => String(pr.id) === form.program_id)?.code ?? null}
             />
+            <FieldHint>{activeSemester || 'This semester'}. Leave empty to allow all blocks.</FieldHint>
           </div>
 
         </div>
-      </section>
+      </FormSection>
 
       {/* ── 3. Professional Profile ── */}
-      <section>
-        <SectionHeader
-          icon={<Briefcase className="w-4 h-4" />}
-          title="Professional Profile"
-          subtitle="Optional fields shown on the Faculty Workload print form."
-        />
+      <FormSection step={3} title="Professional Profile" subtitle="Optional">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
 
           <div className="sm:col-span-2">
-            <FieldLabel>
-              Specialization&nbsp;<span className="text-slate-500 font-normal">(optional — helps match faculty to subjects)</span>
-            </FieldLabel>
+            <FieldLabel optional>Specialization</FieldLabel>
             <InputBase
               value={form.specialization}
               onChange={e => setField('specialization', e.target.value)}
@@ -894,9 +878,7 @@ export default function FacultyPage() {
           </div>
 
           <div>
-            <FieldLabel>
-              Years in Service&nbsp;<span className="text-slate-500 font-normal">(optional)</span>
-            </FieldLabel>
+            <FieldLabel optional>Years in Service</FieldLabel>
             <InputBase
               type="number"
               min={0}
@@ -911,9 +893,7 @@ export default function FacultyPage() {
           </div>
 
           <div>
-            <FieldLabel>
-              Educational Qualification&nbsp;<span className="text-slate-500 font-normal">(optional)</span>
-            </FieldLabel>
+            <FieldLabel optional>Educational Qualification</FieldLabel>
             <InputBase
               value={form.educational_qualification}
               onChange={e => setField('educational_qualification', e.target.value)}
@@ -923,9 +903,7 @@ export default function FacultyPage() {
           </div>
 
           <div>
-            <FieldLabel>
-              Major&nbsp;<span className="text-slate-500 font-normal">(optional)</span>
-            </FieldLabel>
+            <FieldLabel optional>Major</FieldLabel>
             <InputBase
               value={form.major}
               onChange={e => setField('major', e.target.value)}
@@ -935,9 +913,7 @@ export default function FacultyPage() {
           </div>
 
           <div>
-            <FieldLabel>
-              Eligibility / PRC&nbsp;<span className="text-slate-500 font-normal">(optional)</span>
-            </FieldLabel>
+            <FieldLabel optional>Eligibility / PRC</FieldLabel>
             <InputBase
               value={form.eligibility}
               onChange={e => setField('eligibility', e.target.value)}
@@ -947,25 +923,20 @@ export default function FacultyPage() {
           </div>
 
         </div>
-      </section>
+      </FormSection>
 
       {/* ── 4. Account Information ── */}
-      <section>
-        <SectionHeader
-          icon={<Lock className="w-4 h-4" />}
-          title="Account Information"
-          subtitle={editId
-            ? 'Update login credentials. Leave Password blank to keep the current password.'
-            : 'Create the login account for this faculty member. They will use these to sign in as Faculty.'}
-        />
-
+      <FormSection
+        step={4}
+        title="Account Information"
+      >
         {/* Role display */}
-        <div className="mb-5 rounded-xl bg-white/5 border border-white/10 px-5 py-4 flex items-center gap-3">
-          <span className="text-sm font-semibold text-slate-300">Role:</span>
-          <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold bg-blue-500/20 text-blue-400 border border-blue-500/30">
+        <div className="mb-5 flex items-center gap-3 rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3">
+          <span className="text-sm font-semibold text-[#334155]">Role</span>
+          <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-bold bg-[#EFF6FF] text-[#1D5BD6] border border-[#BFDBFE]">
             Faculty
           </span>
-          <span className="text-xs text-slate-500 ml-auto">Role is fixed for faculty accounts</span>
+          <span className="text-xs text-[#64748B] ml-auto">Fixed for faculty accounts</span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
@@ -996,35 +967,34 @@ export default function FacultyPage() {
               data-field="email"
             />
             <FieldError message={fieldErrors.email} />
-            <div className="mt-2 flex items-center gap-2">
+            <div className="mt-2 flex flex-wrap items-center gap-2">
               {editId && googleVerified ? (
-                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
-                  Google Account: Verified
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0]">
+                  Google verified
                 </span>
               ) : (
-                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/30">
-                  Google Account: Not Verified
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-[#FFFBEB] text-[#B45309] border border-[#FDE68A]">
+                  Google not verified
                 </span>
               )}
             </div>
-            <p className="mt-1.5 text-xs text-slate-500">
+            <FieldHint>
               {editId
-                ? 'Changing this email will require the faculty to verify with Google again.'
-                : 'The faculty must sign in and connect this Google account to verify it.'}
-            </p>
+                ? 'Changing the email means they must verify with Google again.'
+                : 'They verify by signing in with this Google account.'}
+            </FieldHint>
           </div>
 
           <div>
-            <FieldLabel required={!editId}>
+            <FieldLabel required={!editId} optional={!!editId}>
               {editId ? 'New Password' : 'Password'}
-              {editId && <span className="text-slate-500 font-normal ml-1">(optional)</span>}
             </FieldLabel>
             <div className="relative">
               <InputBase
                 type={showPassword ? 'text' : 'password'}
                 value={form.password}
                 onChange={e => setField('password', e.target.value)}
-                placeholder={editId ? 'Leave blank to keep current password' : 'At least 8 characters'}
+                placeholder={editId ? 'Leave blank to keep current' : 'At least 8 characters'}
                 autoComplete="new-password"
                 className={`pr-12 ${errorBorder('password')}`}
                 data-field="password"
@@ -1032,7 +1002,7 @@ export default function FacultyPage() {
               <button
                 type="button"
                 onClick={() => setShowPassword(p => !p)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-1 transition-colors"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-lg text-[#64748B] hover:text-[#0B2A5B] hover:bg-[#F1F5F9] transition-colors"
                 tabIndex={-1}
                 aria-label={showPassword ? 'Hide password' : 'Show password'}
               >
@@ -1040,15 +1010,12 @@ export default function FacultyPage() {
               </button>
             </div>
             <FieldError message={fieldErrors.password} />
-            {!editId && !fieldErrors.password && (
-              <p className="mt-1.5 text-xs text-slate-500">Minimum 8 characters</p>
-            )}
+            {!editId && !fieldErrors.password && <FieldHint>Minimum 8 characters.</FieldHint>}
           </div>
 
           <div>
-            <FieldLabel required={!editId}>
+            <FieldLabel required={!editId} optional={!!editId}>
               {editId ? 'Confirm New Password' : 'Confirm Password'}
-              {editId && <span className="text-slate-500 font-normal ml-1">(optional)</span>}
             </FieldLabel>
             <div className="relative">
               <InputBase
@@ -1063,7 +1030,7 @@ export default function FacultyPage() {
               <button
                 type="button"
                 onClick={() => setShowConfirmPassword(p => !p)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-1 transition-colors"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-lg text-[#64748B] hover:text-[#0B2A5B] hover:bg-[#F1F5F9] transition-colors"
                 tabIndex={-1}
                 aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
               >
@@ -1074,34 +1041,40 @@ export default function FacultyPage() {
           </div>
 
         </div>
-      </section>
+      </FormSection>
 
     </div>
   );
 
   const formFooter = (
-    <div className="flex flex-col sm:flex-row gap-3">
+    <div className="flex flex-col sm:flex-row sm:items-center gap-3">
       {submitError && (
-        <div className="flex-1 bg-red-500/10 border border-red-500/30 text-red-400 px-4 py-2.5 rounded-xl text-sm">
-          ⚠ {submitError}
+        <div className="flex-1 flex items-center gap-2 bg-[#FEF2F2] border border-[#FECACA] text-[#B91C1C] px-4 py-2.5 rounded-xl text-sm font-medium">
+          {submitError}
         </div>
       )}
       <div className="flex gap-3 sm:ml-auto">
-        <button
+        <motion.button
           type="button"
           onClick={closeModal}
-          className="px-6 py-3 border border-white/10 text-slate-300 rounded-xl hover:bg-white/10 transition text-sm font-semibold min-w-[110px]"
+          whileTap={reduceMotion ? undefined : { scale: 0.97 }}
+          className="px-6 py-3 border border-[#CBD5E1] bg-white text-[#0B2A5B] rounded-xl hover:bg-[#F8FAFC] hover:border-[#94A3B8] transition-colors text-[15px] font-semibold min-w-[110px]"
         >
           Cancel
-        </button>
-        <button
+        </motion.button>
+        <motion.button
           type="submit"
           form="faculty-form"
           disabled={loading}
-          className="px-6 py-3 bg-[#1D5BD6] text-white rounded-xl hover:bg-[#2E7DD1] disabled:opacity-50 transition text-sm font-semibold min-w-[150px]"
+          whileTap={reduceMotion || loading ? undefined : { scale: 0.97 }}
+          className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-[#1D5BD6] rounded-xl hover:bg-[#164BB5] disabled:opacity-60 transition-colors text-[15px] font-semibold min-w-[160px] shadow-sm"
+          // White set inline — the light-mode rule repaints `text-white` as dark ink
+          style={{ color: '#FFFFFF' }}
         >
-          {loading ? 'Saving…' : editId ? 'Update Faculty' : 'Add Faculty'}
-        </button>
+          {loading
+            ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Saving…</>
+            : (editId ? 'Update Faculty' : 'Add Faculty')}
+        </motion.button>
       </div>
     </div>
   );
@@ -1257,7 +1230,7 @@ export default function FacultyPage() {
                   <span>{f.designation_type}</span>
                   <span className="font-bold" style={{ color: employmentColors(empStatus).fg }}>
                     {isPermanent
-                      ? `${Math.round(parseFloat(String(f.remaining_regular_load)))} units`
+                      ? `${formatLoadCap(shownUnitsCap(parseFloat(String(f.remaining_regular_load))))} units`
                       : '30 hrs'}
                   </span>
                 </div>
@@ -1336,7 +1309,7 @@ export default function FacultyPage() {
                     <td className="px-5 py-4 text-xs" style={{ color: '#64748B' }}>{f.designation_type}</td>
                     <td className="px-5 py-4 text-center font-bold" style={{ color: employmentColors(empStatus).fg }}>
                       {isPermanent
-                        ? `${Math.round(parseFloat(String(f.remaining_regular_load)))} units`
+                        ? `${formatLoadCap(shownUnitsCap(parseFloat(String(f.remaining_regular_load))))} units`
                         : '30 hrs'
                       }
                     </td>

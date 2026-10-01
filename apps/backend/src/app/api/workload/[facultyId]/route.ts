@@ -236,7 +236,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ facu
       ? totalRegularUnits + totalDeduction + totalOverloadUnits + totalPraiseUnits
       : totalRegularHours + totalOverloadHours + totalPraiseHours;
 
-    const loadStatus = computeRegularLoadStatus(currentLoad, regularLoadLimit);
+    const loadStatus = computeRegularLoadStatus(currentLoad, regularLoadLimit, faculty.employment_status === 'Permanent');
 
     // Get praise records
     let praiseQuery = 'SELECT * FROM praise WHERE faculty_id=$1';

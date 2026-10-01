@@ -66,7 +66,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       curriculums: result.rows.map(r => ({
         ...r,
-        subject_category: categoryFromHours(r.lecture_hours, r.laboratory_hours),
+        subject_category: categoryFromHours(r.lecture_hours, r.laboratory_hours, r.subject_code),
       })),
     });
   } catch {
@@ -95,7 +95,7 @@ async function POST_handler(req: NextRequest) {
       return NextResponse.json({ error: 'You can only manage curriculum for your assigned program.' }, { status: 403 });
     }
     /* Category is derived from hours, never from client-supplied labels or codes. */
-    const category = categoryFromHours(lecture_hours, laboratory_hours);
+    const category = categoryFromHours(lecture_hours, laboratory_hours, subject_code);
     if (lecture_hours < 0 || laboratory_hours < 0) {
       return NextResponse.json({ error: 'Hours cannot be negative' }, { status: 400 });
     }

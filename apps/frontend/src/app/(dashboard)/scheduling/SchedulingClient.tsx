@@ -27,6 +27,7 @@ import DayPicker from '@/components/ui/DayPicker';
 import { TT_DAY_TONES, TT_TONE_MTH, TT_TONE_OVERLOAD, TT_TONE_SAT, TT_TONE_TF, TT_TONE_W, type DayTone } from '@/lib/dayTones';
 import { useDayCombinations } from '@/lib/dayCombinations';
 import { dayCombinationError, daysCode, daysLabel, matchCombination } from '@shared/dayCombination';
+import { LOAD_GRACE_UNITS, formatLoadCap } from '@shared/regularLoad';
 
 /* ─── types ─────────────────────────────────────────────────── */
 interface Faculty {
@@ -891,6 +892,12 @@ function FacultyGroup({ title, items, selectedId, loadingId, onSelect }: {
   // Incomplete instructors (regular load not yet filled) go first, lowest
   // remaining units/hrs → highest; complete ones keep their order after them.
   const remaining = (f: Faculty) => Number(f.remaining_regular_load) || 0;
+  /** As shown: Permanent units drop the 0.25 grace (18.25 → 18; over stays negative, measured from 18). */
+  const remainingShown = (f: Faculty) => {
+    const r = remaining(f);
+    if (f.employment_status !== 'Permanent') return r;
+    return r > -0.001 && r < LOAD_GRACE_UNITS ? 0 : Math.round((r - LOAD_GRACE_UNITS) * 100) / 100;
+  };
   const sorted = [...items].sort((a, b) => {
     const aDone = remaining(a) <= 0;
     const bDone = remaining(b) <= 0;
@@ -945,8 +952,8 @@ function FacultyGroup({ title, items, selectedId, loadingId, onSelect }: {
               <div className="flex items-center gap-3 flex-shrink-0">
                 <div className="text-right">
                   <div className="text-xs text-[#94A3B8]">Remaining Load</div>
-                  <div className={`text-base font-bold ${f.remaining_regular_load > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                    {Math.round(remaining(f))} {f.employment_status === 'Permanent' ? 'units' : 'hrs'}
+                  <div className={`text-base font-bold ${remainingShown(f) > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                    {formatLoadCap(remainingShown(f))} {f.employment_status === 'Permanent' ? 'units' : 'hrs'}
                   </div>
                 </div>
                 <button type="button" onClick={() => onSelect(f)} disabled={selected || loadingId != null}

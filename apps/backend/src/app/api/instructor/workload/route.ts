@@ -233,7 +233,7 @@ export async function GET(req: NextRequest) {
       ? totalRegularUnits + totalDeduction + totalOverloadUnits + totalPraiseUnits
       : totalRegularHours + totalOverloadHours + totalPraiseHours;
 
-    const loadStatus = computeRegularLoadStatus(currentLoad, regularLoadLimit);
+    const loadStatus = computeRegularLoadStatus(currentLoad, regularLoadLimit, faculty.employment_status === 'Permanent');
 
     // Praise (Permanent only)
     let praiseQuery = 'SELECT * FROM praise WHERE faculty_id = $1';

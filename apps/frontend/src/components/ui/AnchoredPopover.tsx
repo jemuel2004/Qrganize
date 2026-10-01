@@ -68,7 +68,9 @@ export default function AnchoredPopover({
     setPos({ top: up ? r.top - GAP : r.bottom + GAP, left, width: w, maxH, up });
   }, [anchorRef, width, maxHeight, align]);
 
-  useLayoutEffect(() => { if (open) place(); }, [open, place]);
+  /* Still on screen — open, or playing its close animation. */
+  const [present, setPresent] = useState(open);
+  useLayoutEffect(() => { if (open) { setPresent(true); place(); } }, [open, place]);
 
   useEffect(() => {
     if (!open) return;
@@ -77,18 +79,24 @@ export default function AnchoredPopover({
       if (!panelRef.current?.contains(t) && !anchorRef.current?.contains(t)) onClose();
     };
     document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open, onClose, anchorRef, panelRef]);
+
+  /* Follow the trigger until the panel is gone — a pick that resizes the page
+     (and scrolls it) must not leave the closing panel floating over the trigger. */
+  useEffect(() => {
+    if (!present) return;
     window.addEventListener('resize', place);
     window.addEventListener('scroll', place, true);
     return () => {
-      document.removeEventListener('mousedown', onDown);
       window.removeEventListener('resize', place);
       window.removeEventListener('scroll', place, true);
     };
-  }, [open, place, onClose, anchorRef, panelRef]);
+  }, [present, place]);
 
   if (typeof document === 'undefined') return null;
   return createPortal(
-    <AnimatePresence>
+    <AnimatePresence onExitComplete={() => setPresent(false)}>
       {open && pos && (
         <motion.div
           ref={panelRef}

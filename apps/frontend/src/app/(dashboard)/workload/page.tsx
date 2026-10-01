@@ -13,6 +13,7 @@ export default async function WorkloadPage({
     instructorId?: string | string[];
     assign?: string | string[];
     block?: string | string[];
+    from?: string | string[];
   }>;
 }) {
   const params = await searchParams;
@@ -24,6 +25,7 @@ export default async function WorkloadPage({
       initialFacultyQuery={initialFacultyQuery}
       assignMsId={Number(firstQueryValue(params.assign)) || null}
       assignBlockId={Number(firstQueryValue(params.block)) || null}
+      assignFrom={firstQueryValue(params.from) === 'block' ? 'block' : 'master-schedule'}
     />
   );
 }

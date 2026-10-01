@@ -21,7 +21,7 @@ function shortLabel(b: BlockOption) {
 }
 
 /**
- * "Blocks to Teach" — the blocks a faculty member is assigned to.
+ * "Blocks to Handle" — the blocks a faculty member is assigned to.
  * Folded by default (summary + removable tags); opened, pick a program tab,
  * then tap blocks by year level. Faculty Workload only offers these blocks.
  * `selected` may hold ids from other terms; only `blocks` (this term) are

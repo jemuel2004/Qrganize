@@ -1,5 +1,5 @@
 import { query } from '@/database/db';
-import { OVERLOAD_MAX_UNITS } from '@shared/regularLoad';
+import { OVERLOAD_MAX_UNITS, formatLoadCap, shownUnitsCap, shownUnitsLeft } from '@shared/regularLoad';
 import { ensurePraiseSplitColumn } from '@/services/praiseSplit';
 
 /**
@@ -31,7 +31,8 @@ export async function overloadCapError(opts: {
   const current = parseFloat(res.rows[0]?.total) || 0;
   const after = current + opts.addUnits;
   if (after <= OVERLOAD_MAX_UNITS + 0.001) return null;
-  const left = Math.max(0, OVERLOAD_MAX_UNITS - current);
-  return `Overload limit is ${OVERLOAD_MAX_UNITS} units. This faculty already has ${current.toFixed(2)} units of Overload `
+  // Shown as 6, not 6.25 (shared display rule) — the check above keeps the exact cap
+  const left = shownUnitsLeft(OVERLOAD_MAX_UNITS - current);
+  return `Overload limit is ${formatLoadCap(shownUnitsCap(OVERLOAD_MAX_UNITS))} units. This faculty already has ${current.toFixed(2)} units of Overload `
     + `(${left.toFixed(2)} left); adding ${opts.addUnits.toFixed(2)} would make ${after.toFixed(2)}.`;
 }

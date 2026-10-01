@@ -334,7 +334,7 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
       }
     }
   } else if (documentKind === 'deload') {
-    /* Deload: every subject of the term on one form, each at its full Lec/Lab value
+    /* Actual Load: every subject of the term on one form, each at its full Lec/Lab value
        (Regular, Overload and Praise alike — no split between documents). */
     for (const load of loads) {
       const lec = parseFloat(String(load.lecture_hours)) || 0;
@@ -552,7 +552,7 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
 
   const totalUnitsRow = row(true, [
     { text: 'Total No. of Units', labelPad: true, colspan: 2 },
-    { text: documentKind === 'deload' ? 'Deload' : 'Regular Load', center: true },
+    { text: documentKind === 'deload' ? 'Actual Load' : 'Regular Load', center: true },
     {}, {},
     { text: netTotal.toFixed(2), center: true },
     {}, {},
@@ -569,7 +569,7 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
 
   let summary: WorkloadFormSummaryRow[];
   if (documentKind === 'regular' || documentKind === 'deload') {
-    /* Keep Regular summary identical to the approved official form (Deload reuses it). */
+    /* Keep Regular summary identical to the approved official form (Actual Load reuses it). */
     summary = [noOfUnitsRow, designationRow, ...specialRows, noOfPrepRow, totalUnitsRow];
   } else {
     /* Overload / Praise: same row skeleton as Regular; only values + load label differ. */
@@ -609,7 +609,7 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
 
   return {
     title: documentKind === 'praise' ? 'FACULTY WORKLOAD — PRAISE LOAD'
-      : documentKind === 'deload' ? 'FACULTY WORKLOAD — DELOAD'
+      : documentKind === 'deload' ? 'FACULTY WORKLOAD — ACTUAL LOAD'
       : 'FACULTY WORKLOAD',
     department: NEMSU_OFFICIAL_DEPT,
     semesterHeading: semesterHeading(semester),
@@ -844,7 +844,7 @@ export async function printRegularLoadDocument(
       : documentKind === 'praise'
         ? 'faculty-workload-praise-load.html'
         : documentKind === 'deload'
-          ? 'faculty-workload-deload.html'
+          ? 'faculty-workload-actual-load.html'
           : 'faculty-workload-regular-load.html';
 
   /* Open first — before HTML build — so mobile browsers still treat it as a gesture. */

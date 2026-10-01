@@ -8,12 +8,14 @@ import Modal from '@/components/ui/Modal';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import TrashDropAnimation from '@/components/ui/TrashDropAnimation';
+import SelectBox from '@/components/ui/SelectBox';
 import {
   Plus, Pencil, Trash2, Upload, FileSpreadsheet,
   X, CheckCircle, AlertTriangle, Info, Download, Layers, Printer,
   ChevronDown,
 } from 'lucide-react';
-import { SearchInput, FilterSelect, FilterBar } from '@/components/ui/SearchFilter';
+import { SearchInput, FilterBar } from '@/components/ui/SearchFilter';
+import FriendlySelect from '@/components/ui/FriendlySelect';
 import { TableSkeleton, Skeleton } from '@/components/ui/skeletons';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { LOADING_DELAY, PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
@@ -130,28 +132,6 @@ function importStatusMeta(status: ImportRowStatus): { label: string; className: 
     case 'possible': return { label: 'Review', className: 'bg-[#EFF6FF] text-[#1D4ED8] border-[#BFDBFE]' };
     default: return { label: 'Invalid', className: 'bg-[#FEF2F2] text-[#B91C1C] border-[#FECACA]' };
   }
-}
-
-/* Large checkbox with a "some selected" (dash) state, like Gmail's select-all */
-function SelectBox({ checked, indeterminate = false, onChange, label }: {
-  checked: boolean;
-  indeterminate?: boolean;
-  onChange: (checked: boolean) => void;
-  label: string;
-}) {
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => { if (ref.current) ref.current.indeterminate = indeterminate && !checked; }, [indeterminate, checked]);
-  return (
-    <input
-      ref={ref}
-      type="checkbox"
-      checked={checked}
-      onChange={e => onChange(e.target.checked)}
-      aria-label={label}
-      title={label}
-      className="w-[18px] h-[18px] rounded border-[#94A3B8] accent-[#1D5BD6] cursor-pointer align-middle"
-    />
-  );
 }
 
 /* ── Main component ─────────────────────────────────────────────────────── */
@@ -289,7 +269,7 @@ export default function CurriculumPage() {
       subject_code: c.subject_code, subject_name: c.subject_name,
       lecture_hours: String(c.lecture_hours), laboratory_hours: String(c.laboratory_hours),
       units: String(c.units), prerequisites: c.prerequisites || '', grade: c.grade || '',
-      subject_category: categoryFromSubjectType(inferSubjectType(c.lecture_hours, c.laboratory_hours)),
+      subject_category: categoryFromSubjectType(inferSubjectType(c.lecture_hours, c.laboratory_hours), c.subject_code),
     });
     setEditId(c.id); setFormError(''); setSaveSuccess(false); setModalOpen(true);
   }
@@ -297,7 +277,7 @@ export default function CurriculumPage() {
   function handleSubjectTypeChange(type: SubjectType) {
     setForm(f => ({
       ...f, subject_type: type,
-      subject_category: categoryFromSubjectType(type),
+      subject_category: categoryFromSubjectType(type, f.subject_code),
       lecture_hours:    type === 'Laboratory' ? '' : f.lecture_hours,
       laboratory_hours: type === 'Lecture'    ? '' : f.laboratory_hours,
     }));
@@ -320,7 +300,7 @@ export default function CurriculumPage() {
           lecture_hours: lec,
           laboratory_hours: lab,
           units: parseFloat(String(form.units)) || 0,
-          subject_category: categoryFromSubjectType(form.subject_type),
+          subject_category: categoryFromSubjectType(form.subject_type, form.subject_code),
           curriculum_version: filters.curriculum_version,
         }),
       });
@@ -500,7 +480,7 @@ export default function CurriculumPage() {
         computed_total: row.lectureHours + row.laboratoryHours,
         prerequisites: row.prerequisites,
         grade: row.grade,
-        subject_category: categoryFromHours(row.lectureHours, row.laboratoryHours),
+        subject_category: categoryFromHours(row.lectureHours, row.laboratoryHours, row.subjectCode),
         program_id: target?.id ?? null,
         isDuplicate: row.isDuplicate,
         errors,
@@ -839,63 +819,69 @@ export default function CurriculumPage() {
           {/* Program */}
           <div className="flex flex-col min-w-64 flex-1">
             <label className={filterLabelCls}>Program <span className="text-red-400">*</span></label>
-            <FilterSelect
+            <FriendlySelect
               value={filters.program_id}
               onChange={v => setFilters(f => ({ ...f, program_id: v, year_level: '', semester: '' }))}
               label="Program"
+              placeholder="Select a program"
               disabled={userRole === 'program_chair'}
-            >
-              <option value="">— Select Program —</option>
-              {(userRole === 'program_chair'
+              guide={!filters.program_id}
+              showHintInTrigger
+              minPanelWidth={380}
+              options={(userRole === 'program_chair'
                 ? programs.filter(p => p.id === chairProgramId)
                 : programs
-              ).map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
-            </FilterSelect>
+              ).map(p => ({ value: String(p.id), label: p.code, hint: p.name }))}
+            />
           </div>
 
           {/* Curriculum version */}
           <div className="flex flex-col min-w-48">
             <label className={filterLabelCls}>Curriculum</label>
-            <FilterSelect
+            <FriendlySelect
               value={filters.curriculum_version}
               onChange={v => setFilters(f => ({
                 ...f,
                 curriculum_version: parseCurriculumVersion(v) ?? DEFAULT_CURRICULUM_VERSION,
               }))}
               label="Curriculum"
-            >
-              {CURRICULUM_VERSIONS.map(v => (
-                <option key={v} value={v}>{curriculumVersionLabel(v)}</option>
-              ))}
-            </FilterSelect>
+              minPanelWidth={220}
+              options={CURRICULUM_VERSIONS.map(v => ({ value: v, label: curriculumVersionLabel(v) }))}
+            />
           </div>
 
           {/* Year Level */}
           <div className="flex flex-col min-w-44">
             <label className={filterLabelCls}>Year Level</label>
-            <FilterSelect
+            <FriendlySelect
               value={filters.year_level}
               onChange={v => setFilters(f => ({ ...f, year_level: v }))}
               disabled={!filters.program_id}
+              disabledText="Select a program first"
               label="Year Level"
-            >
-              <option value="">All Year Levels</option>
-              {YEAR_LEVELS.map(y => <option key={y} value={y}>{y}</option>)}
-            </FilterSelect>
+              minPanelWidth={220}
+              options={[
+                { value: '', label: 'All Year Levels' },
+                ...YEAR_LEVELS.map(y => ({ value: y, label: y })),
+              ]}
+            />
           </div>
 
           {/* Semester */}
           <div className="flex flex-col min-w-44">
             <label className={filterLabelCls}>Semester</label>
-            <FilterSelect
+            <FriendlySelect
               value={filters.semester}
               onChange={v => setFilters(f => ({ ...f, semester: v }))}
               disabled={!filters.program_id}
+              disabledText="Select a program first"
               label="Semester"
-            >
-              <option value="">All Semesters</option>
-              {SEMESTERS.map(s => <option key={s} value={s}>{s}</option>)}
-            </FilterSelect>
+              minPanelWidth={220}
+              options={[
+                { value: '', label: 'All Semesters' },
+                ...SEMESTERS.map(s => ({ value: s, label: s })),
+              ]}
+            />
           </div>
 
           {/* Search */}
@@ -1049,11 +1035,11 @@ export default function CurriculumPage() {
                           <td className="px-4 py-3 font-medium text-[#0B2A5B]">{c.subject_name}</td>
                           <td className="px-4 py-3 text-center">
                             <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-                              categoryFromHours(c.lecture_hours, c.laboratory_hours) === 'Major'
+                              categoryFromHours(c.lecture_hours, c.laboratory_hours, c.subject_code) === 'Major'
                                 ? 'bg-[#EFF6FF] text-[#1D5BD6] border border-[#BFDBFE]'
                                 : 'bg-[#F1F5F9] text-[#64748B] border border-[#E2E8F0]'
                             }`}>
-                              {categoryFromHours(c.lecture_hours, c.laboratory_hours)}
+                              {categoryFromHours(c.lecture_hours, c.laboratory_hours, c.subject_code)}
                             </span>
                           </td>
                           <td className="px-4 py-3 text-center text-[#64748B]">{Number(c.lecture_hours)}</td>
@@ -1226,7 +1212,7 @@ export default function CurriculumPage() {
             <div className="grid grid-cols-2 gap-2">
               {(['Minor', 'Major'] as const).map(cat => {
                 const active = form.subject_type
-                  ? categoryFromSubjectType(form.subject_type) === cat
+                  ? categoryFromSubjectType(form.subject_type, form.subject_code) === cat
                   : false;
                 return (
                   <div
@@ -1241,7 +1227,7 @@ export default function CurriculumPage() {
                     {cat}
                     <div className={`text-xs font-normal mt-0.5 ${active ? 'text-blue-100' : ''}`}
                       style={!active ? { color: '#CBD5E1' } : {}}>
-                      {cat === 'Minor' ? 'Lecture only' : 'Laboratory / Lecture + Laboratory'}
+                      {cat === 'Minor' ? 'Other lecture subjects' : 'CS / CPE / IT, or with lab'}
                     </div>
                   </div>
                 );
@@ -1249,7 +1235,7 @@ export default function CurriculumPage() {
             </div>
             <p className="text-xs mt-1.5" style={{ color: '#94A3B8' }}>
               {form.subject_type
-                ? `${categoryFromSubjectType(form.subject_type)} — automatically determined from Subject Type`
+                ? `${categoryFromSubjectType(form.subject_type, form.subject_code)} — set automatically from the Course Code and Subject Type`
                 : 'Select a Subject Type to set the category automatically.'}
             </p>
           </div>
