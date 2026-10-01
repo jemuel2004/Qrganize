@@ -251,24 +251,39 @@ export default function LoginClient() {
   }, []);
 
   useEffect(() => {
-    if (!gisReady || !googleEnabled || !googleClientId || !googleBtnRef.current || !window.google?.accounts?.id) {
+    const host = googleBtnRef.current;
+    if (!gisReady || !googleEnabled || !googleClientId || !host || !window.google?.accounts?.id) {
       return;
     }
-    googleBtnRef.current.innerHTML = '';
     window.google.accounts.id.initialize({
       client_id: googleClientId,
       callback: handleGoogleCredential,
       auto_select: false,
       cancel_on_tap_outside: true,
     });
-    window.google.accounts.id.renderButton(googleBtnRef.current, {
-      type: 'standard',
-      theme: 'outline',
-      size: 'large',
-      text: 'continue_with',
-      shape: 'rectangular',
-      width: 368,
-    });
+    /* Google draws the button at a fixed pixel width — size it to the card
+       (Google allows 200–400 px) so it never pushes the card wider on phones. */
+    let lastWidth = 0;
+    const render = () => {
+      const width = Math.round(Math.min(368, Math.max(200, host.clientWidth)));
+      if (width === lastWidth) return;
+      lastWidth = width;
+      host.innerHTML = '';
+      window.google?.accounts?.id?.renderButton(host, {
+        type: 'standard',
+        theme: 'outline',
+        size: 'large',
+        text: 'continue_with',
+        shape: 'rectangular',
+        width,
+      });
+    };
+    render();
+    // Re-fit when the screen changes size (e.g. rotating a phone)
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onResize = () => { clearTimeout(timer); timer = setTimeout(render, 150); };
+    window.addEventListener('resize', onResize);
+    return () => { clearTimeout(timer); window.removeEventListener('resize', onResize); };
   }, [gisReady, googleEnabled, handleGoogleCredential, googleClientId, cardShown]);
 
   const usernameLabel = role === 'instructor' ? 'Username or Email' : 'Username';
@@ -523,7 +538,8 @@ export default function LoginClient() {
                             onClick={() => { if (!active) selectRole(r.id); }}
                             aria-pressed={active}
                             className={[
-                              'relative flex-auto sm:flex-1 px-2 inline-flex items-center justify-center gap-2 text-[14px] font-semibold rounded-[10px] whitespace-nowrap transition-colors duration-300',
+                              // min-w-0 + wrapping on phones: long labels never push the card wider
+                              'relative flex-1 min-w-0 px-2 inline-flex items-center justify-center gap-2 text-[14px] leading-tight text-center font-semibold rounded-[10px] sm:whitespace-nowrap transition-colors duration-300',
                               active ? 'text-[#1D5BD6]' : 'text-[#0B2A5B] hover:text-[#1D5BD6]',
                             ].join(' ')}
                             style={{ height: '44px' }}
@@ -534,8 +550,8 @@ export default function LoginClient() {
                                 aria-hidden="true"
                               />
                             )}
-                            <span className="relative inline-flex items-center gap-2">
-                              {active && <UserRound className="w-4 h-4" aria-hidden="true" />}
+                            <span className="relative inline-flex items-center gap-1.5 min-w-0">
+                              {active && <UserRound className="w-4 h-4 flex-shrink-0" aria-hidden="true" />}
                               {r.label}
                             </span>
                           </button>
@@ -641,10 +657,11 @@ export default function LoginClient() {
                         <div className="flex-1 h-px bg-[#E3E9F3]" />
                       </div>
                       {process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ? (
-                        <div className="flex flex-col items-center">
+                        <div className="flex flex-col items-center min-w-0">
+                          {/* overflow-hidden: the Google button can never widen the card */}
                           <div
                             ref={googleBtnRef}
-                            className={`w-full flex justify-center ${googleLoading ? 'pointer-events-none opacity-60' : ''}`}
+                            className={`w-full max-w-full min-w-0 overflow-hidden flex justify-center ${googleLoading ? 'pointer-events-none opacity-60' : ''}`}
                           />
                           {googleLoading && (
                             <p className="mt-2 text-[12px] text-[#5B6F8C]">Signing in with Google…</p>
