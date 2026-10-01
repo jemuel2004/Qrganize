@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useToast } from '@/context/ToastContext';
+import { useRealtime } from '@/context/RealtimeContext';
 import Modal from '@/components/ui/Modal';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
@@ -194,6 +195,8 @@ export default function CurriculumPage() {
 
   // Abort controller ref — cancels in-flight requests on rapid filter changes
   const abortRef = useRef<AbortController | null>(null);
+  /** Query of the list on screen (live updates re-use it) */
+  const listQuery = useRef('');
 
   useEffect(() => {
     Promise.all([
@@ -220,7 +223,7 @@ export default function CurriculumPage() {
     // Cancel any in-flight request before starting a new one
     abortRef.current?.abort();
 
-    if (!programId) { setCurriculums([]); setListLoading(false); return; }
+    if (!programId) { listQuery.current = ''; setCurriculums([]); setListLoading(false); return; }
 
     abortRef.current = new AbortController();
     const signal = abortRef.current.signal;
@@ -229,6 +232,7 @@ export default function CurriculumPage() {
     const p = new URLSearchParams({ program_id: programId, curriculum_version: version });
     if (yearLevel) p.set('year_level', yearLevel);
     if (semester)  p.set('semester',   semester);
+    listQuery.current = p.toString();
 
     fetch('/api/curriculum?' + p, { signal })
       .then(r => r.ok ? r.json() : null)
@@ -247,6 +251,27 @@ export default function CurriculumPage() {
   useEffect(() => {
     localStorage.setItem(CURRICULUM_VERSION_STORAGE_KEY, filters.curriculum_version);
   }, [filters.curriculum_version]);
+
+  // Live updates: subjects added, edited, imported or removed elsewhere — the
+  // list reloads quietly. Filters, search and open forms stay; ticked rows
+  // stay ticked unless the subject is gone.
+  useRealtime(['curriculum'], () => {
+    const query = listQuery.current;
+    if (!query) return;
+    return fetch('/api/curriculum?' + query)
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => {
+        if (!d || listQuery.current !== query || !Array.isArray(d.curriculums)) return;
+        const fresh = d.curriculums as Curriculum[];
+        setCurriculums(fresh);
+        const ids = new Set(fresh.map(c => c.id));
+        setSelectedIds(prev => {
+          const next = new Set([...prev].filter(id => ids.has(id)));
+          return next.size === prev.size ? prev : next;
+        });
+      })
+      .catch(() => {});
+  }, { enabled: !listLoading && !booting });
 
   const lec = parseFloat(String(form.lecture_hours)) || 0;
   const lab = parseFloat(String(form.laboratory_hours)) || 0;

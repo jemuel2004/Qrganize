@@ -17,6 +17,7 @@ import Link from 'next/link';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useToast } from '@/context/ToastContext';
+import { useRealtime } from '@/context/RealtimeContext';
 import Modal from '@/components/ui/Modal';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
@@ -338,6 +339,18 @@ export default function RoomsPage() {
       .finally(() => setRoomsLoading(false));
   }, [toast]);
   useEffect(() => { loadRooms(); }, [loadRooms]);
+
+  // Live updates: rooms added, edited, (de)activated or given a new QR
+  // elsewhere — quiet reload; an open QR window shows the room's latest code.
+  useRealtime(['rooms'], () => fetch('/api/rooms')
+    .then(r => (r.ok ? r.json() : null))
+    .then(d => {
+      if (!d || !Array.isArray(d.rooms)) return;
+      const fresh = d.rooms as Room[];
+      setRooms(fresh);
+      setQrRoom(prev => (prev ? fresh.find(r => r.id === prev.id) ?? prev : prev));
+    })
+    .catch(() => {}), { enabled: !roomsLoading });
 
   const visible = useMemo(() => {
     const q = norm(search);

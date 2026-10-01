@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useSchoolYear } from '@/context/SchoolYearContext';
+import { useRealtime } from '@/context/RealtimeContext';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import { CalendarDays } from 'lucide-react';
@@ -287,19 +288,34 @@ export default function MasterSchedulePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- read initial query params once on mount only
   }, []);
 
+  /** Query of the list on screen — a late answer for older filters is dropped. */
+  const listQuery = useRef('');
   useEffect(() => {
-    if (!filters.program_id) { setSchedules([]); return; }
+    if (!filters.program_id) { listQuery.current = ''; setSchedules([]); return; }
     setLoading(true);
     const params = new URLSearchParams({ program_id: filters.program_id });
     if (filters.year_level) params.set('year_level',    filters.year_level);
     if (globalSemester)     params.set('semester',      globalSemester);
     if (globalYear)         params.set('academic_year', globalYear);
     if (filters.status)     params.set('status',        filters.status);
-    fetch('/api/master-schedule?' + params)
+    const query = params.toString();
+    listQuery.current = query;
+    fetch('/api/master-schedule?' + query)
       .then(r => r.json())
-      .then(d => { setSchedules(d.schedules || []); setLoading(false); })
-      .catch(() => setLoading(false));
+      .then(d => { if (listQuery.current !== query) return; setSchedules(d.schedules || []); setLoading(false); })
+      .catch(() => { if (listQuery.current === query) setLoading(false); });
   }, [filters.program_id, filters.year_level, filters.status, globalSemester, globalYear]);
+
+  // Live updates: assignments, schedules, blocks or rooms changed elsewhere —
+  // the list reloads quietly; filters, search and the block page stay.
+  useRealtime(['schedule', 'workload', 'blocks', 'rooms'], () => {
+    const query = listQuery.current;
+    if (!query) return;
+    return fetch('/api/master-schedule?' + query)
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d && listQuery.current === query && Array.isArray(d.schedules)) setSchedules(d.schedules); })
+      .catch(() => {});
+  }, { enabled: !loading && !booting });
 
   function setFilter(key: keyof typeof filters, value: string) {
     if (isChair && key === 'program_id') return;

@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { WeekDay } from '@shared/dayCombination';
+import { useRealtime } from '@/context/RealtimeContext';
 
 export interface TermDayCombination {
   id: number;
@@ -63,6 +64,8 @@ export function useDayCombinations(semester: string | null | undefined, academic
     return () => { alive = false; };
   }, [semester, academicYear, version]);
   const reload = useCallback(() => { invalidateDayCombinations(); setVersion(v => v + 1); }, []);
+  // Settings → Day Combinations changed elsewhere — the current list stays until the new one is in
+  useRealtime(['settings'], reload);
   const active = useMemo(() => activeCombinations(data), [data]);
   return { data, active, loading: data === null, reload };
 }

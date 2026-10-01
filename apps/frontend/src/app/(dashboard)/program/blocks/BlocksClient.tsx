@@ -5,6 +5,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useToast } from '@/context/ToastContext';
 import { useSchoolYear } from '@/context/SchoolYearContext';
+import { useRealtime } from '@/context/RealtimeContext';
 import Modal from '@/components/ui/Modal';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
@@ -268,7 +269,10 @@ export default function BlocksPage() {
     setYearFilter('');
   }, [programFilter]);
 
+  /** Program of the list on screen — live updates re-read it; a late answer for another program is dropped. */
+  const listProgram = useRef('');
   useEffect(() => {
+    listProgram.current = programFilter;
     if (!programFilter) {
       setBlocks([]);
       setListLoading(false);
@@ -343,6 +347,19 @@ export default function BlocksPage() {
   // modalKey increments each time the modal opens, forcing a fresh fetch even
   // when the other fields are identical to the previous session.
   }, [form.program_id, form.curriculum_version, form.year_level, form.semester, editId, modalKey]);
+
+  // Live updates: blocks created / edited / deleted, or subjects assigned,
+  // elsewhere — the list reloads quietly (filters and search stay). Held while
+  // the Create / Edit dialog or a delete confirmation is open, so the suggested
+  // block names don't change under the user.
+  useRealtime(['blocks', 'workload'], () => {
+    const pid = listProgram.current;
+    if (!pid) return;
+    return fetch('/api/blocks?' + new URLSearchParams({ program_id: pid }))
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d && listProgram.current === pid && Array.isArray(d.blocks)) setBlocks(d.blocks); })
+      .catch(() => {});
+  }, { enabled: !listLoading && !modalOpen && !deleteTarget });
 
   async function reloadBlocks() {
     if (!programFilter) { setBlocks([]); return; }

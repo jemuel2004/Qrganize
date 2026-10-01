@@ -17,6 +17,7 @@ import {
   ClipboardList, DoorOpen, Monitor, Users,
 } from 'lucide-react';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
+import { useRealtime } from '@/context/RealtimeContext';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import { DashboardSkeleton } from '@/components/ui/skeletons';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
@@ -294,7 +295,14 @@ export default function DashboardClient() {
     load(ac.signal);
     return () => ac.abort();
   }, [load]);
-  useVisibilityAwareInterval(() => load(undefined, true), 30_000);
+  // Live updates: re-fetch quietly when anything the dashboard counts changes
+  useRealtime(
+    ['term', 'rooms', 'occupancy', 'room-requests', 'schedule', 'workload', 'blocks', 'faculty'],
+    () => load(undefined, true),
+    { enabled: !loading },
+  );
+  // Fallback for time-based changes (classes starting / ending)
+  useVisibilityAwareInterval(() => load(undefined, true), 60_000);
 
   const showSkeleton = useMinLoading(loading && !data, LOADING_DELAY);
   const term = [an?.term.semester, an?.term.school_year ? `AY ${an.term.school_year}` : null].filter(Boolean).join(' · ');

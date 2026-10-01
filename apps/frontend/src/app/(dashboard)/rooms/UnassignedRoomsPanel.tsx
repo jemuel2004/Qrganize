@@ -11,6 +11,7 @@ import Link from 'next/link';
 import { motion, useReducedMotion } from 'framer-motion';
 import { AlertTriangle, BookOpen, CheckCircle2, ChevronRight, Clock, DoorOpen, Monitor, Search, X } from 'lucide-react';
 import Modal from '@/components/ui/Modal';
+import { useRealtime } from '@/context/RealtimeContext';
 
 interface Session {
   id: number; day: string; start_time: string; end_time: string; type: string; ms_id: number;
@@ -31,13 +32,18 @@ export default function UnassignedRoomsPanel({ refreshKey = 0 }: { refreshKey?: 
   const [picked, setPicked] = useState<FacultyGroup | null>(null); // faculty window
   const [search, setSearch] = useState('');
 
-  const load = useCallback(() => {
-    fetch('/api/rooms/unassigned', { cache: 'no-store' })
-      .then(r => (r.ok ? r.json() : null))
-      .then(d => { if (d) setData(d); })
-      .catch(() => {});
-  }, []);
+  const load = useCallback(() => fetch('/api/rooms/unassigned', { cache: 'no-store' })
+    .then(r => (r.ok ? r.json() : null))
+    .then((d: Data | null) => {
+      if (!d) return;
+      setData(d);
+      // An open faculty window follows the fresh list
+      setPicked(prev => (prev ? (d.faculty ?? []).find(f => f.faculty_id === prev.faculty_id) ?? prev : prev));
+    })
+    .catch(() => {}), []);
   useEffect(() => { load(); }, [load, refreshKey]);
+  // Live updates: classes got a room (or lost one) elsewhere
+  useRealtime(['schedule', 'rooms'], load);
 
   const list = useMemo(() => {
     const q = search.trim().toLowerCase();

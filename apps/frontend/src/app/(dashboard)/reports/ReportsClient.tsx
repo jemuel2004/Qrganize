@@ -23,8 +23,12 @@ import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import AnchoredPopover from '@/components/ui/AnchoredPopover';
 import { FilterSelect } from '@/components/ui/SearchFilter';
 import { EmploymentBadge } from '@/components/ui/EmploymentBadge';
+import { Skeleton } from '@/components/ui/skeletons';
+import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
+import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import { useSchoolYear } from '@/context/SchoolYearContext';
 import { useToast } from '@/context/ToastContext';
+import { useRealtime } from '@/context/RealtimeContext';
 import { CURRICULUM_VERSIONS, DEFAULT_CURRICULUM_VERSION, curriculumVersionLabel, type CurriculumVersion } from '@shared/curriculumVersion';
 import { WorkloadPrintMenu } from '../faculty-schedules/FacultySchedulesClient';
 import { downloadCurriculumExcel, groupCurriculums, printCurriculum, type CurriculumRowLike } from '../program/curriculum/curriculumReport';
@@ -258,17 +262,24 @@ function ReportCard({ icon: Icon, title, text, href, children, actions, note, su
   );
 }
 
-function usePrograms(): ProgramOption[] {
+function usePrograms(): { programs: ProgramOption[]; loading: boolean } {
   const [programs, setPrograms] = useState<ProgramOption[]>([]);
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     const ctrl = new AbortController();
     fetch('/api/programs', { signal: ctrl.signal })
       .then(r => (r.ok ? r.json() : { programs: [] }))
       .then(d => setPrograms((d.programs ?? []) as ProgramOption[]))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => { if (!ctrl.signal.aborted) setLoading(false); });
     return () => ctrl.abort();
   }, []);
-  return programs;
+  // Live updates: a program was added elsewhere
+  useRealtime(['programs'], () => fetch('/api/programs')
+    .then(r => (r.ok ? r.json() : null))
+    .then(d => { if (d && Array.isArray(d.programs)) setPrograms(d.programs as ProgramOption[]); })
+    .catch(() => {}), { enabled: !loading });
+  return { programs, loading };
 }
 
 /* ─── Class Program ─────────────────────────────────────────────────────── */
@@ -304,6 +315,20 @@ function ClassProgramReport({ programs, semester, schoolYear }: {
       .finally(() => { if (!ctrl.signal.aborted) setBlocksLoading(false); });
     return () => ctrl.abort();
   }, [program, year, semester, schoolYear]);
+
+  // Live updates: blocks added or removed elsewhere (the picked block stays picked)
+  const blocksQuery = program && year && semester && schoolYear
+    ? new URLSearchParams({ program_id: program, year_level: year, semester, academic_year: schoolYear }).toString()
+    : '';
+  const shownBlocksQuery = useRef('');
+  useEffect(() => { shownBlocksQuery.current = blocksQuery; }, [blocksQuery]);
+  useRealtime(['blocks'], () => {
+    if (!blocksQuery) return;
+    return fetch(`/api/blocks?${blocksQuery}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d && shownBlocksQuery.current === blocksQuery) setBlocks((d.blocks ?? []) as BlockOption[]); })
+      .catch(() => {});
+  }, { enabled: !blocksLoading });
 
   async function onExcel() {
     if (!program || !year || !block || !semester) return;
@@ -446,21 +471,11 @@ function CurriculumReport({ programs }: { programs: ProgramOption[] }) {
 
 /* ─── Room QR Codes ─────────────────────────────────────────────────────── */
 
-function RoomQrReport() {
+function RoomQrReport({ rooms }: { rooms: RoomQR[] }) {
   const toast = useToast();
-  const [rooms, setRooms] = useState<RoomQR[]>([]);
   const [type, setType] = useState<'All' | 'Lecture' | 'Laboratory'>('All');
   const [busy, setBusy] = useState<Busy>(null);
   const [done, flashDone] = useDone();
-
-  useEffect(() => {
-    const ctrl = new AbortController();
-    fetch('/api/rooms/qr-codes', { signal: ctrl.signal, cache: 'no-store' })
-      .then(r => (r.ok ? r.json() : { rooms: [] }))
-      .then(d => setRooms((d.rooms ?? []) as RoomQR[]))
-      .catch(() => {});
-    return () => ctrl.abort();
-  }, []);
 
   const isLab = (t: string) => t === 'Laboratory' || t === 'Computer Lab';
   const list = rooms.filter(r => type === 'All' || (type === 'Laboratory' ? isLab(r.room_type) : !isLab(r.room_type)));
@@ -509,21 +524,48 @@ function RoomQrReport() {
 
 export default function ReportsClient() {
   const reduceMotion = useReducedMotion();
-  const { schoolYear, semester } = useSchoolYear();
+  const { schoolYear, semester, loading: termLoading } = useSchoolYear();
   const [faculty, setFaculty] = useState<FacultyOption[]>([]);
+  const [facultyLoading, setFacultyLoading] = useState(true);
   const [facultyId, setFacultyId] = useState<number | null>(null);
-  const programs = usePrograms();
+  const { programs, loading: programsLoading } = usePrograms();
+  const [rooms, setRooms] = useState<RoomQR[]>([]);
+  const [roomsLoading, setRoomsLoading] = useState(true);
+
+  const loadFaculty = useCallback((signal?: AbortSignal) => fetch('/api/faculty', { signal })
+    .then(r => (r.ok ? r.json() : { faculty: [] }))
+    .then(d => setFaculty(((d.faculty ?? []) as Record<string, unknown>[]).map(f => ({
+      id: Number(f.id), name: String(f.name ?? ''), employment_status: String(f.employment_status ?? ''), position: String(f.position ?? ''),
+    })))), []);
+  const loadRooms = useCallback((signal?: AbortSignal) => fetch('/api/rooms/qr-codes', { signal, cache: 'no-store' })
+    .then(r => (r.ok ? r.json() : { rooms: [] }))
+    .then(d => setRooms((d.rooms ?? []) as RoomQR[])), []);
 
   useEffect(() => {
     const ctrl = new AbortController();
-    fetch('/api/faculty', { signal: ctrl.signal })
-      .then(r => (r.ok ? r.json() : { faculty: [] }))
-      .then(d => setFaculty(((d.faculty ?? []) as Record<string, unknown>[]).map(f => ({
-        id: Number(f.id), name: String(f.name ?? ''), employment_status: String(f.employment_status ?? ''), position: String(f.position ?? ''),
-      }))))
-      .catch(() => {});
+    loadFaculty(ctrl.signal)
+      .catch(() => {})
+      .finally(() => { if (!ctrl.signal.aborted) setFacultyLoading(false); });
     return () => ctrl.abort();
-  }, []);
+  }, [loadFaculty]);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    loadRooms(ctrl.signal)
+      .catch(() => {})
+      .finally(() => { if (!ctrl.signal.aborted) setRoomsLoading(false); });
+    return () => ctrl.abort();
+  }, [loadRooms]);
+
+  // Live updates: the pickers follow faculty and room changes made elsewhere
+  // (reports themselves are always built from fresh data when generated)
+  useRealtime(['faculty'], () => loadFaculty().catch(() => {}), { enabled: !facultyLoading });
+  useRealtime(['rooms'], () => loadRooms().catch(() => {}), { enabled: !roomsLoading });
+
+  /* One skeleton for the whole page until the term, faculty, programs and rooms
+     are in — otherwise the cards filled in one by one and the "Set the active
+     school year first" message flashed while the term was still loading. */
+  const showSkeleton = useMinLoading(termLoading || facultyLoading || programsLoading || roomsLoading, LOADING_DELAY);
 
   const picked = faculty.find(f => f.id === facultyId) ?? null;
   const termReady = !!semester && !!schoolYear;
@@ -540,6 +582,7 @@ export default function ReportsClient() {
         <WatermarkTitle>Reports</WatermarkTitle>
       </div>
 
+      <PageLoadTransition showSkeleton={showSkeleton} skeleton={<ReportsSkeleton />}>
       {/* Active term */}
       <div className="mb-5 flex flex-wrap items-center gap-2 text-sm">
         <span className="inline-flex items-center gap-2 h-9 px-3.5 rounded-xl border border-[#D6E0EF] bg-white font-semibold text-[#0B2A5B]">
@@ -592,7 +635,64 @@ export default function ReportsClient() {
       <div className="mt-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         <motion.div {...rise(1)}><ClassProgramReport programs={programs} semester={semester} schoolYear={schoolYear} /></motion.div>
         <motion.div {...rise(2)}><CurriculumReport programs={programs} /></motion.div>
-        <motion.div {...rise(3)}><RoomQrReport /></motion.div>
+        <motion.div {...rise(3)}><RoomQrReport rooms={rooms} /></motion.div>
+      </div>
+      </PageLoadTransition>
+    </div>
+  );
+}
+
+/** Reports page skeleton — term chip, the Workload Form card, three report cards. */
+function ReportsSkeleton() {
+  return (
+    <div role="status" aria-live="polite" aria-label="Loading reports">
+      <div className="mb-5 flex flex-wrap items-center gap-2">
+        <Skeleton className="h-9 w-64 rounded-xl" />
+        <Skeleton className="h-4 w-56 rounded" />
+      </div>
+      <div className={`${CARD} p-5 sm:p-6`}>
+        <div className="flex flex-col lg:flex-row lg:items-center gap-5 lg:gap-8">
+          <div className="flex items-start gap-3.5 lg:flex-1">
+            <Skeleton className="w-11 h-11 rounded-xl flex-shrink-0" />
+            <div className="flex-1 space-y-2">
+              <Skeleton className="h-5 w-48 rounded" />
+              <Skeleton className="h-3.5 w-64 max-w-full rounded" />
+            </div>
+          </div>
+          <div className="w-full lg:w-[440px] flex-shrink-0 space-y-3">
+            <Skeleton className="h-12 w-full rounded-xl" />
+            <Skeleton className="h-4 w-60 rounded" />
+          </div>
+        </div>
+      </div>
+      <div className="mt-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {Array.from({ length: 3 }, (_, i) => (
+          <div key={i} className={`${CARD} p-5 flex flex-col`}>
+            <div className="flex items-start gap-3">
+              <Skeleton className="w-11 h-11 rounded-xl flex-shrink-0" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-4 w-32 rounded" />
+                <Skeleton className="h-3.5 w-44 max-w-full rounded" />
+              </div>
+            </div>
+            <div className="mt-4 space-y-3">
+              {Array.from({ length: 2 }, (_, f) => (
+                <div key={f} className="space-y-1.5">
+                  <Skeleton className="h-3 w-20 rounded" />
+                  <Skeleton className="h-11 w-full rounded-xl" />
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 flex gap-2">
+              <Skeleton className="h-11 flex-1 rounded-xl" />
+              <Skeleton className="h-11 flex-1 rounded-xl" />
+            </div>
+            <div className="mt-3 pt-3 border-t border-[#F1F5F9] flex justify-between">
+              <Skeleton className="h-3 w-28 rounded" />
+              <Skeleton className="h-3.5 w-20 rounded" />
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

@@ -7,7 +7,7 @@ import { roleLabel } from '@/lib/roleAccess';
 import { useScrollLock } from '@/hooks/useScrollLock';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import BackButton from '@/components/ui/BackButton';
-import { FormSkeleton } from '@/components/ui/skeletons';
+import { FormSkeleton, Skeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import {
   CheckCircle, AlertTriangle, X, Eye, EyeOff, ShieldCheck,
@@ -445,9 +445,11 @@ function ProfileSettingsSection() {
 
   const dirty = user && (form.username !== user.username || form.email !== user.email);
 
+  // Same shape as the form below (Username | Email, then the role line) — not a spinner
   if (loading) return (
-    <div className="flex items-center justify-center py-6">
-      <div className="w-5 h-5 border-2 border-[#E2E8F0] border-t-[#1D5BD6] rounded-full animate-spin" />
+    <div className="space-y-3">
+      <FormSkeleton fields={2} columns={2} bare />
+      <Skeleton className="h-3 w-32 rounded" />
     </div>
   );
 

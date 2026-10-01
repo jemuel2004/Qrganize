@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useToast } from '@/context/ToastContext';
+import { useRealtime } from '@/context/RealtimeContext';
 import { useScrollLock } from '@/hooks/useScrollLock';
 import ImageCropDialog from '@/components/ui/ImageCropDialog';
 import BackButton from '@/components/ui/BackButton';
@@ -10,7 +11,7 @@ import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useSystemLogo } from '@/hooks/useSystemLogo';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
-import { FormSkeleton } from '@/components/ui/skeletons';
+import { FormSkeleton, Skeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import {
   CheckCircle, ImagePlus, Trash2, Upload, AlertTriangle, X,
@@ -456,9 +457,11 @@ function OwnProfileSettings() {
 
   const dirty = user && (form.username !== user.username || form.email !== user.email);
 
+  // Same shape as the form below (Username | Email, then the role line) — not a spinner
   if (loading) return (
-    <div className="flex items-center justify-center py-6">
-      <div className="w-5 h-5 border-2 border-[#E2E8F0] border-t-[#1D5BD6] rounded-full animate-spin" />
+    <div className="space-y-3">
+      <FormSkeleton fields={2} columns={2} bare />
+      <Skeleton className="h-3 w-32 rounded" />
     </div>
   );
 
@@ -783,8 +786,9 @@ function SchoolYearSection() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
-  async function load() {
-    setLoading(true);
+  /** silent: live-update refresh — the list stays on screen */
+  async function load(silent = false) {
+    if (!silent) setLoading(true);
     try {
       const res = await fetch('/api/school-years');
       if (!res.ok) return;
@@ -792,10 +796,16 @@ function SchoolYearSection() {
       setYears(data.years ?? []);
       setSemester(data.currentSemester ?? '1st Semester');
     } catch { /* silent */ }
-    finally { setLoading(false); }
+    finally { if (!silent) setLoading(false); }
   }
 
   useEffect(() => { load(); }, []);
+
+  // Live updates: another admin added, activated or archived a school year or
+  // changed the semester. Held while this section is saving.
+  useRealtime(['term'], () => load(true), {
+    enabled: !loading && !creating && semBusy === null && actionId === null && deletingId === null,
+  });
 
   async function addYear(label: string) {
     const clean = label.trim().replace('–', '-').replace('—', '-');

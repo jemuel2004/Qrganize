@@ -15,6 +15,7 @@ import { useScrollLock } from '@/hooks/useScrollLock';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import { ListSkeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
+import { useRealtime } from '@/context/RealtimeContext';
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 interface SessionData {
@@ -640,8 +641,9 @@ export default function RoomRequestsClient() {
   const [checkingRooms, setCheckingRooms] = useState(false);
   const reduceMotion = useReducedMotion();
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  /** silent: live-update refresh — the lists stay on screen */
+  const loadData = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [reqRes, schedRes, roomsRes] = await Promise.all([
         fetch('/api/instructor/room-requests'),
@@ -651,12 +653,18 @@ export default function RoomRequestsClient() {
       if (reqRes.ok) setRequests((await reqRes.json()).requests || []);
       if (schedRes.ok) setSchedules((await schedRes.json()).schedules || []);
       if (roomsRes.ok) setRooms((await roomsRes.json()).rooms || []);
-    } finally {
-      setLoading(false);
+    } catch { /* connection blip — keep what is on screen */ }
+    finally {
+      if (!silent) setLoading(false);
     }
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Live updates: a request approved, rejected or expired, a class moved, a room
+  // taken or freed — quiet reload. An open request form keeps its picks; the
+  // selected class's rooms are re-checked against the new state.
+  useRealtime(['room-requests', 'schedule', 'occupancy', 'rooms'], () => loadData(true), { enabled: !loading && !submitting });
 
   // Arrived from the dashboard's "Request" button (?room=<id>) — open the form with that room picked
   const preselected = useRef(false);

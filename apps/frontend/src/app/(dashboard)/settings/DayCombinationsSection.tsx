@@ -7,11 +7,12 @@
  * list never alters existing schedules — it governs new scheduling only.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { CalendarDays, Info, Loader2, Plus, Trash2 } from 'lucide-react';
 import { useSchoolYear } from '@/context/SchoolYearContext';
 import { useToast } from '@/context/ToastContext';
+import { useRealtime } from '@/context/RealtimeContext';
 import { fetchDayCombinations, invalidateDayCombinations } from '@/lib/dayCombinations';
 import {
   DAY_COMBINATION_PRESETS, WEEK_DAYS, daysCode, daysKey, daysLabel, shortDay, sortDays, type WeekDay,
@@ -47,6 +48,21 @@ export default function DayCombinationsSection() {
   }, [schoolYear, semester]);
 
   const dirty = rows !== null && JSON.stringify(rows) !== saved;
+
+  // Live updates: another admin saved this term's combinations. Unsaved edits
+  // here always win — the list only follows while nothing is being edited.
+  const dirtyRef = useRef(dirty);
+  useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
+  useRealtime(['settings'], () => {
+    if (!schoolYear || !semester || dirtyRef.current || saving) return;
+    invalidateDayCombinations();
+    return fetchDayCombinations(semester, schoolYear).then(d => {
+      if (!d.academic_year || dirtyRef.current) return; // failed check, or editing started meanwhile
+      const list = d.combinations.map(c => toRow(c.days, c.is_active));
+      setRows(list);
+      setSaved(JSON.stringify(list));
+    });
+  });
   const activeCount = rows?.filter(r => r.is_active).length ?? 0;
   const presets = useMemo(
     () => DAY_COMBINATION_PRESETS.filter(p => !rows?.some(r => r.key === daysKey(p))),

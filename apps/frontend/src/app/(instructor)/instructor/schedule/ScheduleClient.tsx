@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
-import { useRefreshOnNewNotification } from '@/hooks/useRefreshOnNewNotification';
+import { useRealtime } from '@/context/RealtimeContext';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import BackButton from '@/components/ui/BackButton';
@@ -278,7 +278,7 @@ export default function ScheduleClient() {
 
   const load = useCallback((silent = false) => {
     if (!silent) { setLoading(true); setError(''); }
-    fetch('/api/instructor/my-schedule')
+    return fetch('/api/instructor/my-schedule')
       .then(r => r.ok ? r.json() : Promise.reject(r))
       .then(d => {
         setSchedules(d.schedules || []);
@@ -292,9 +292,11 @@ export default function ScheduleClient() {
 
   useEffect(() => { load(); }, [load]);
 
-  useVisibilityAwareInterval(() => load(true), 30_000);
-  // New notification (e.g. a subject assigned or scheduled) → refresh right away
-  useRefreshOnNewNotification(() => load(true));
+  // Live updates: a class assigned, scheduled or moved to another room, a room
+  // taken or freed, a request decided — the schedule reloads quietly
+  useRealtime(['schedule', 'workload', 'rooms', 'occupancy', 'room-requests', 'term'], () => load(true), { enabled: !loading });
+  // Fallback for time-based changes (the current class, live room status)
+  useVisibilityAwareInterval(() => load(true), 60_000);
 
   const showSkeleton = useMinLoading(loading && schedules.length === 0 && !error, PAGE_SKELETON_MIN_MS);
 

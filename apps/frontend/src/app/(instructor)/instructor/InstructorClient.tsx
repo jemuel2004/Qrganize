@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useInstructorProfile } from '@/context/InstructorProfileContext';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
-import { useRefreshOnNewNotification } from '@/hooks/useRefreshOnNewNotification';
+import { useRealtime } from '@/context/RealtimeContext';
 import { useToast } from '@/context/ToastContext';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
@@ -180,7 +180,8 @@ function DashHeader({
   );
 }
 
-const POLL_MS = 30_000;
+/** Fallback for time-based changes (classes starting / ending) — data changes arrive live. */
+const POLL_MS = 60_000;
 const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
 /* ─── Main component ─────────────────────────────────────────────── */
@@ -257,9 +258,10 @@ export default function InstructorDashboard() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  // Live updates: classes assigned or moved, rooms taken or freed, requests
+  // decided — the dashboard reloads quietly
+  useRealtime(['schedule', 'workload', 'occupancy', 'room-requests', 'rooms', 'term'], () => load(true), { enabled: !loading });
   useVisibilityAwareInterval(() => load(true), POLL_MS);
-  // New notification (e.g. a subject assigned) → refresh right away
-  useRefreshOnNewNotification(() => load(true));
 
   const showSkeleton = useMinLoading(loading && !data, PAGE_SKELETON_MIN_MS);
 

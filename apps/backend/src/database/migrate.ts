@@ -4,6 +4,7 @@ import path from 'path';
 import bcrypt from 'bcryptjs';
 import { ensureCurriculumVersion, ensureBlockCurriculumVersion } from './migrateCurriculum';
 import { ensureAuditTable } from './auditSchema';
+import { ensureRealtimeTable } from './realtimeSchema';
 import { canonicalSubjectCode, subjectKey } from '@shared/subjectCode';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -875,6 +876,11 @@ async function v47_curriculumCategoryManual() {
   await query(`ALTER TABLE curriculums ADD COLUMN IF NOT EXISTS subject_category_manual BOOLEAN NOT NULL DEFAULT false`);
 }
 
+/** Real-time sync: one version row per topic (services/realtime.ts). */
+async function v48_realtimeVersions() {
+  await ensureRealtimeTable();
+}
+
 /** One-time: each faculty is assigned the blocks they already teach, so the new
  *  block filter on Faculty Workload doesn't hide their current classes. */
 async function v45_seedFacultyBlocks() {
@@ -980,6 +986,7 @@ const MIGRATIONS: Array<{ version: number; name: string; fn: () => Promise<void>
   { version: 45, name: 'seed faculty_blocks from current loads',  fn: v45_seedFacultyBlocks },
   { version: 46, name: 'semester_day_combinations table',         fn: v46_semesterDayCombinations },
   { version: 47, name: 'curriculum manual subject_category',      fn: v47_curriculumCategoryManual },
+  { version: 48, name: 'realtime_versions table',                 fn: v48_realtimeVersions },
 ];
 
 // ─── public entry point ───────────────────────────────────────────────────────

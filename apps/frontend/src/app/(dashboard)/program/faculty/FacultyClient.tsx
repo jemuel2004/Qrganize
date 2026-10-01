@@ -18,6 +18,7 @@ import BlockMultiSelect, { type BlockOption } from '@/components/ui/BlockMultiSe
 import FriendlySelect from '@/components/ui/FriendlySelect';
 import { formatLoadCap, shownUnitsCap } from '@shared/regularLoad';
 import { useSchoolYear } from '@/context/SchoolYearContext';
+import { useRealtime } from '@/context/RealtimeContext';
 import { SearchInput, FilterSelect } from '@/components/ui/SearchFilter';
 import { ListSkeleton, CardSkeleton, Skeleton } from '@/components/ui/skeletons';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
@@ -448,6 +449,13 @@ export default function FacultyPage() {
       .then(d => setFaculty(d.faculty || []))
       .finally(() => setListLoading(false));
   }
+
+  // Live updates: faculty added, edited, deactivated or their account changed
+  // elsewhere — the list reloads quietly (search, filter, page and open forms stay).
+  useRealtime(['faculty'], () => fetch('/api/faculty')
+    .then(r => (r.ok ? r.json() : null))
+    .then(d => { if (d && Array.isArray(d.faculty)) setFaculty(d.faculty); })
+    .catch(() => {}), { enabled: !listLoading });
 
   const fullName = computeFullName(form.first_name, form.middle_name, form.last_name);
 

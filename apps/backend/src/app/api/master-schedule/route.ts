@@ -4,6 +4,7 @@ import { getAuthUser } from '@/auth/auth';
 import { ensureCurriculumFields } from '@/database/migrateCurriculum';
 import { effectiveSubjectCategorySql } from '@shared/subjectCategory';
 import { resolveProgramScope, isScopedChair } from '@/services/programScope';
+import { bumpTopics } from '@/services/realtime';
 
 export async function GET(req: NextRequest) {
   try {
@@ -67,7 +68,7 @@ export async function GET(req: NextRequest) {
       if (semester)           { backfillWhere += ` AND b.semester      = $${bIdx++}`; backfillParams.push(semester); }
       if (academicYear)       { backfillWhere += ` AND b.academic_year = $${bIdx++}`; backfillParams.push(academicYear); }
 
-      await query(
+      const backfilled = await query(
         `INSERT INTO master_schedule (block_subject_id, status, academic_year, semester)
          SELECT bs.id, 'Unassigned', b.academic_year, b.semester
          FROM block_subjects bs
@@ -78,6 +79,7 @@ export async function GET(req: NextRequest) {
            AND NOT EXISTS (SELECT 1 FROM master_schedule ms2 WHERE ms2.block_subject_id = bs.id)`,
         backfillParams,
       );
+      if ((backfilled.rowCount ?? 0) > 0) bumpTopics(['schedule', 'workload', 'blocks']);
     }
 
     // Inner query: deduplicate via DISTINCT ON so each block_subject contributes exactly

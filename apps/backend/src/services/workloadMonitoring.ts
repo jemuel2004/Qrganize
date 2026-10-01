@@ -4,6 +4,7 @@ import { loadFacultyLoadSummaries } from '@/services/facultyLoadSummaries';
 import { fetchBlocksWithAssignmentCounts } from '@/services/blockAssignmentCounts';
 import { CONDITION_TYPES_SQL, ensureNotificationsTable } from '@/services/notifications';
 import { expireStaleRoomRequests } from '@/services/ensureRoomOccupancy';
+import { bumpNotifications } from '@/services/realtime';
 import { isRegularLoadComplete, shownUnitsCap, shownUnitsLeft } from '@shared/regularLoad';
 import {
   blockCurriculumVersion,
@@ -468,18 +469,24 @@ function alertsFor(snapshot: WorkloadMonitoringSnapshot, requests: PendingReques
 /**
  * Bring one recipient's condition alerts in line with the current state in
  * three queries: upsert what holds, announce what got resolved by finishing
- * the work, delete the rest. Read state survives an upsert.
+ * the work, delete the rest. Read state survives an upsert. Open tabs of that
+ * recipient are told to refresh only when something actually changed.
  */
 async function syncRecipient(recipientRole: Recipient, recipientId: number, alerts: Alert[], snapshot: WorkloadMonitoringSnapshot) {
+  let changed = 0;
   if (alerts.length > 0) {
-    await query(`
+    // Unchanged alerts are left alone (no rewrite, no refresh)
+    const upserted = await query(`
       INSERT INTO notifications (recipient_id, recipient_role, title, message, type, related_module, related_id)
       SELECT $1, $2, a.title, a.message, a.type, a.module, a.id
       FROM unnest($3::text[], $4::text[], $5::text[], $6::text[], $7::int[]) AS a(type, title, message, module, id)
       ON CONFLICT (recipient_role, recipient_id, type, related_module, related_id)
         WHERE type IN (${CONDITION_TYPES_SQL})
       DO UPDATE SET title = EXCLUDED.title, message = EXCLUDED.message
+        WHERE notifications.title IS DISTINCT FROM EXCLUDED.title
+           OR notifications.message IS DISTINCT FROM EXCLUDED.message
     `, [recipientId, recipientRole, alerts.map(a => a.type), alerts.map(a => a.title), alerts.map(a => a.message), alerts.map(a => a.module), alerts.map(a => a.id)]);
+    changed += upserted.rowCount ?? 0;
   }
 
   // Alerts that are about to disappear
@@ -500,7 +507,7 @@ async function syncRecipient(recipientRole: Recipient, recipientId: number, aler
   const blocksDone = (gone.rows as { type: string; related_id: number }[])
     .filter(r => r.type === 'block_schedule_incomplete' && doneBlocks.has(Number(r.related_id))).map(r => Number(r.related_id));
   if (facultyDone.length || blocksDone.length) {
-    await query(`
+    const noted = await query(`
       INSERT INTO notifications (recipient_id, recipient_role, title, message, type, related_module, related_id)
       SELECT $1::int, $2::text, 'Workload Completed', f.name || ' has completed their workload.', 'workload_completed', '${FACULTY_MODULE}', f.id
       FROM faculty f WHERE f.id = ANY($3::int[])
@@ -510,10 +517,11 @@ async function syncRecipient(recipientRole: Recipient, recipientId: number, aler
              'schedule_completed', '${BLOCK_MODULE}', b.id
       FROM blocks b LEFT JOIN programs p ON p.id = b.program_id WHERE b.id = ANY($4::int[])
     `, [recipientId, recipientRole, facultyDone, blocksDone]);
+    changed += noted.rowCount ?? 0;
   }
 
   if (gone.rows.length > 0) {
-    await query(`
+    const removed = await query(`
       DELETE FROM notifications n
       WHERE n.recipient_role = $1 AND n.recipient_id = $2 AND n.type IN (${CONDITION_TYPES_SQL})
         AND NOT EXISTS (
@@ -521,10 +529,27 @@ async function syncRecipient(recipientRole: Recipient, recipientId: number, aler
           WHERE k.type = n.type AND k.module = n.related_module AND k.id = n.related_id
         )
     `, [recipientRole, recipientId, alerts.map(a => a.type), alerts.map(a => a.module), alerts.map(a => a.id)]);
+    changed += removed.rowCount ?? 0;
   }
+
+  if (changed > 0) bumpNotifications(recipientRole, recipientId);
 }
 
 let lastSyncMs = 0;
+let followUpTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Re-check the condition alerts shortly after blocks, schedules, loads,
+ * faculty or room requests change — one run per burst of saves, so a busy
+ * admin session doesn't recompute after every click.
+ */
+export function scheduleWorkloadMonitoringSync(delayMs = 1_500): void {
+  if (followUpTimer) clearTimeout(followUpTimer);
+  followUpTimer = setTimeout(() => {
+    followUpTimer = null;
+    void syncWorkloadMonitoringNotifications(true);
+  }, delayMs);
+}
 
 export async function syncWorkloadMonitoringNotifications(
   force = false,
@@ -555,7 +580,13 @@ export async function syncWorkloadMonitoringNotifications(
     await syncRecipient('admin', 0, alertsFor(full, requests), full);
     await syncRecipient('department_chair', 0, alertsFor(full, requests), full);
     // Old event-style "New Room Request" rows are replaced by the live pending alert
-    await query(`DELETE FROM notifications WHERE type = 'room_request_submitted' AND recipient_role <> 'instructor'`);
+    const replaced = await query(`
+      DELETE FROM notifications WHERE type = 'room_request_submitted' AND recipient_role <> 'instructor'
+      RETURNING recipient_role, recipient_id
+    `);
+    for (const r of replaced.rows as { recipient_role: string; recipient_id: number }[]) {
+      bumpNotifications(r.recipient_role, Number(r.recipient_id));
+    }
 
     const chairs = await query(`
       SELECT id, program_id
@@ -571,12 +602,16 @@ export async function syncWorkloadMonitoringNotifications(
 
     // Condition alerts only belong to current recipients: admin / department chair
     // share id 0, program chairs are per user. Anything else is a leftover duplicate.
-    await query(`
+    const leftovers = await query(`
       DELETE FROM notifications
       WHERE type IN (${CONDITION_TYPES_SQL})
         AND ((recipient_role IN ('admin', 'department_chair') AND recipient_id <> 0)
           OR (recipient_role = 'program_chair' AND recipient_id <> ALL($1::int[])))
+      RETURNING recipient_role, recipient_id
     `, [(chairs.rows as { id: number }[]).map(c => Number(c.id))]);
+    for (const r of leftovers.rows as { recipient_role: string; recipient_id: number }[]) {
+      bumpNotifications(r.recipient_role, Number(r.recipient_id));
+    }
   } catch (e) {
     console.error('[syncWorkloadMonitoringNotifications]', e);
   }

@@ -19,6 +19,7 @@ import { CardSkeleton } from '@/components/ui/skeletons';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
 import { useToast } from '@/context/ToastContext';
+import { useRealtime } from '@/context/RealtimeContext';
 import { downloadQR, printRooms, type RoomQR } from './qrReport';
 
 type TypeTab = 'All' | 'Lecture' | 'Laboratory';
@@ -117,6 +118,13 @@ export default function QRGeneratorPage() {
     load();
     return () => { if (savedTimer.current) clearTimeout(savedTimer.current); };
   }, [load]);
+
+  // Live updates: rooms added or QR codes generated elsewhere — quiet reload
+  // (the preview follows by id). Held while this page is generating codes.
+  useRealtime(['rooms'], () => fetch('/api/rooms/qr-codes', { cache: 'no-store' })
+    .then(r => (r.ok ? r.json() : null))
+    .then(d => { if (d && Array.isArray(d.rooms)) setRooms(d.rooms); })
+    .catch(() => {}), { enabled: !loading && busy === null });
 
   const preview = rooms.find(r => r.id === previewId) ?? null;
   const counts = useMemo(() => ({

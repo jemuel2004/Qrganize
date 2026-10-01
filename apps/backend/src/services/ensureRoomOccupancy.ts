@@ -1,4 +1,5 @@
 import { query } from '@/database/db';
+import { bumpTopics } from '@/services/realtime';
 
 let ready = false;
 let rcrSchemaReady = false;
@@ -123,24 +124,24 @@ export async function expireStaleOccupancy(roomId?: number): Promise<void> {
       )
     )
   `;
-  if (roomId !== undefined) {
-    await query(`
+  const expired = roomId !== undefined
+    ? await query(`
       UPDATE room_occupancy
       SET    status = 'Expired', released_at = NOW()
       WHERE  room_id = $1
         AND  status IN ('Pending', 'Occupied')
         AND  expires_at < NOW()
         ${inUseGuard}
-    `, [roomId]);
-  } else {
-    await query(`
+    `, [roomId])
+    : await query(`
       UPDATE room_occupancy
       SET    status = 'Expired', released_at = NOW()
       WHERE  status IN ('Pending', 'Occupied')
         AND  expires_at < NOW()
         ${inUseGuard}
     `);
-  }
+  // Time-based change — open tabs refresh the rooms that just freed up
+  if ((expired.rowCount ?? 0) > 0) bumpTopics(['occupancy']);
 
   await restoreSchedulesAfterReleasedRequests();
 }
@@ -151,7 +152,7 @@ export async function expireStaleOccupancy(roomId?: number): Promise<void> {
  * original_room_id so the room can be requested again.
  */
 async function restoreSchedulesAfterReleasedRequests(): Promise<void> {
-  await query(`
+  const classes = await query(`
     WITH latest AS (
       SELECT DISTINCT ON (master_schedule_id)
              master_schedule_id,
@@ -169,15 +170,16 @@ async function restoreSchedulesAfterReleasedRequests(): Promise<void> {
     WHERE  ms.id = latest.master_schedule_id
       AND  latest.status = 'Released'
       AND  ms.room_id IS NOT DISTINCT FROM latest.requested_room_id
+      AND  ms.room_id IS DISTINCT FROM latest.original_room_id
       AND  NOT EXISTS (
              SELECT 1 FROM room_occupancy ro
              WHERE  ro.room_id    = latest.requested_room_id
                AND  ro.faculty_id = latest.faculty_id
                AND  ro.status IN ('Pending', 'Occupied')
            )
-  `).catch(() => {});
+  `).catch(() => null);
 
-  await query(`
+  const sessions = await query(`
     WITH latest AS (
       SELECT DISTINCT ON (master_schedule_id)
              master_schedule_id,
@@ -195,13 +197,16 @@ async function restoreSchedulesAfterReleasedRequests(): Promise<void> {
     WHERE  ss.master_schedule_id = latest.master_schedule_id
       AND  latest.status = 'Released'
       AND  ss.room_id IS NOT DISTINCT FROM latest.requested_room_id
+      AND  ss.room_id IS DISTINCT FROM latest.original_room_id
       AND  NOT EXISTS (
              SELECT 1 FROM room_occupancy ro
              WHERE  ro.room_id    = latest.requested_room_id
                AND  ro.faculty_id = latest.faculty_id
                AND  ro.status IN ('Pending', 'Occupied')
            )
-  `).catch(() => {});
+  `).catch(() => null);
+
+  if ((classes?.rowCount ?? 0) + (sessions?.rowCount ?? 0) > 0) bumpTopics(['schedule', 'workload']);
 }
 
 /**
@@ -223,6 +228,7 @@ export async function completeRoomRelease(
   `, [roomId, facultyId]);
 
   if (released.rows.length === 0) return false;
+  bumpTopics(['occupancy']);
 
   const closed = await query(`
     UPDATE room_change_requests
@@ -234,6 +240,7 @@ export async function completeRoomRelease(
       AND  status            = 'In-Use'
     RETURNING master_schedule_id, original_room_id
   `, [facultyId, roomId]);
+  if (closed.rows.length > 0) bumpTopics(['room-requests', 'schedule', 'workload']);
 
   for (const row of closed.rows) {
     if (!row.master_schedule_id) continue;
@@ -258,7 +265,7 @@ export async function completeRoomRelease(
  */
 export async function expireStaleRoomRequests(): Promise<void> {
   await ensureRoomRequestsSchema();
-  await query(`
+  const expired = await query(`
     UPDATE room_change_requests
     SET    status     = 'Expired',
            updated_at = NOW(),
@@ -269,7 +276,8 @@ export async function expireStaleRoomRequests(): Promise<void> {
            )
     WHERE  status               = 'Pending Confirmation'
       AND  confirmation_deadline < NOW()
-  `).catch(() => {});
+  `).catch(() => null);
+  if ((expired?.rowCount ?? 0) > 0) bumpTopics(['room-requests']);
   await purgeOldRoomRequestHistory();
 }
 
@@ -279,7 +287,7 @@ export async function expireStaleRoomRequests(): Promise<void> {
  * An Approved request whose room is still held is kept until it ends.
  */
 async function purgeOldRoomRequestHistory(): Promise<void> {
-  await query(`
+  const purged = await query(`
     DELETE FROM room_change_requests rcr
     WHERE  rcr.status IN ('Approved', 'Rejected', 'Released', 'Expired')
       -- updated_at / created_at are naive timestamps already in Manila local time
@@ -293,5 +301,6 @@ async function purgeOldRoomRequestHistory(): Promise<void> {
                  AND  ro.status IN ('Pending', 'Occupied')
              )
            )
-  `).catch(err => console.error('[purgeOldRoomRequestHistory]', err));
+  `).catch(err => { console.error('[purgeOldRoomRequestHistory]', err); return null; });
+  if ((purged?.rowCount ?? 0) > 0) bumpTopics(['room-requests']);
 }

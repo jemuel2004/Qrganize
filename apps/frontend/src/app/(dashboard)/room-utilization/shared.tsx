@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { BookOpen, CalendarDays, Check, ChevronDown, Monitor, RefreshCw } from 'lucide-react';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
+import { useRealtime } from '@/context/RealtimeContext';
 
 /* ─── Types (mirror /api/rooms/utilization) ─────────────────────────────── */
 
@@ -53,19 +54,22 @@ export function useUtilization(date: string, view: View, roomId?: number, pollMs
     ctrl.current = c;
     if (!opts.silent) setLoading(true);
     const qs = new URLSearchParams({ view, ...(date ? { date } : {}), ...(roomId ? { room_id: String(roomId) } : {}) });
-    fetch(`/api/rooms/utilization?${qs}`, { signal: c.signal })
+    return fetch(`/api/rooms/utilization?${qs}`, { signal: c.signal })
       .then(async r => {
         const d = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(d.error || 'Failed to load room utilization.');
         setData(d);
         setError('');
       })
-      .catch(e => { if (!c.signal.aborted) setError(e instanceof Error ? e.message : 'Failed to load.'); })
+      // A failed background refresh keeps what is on screen
+      .catch(e => { if (!c.signal.aborted && !opts.silent) setError(e instanceof Error ? e.message : 'Failed to load.'); })
       .finally(() => { if (!c.signal.aborted) setLoading(false); });
   }, [date, view, roomId]);
 
   useEffect(() => { load(); return () => ctrl.current?.abort(); }, [load]);
-  // Live data only changes for ranges that include today — background refresh is quiet
+  // Live updates: check-ins, releases, room or schedule changes made anywhere
+  useRealtime(['rooms', 'occupancy', 'schedule', 'term'], () => load({ silent: true }), { enabled: !loading });
+  // Time moves on too — ranges that include today also refresh on a timer (quietly)
   useVisibilityAwareInterval(() => {
     if (data && data.range.start <= data.today && data.range.end >= data.today) load({ silent: true });
   }, pollMs);

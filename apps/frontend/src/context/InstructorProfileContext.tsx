@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { useRealtime } from '@/context/RealtimeContext';
 
 function cacheBustDisplayUrl(url: string | null | undefined): string | null {
   if (!url) return null;
@@ -36,23 +37,31 @@ export function InstructorProfileProvider({ children }: { children: React.ReactN
   const [facultyId, setFacultyId] = useState<number | null>(null);
   const [hasCustomPhoto, setHasCustomPhoto] = useState(false);
 
+  const load = useCallback((signal?: AbortSignal) => fetch('/api/auth/me', { signal })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => {
+      if (d?.user) {
+        setName(d.user.name || d.user.username || '');
+        setFacultyId(d.user.faculty_id ?? null);
+        setHasCustomPhoto(d.user.has_custom_profile_picture === true);
+        // Same picture path → keep the current URL so the photo doesn't reload
+        const next: string | null = d.user.profile_picture ?? null;
+        setPicUrl(prev => (prev && next && prev.split('?')[0] === next.split('?')[0] ? prev : cacheBustDisplayUrl(next)));
+      }
+    })
+    // Network blips (server restarting, reload mid-request) are transient —
+    // warn instead of error so they don't trigger the dev error overlay.
+    .catch(e => { if (e?.name !== 'AbortError') console.warn('[InstructorProfile] could not load profile:', e instanceof Error ? e.message : e); }),
+  []);
+
   useEffect(() => {
     const controller = new AbortController();
-    fetch('/api/auth/me', { signal: controller.signal })
-      .then(r => r.ok ? r.json() : null)
-      .then(d => {
-        if (d?.user) {
-          setName(d.user.name || d.user.username || '');
-          setFacultyId(d.user.faculty_id ?? null);
-          setHasCustomPhoto(d.user.has_custom_profile_picture === true);
-          setPicUrl(cacheBustDisplayUrl(d.user.profile_picture ?? null));
-        }
-      })
-      // Network blips (server restarting, reload mid-request) are transient —
-      // warn instead of error so they don't trigger the dev error overlay.
-      .catch(e => { if (e?.name !== 'AbortError') console.warn('[InstructorProfile] could not load profile:', e instanceof Error ? e.message : e); });
+    load(controller.signal);
     return () => controller.abort();
-  }, []);
+  }, [load]);
+
+  // An admin edited this faculty's record (name, account, photo)
+  useRealtime(['faculty'], () => load());
 
   useEffect(() => {
     function onPictureChanged(e: Event) {

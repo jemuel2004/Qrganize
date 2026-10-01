@@ -697,7 +697,8 @@ export default function LoginClient() {
             onClick={() => selectRole(role === 'admin_chair' ? 'instructor' : 'admin_chair')}
             aria-label={role === 'admin_chair' ? 'Switch to Faculty sign in' : 'Switch to Administrator / Chair sign in'}
             title={role === 'admin_chair' ? 'Faculty' : 'Administrator / Chair'}
-            className="group z-20 mx-auto mt-6 lg:mt-0 lg:fixed lg:left-1/2 lg:top-1/2 lg:-translate-x-1/2 lg:-translate-y-1/2 w-14 h-14 rounded-full bg-white border border-[#E3E9F3] text-[#0B2A5B] shadow-[0_10px_28px_-10px_rgba(11,42,91,0.45)] flex items-center justify-center overflow-hidden transition-all duration-200 hover:text-[#1D5BD6] hover:border-[#BFD3F5] hover:shadow-[0_12px_30px_-10px_rgba(29,91,214,0.55)] active:scale-95"
+            // Desktop only — on phones the Role buttons already switch the card
+            className="group z-20 hidden lg:flex lg:fixed lg:left-1/2 lg:top-1/2 lg:-translate-x-1/2 lg:-translate-y-1/2 w-14 h-14 rounded-full bg-white border border-[#E3E9F3] text-[#0B2A5B] shadow-[0_10px_28px_-10px_rgba(11,42,91,0.45)] items-center justify-center overflow-hidden transition-all duration-200 hover:text-[#1D5BD6] hover:border-[#BFD3F5] hover:shadow-[0_12px_30px_-10px_rgba(29,91,214,0.55)] active:scale-95"
           >
             <AnimatePresence mode="wait" initial={false}>
               <motion.span

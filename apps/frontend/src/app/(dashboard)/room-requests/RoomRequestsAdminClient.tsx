@@ -21,6 +21,7 @@ import { ListSkeleton } from '@/components/ui/skeletons';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
+import { useRealtime } from '@/context/RealtimeContext';
 import { ArrowRight, BookOpen, Check, ChevronDown, Clock, Monitor, X, XCircle } from 'lucide-react';
 import { RefreshButton } from '@/app/(dashboard)/room-utilization/shared';
 
@@ -102,20 +103,34 @@ export default function RoomRequestsAdminClient() {
   const [acting, setActing] = useState<'Approved' | 'Rejected' | null>(null);
   const [done, setDone] = useState<'Approved' | 'Rejected' | null>(null);
 
-  const load = useCallback(() => {
-    setLoading(true);
-    fetch('/api/admin/room-requests')
+  /** silent: background refresh — no loading state, no error toast */
+  const load = useCallback((silent = false): Promise<RoomRequest[] | null> => {
+    if (!silent) setLoading(true);
+    return fetch('/api/admin/room-requests')
       .then(async r => {
         const d = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(r.status === 403 ? 'Your account cannot view room requests.' : d.error || '');
         return d;
       })
-      .then(d => setRequests(d.requests ?? []))
-      .catch((e: unknown) => toast.error(e instanceof Error && e.message ? e.message : 'Could not load room requests.'))
-      .finally(() => setLoading(false));
+      .then(d => {
+        const fresh: RoomRequest[] = d.requests ?? [];
+        setRequests(fresh);
+        return fresh;
+      })
+      .catch((e: unknown) => {
+        if (!silent) toast.error(e instanceof Error && e.message ? e.message : 'Could not load room requests.');
+        return null;
+      })
+      .finally(() => { if (!silent) setLoading(false); });
   }, [toast]);
   useEffect(() => { load(); }, [load]);
-  useVisibilityAwareInterval(load, 30_000);
+  // Live updates: new, cancelled or expired requests, or another admin's decision.
+  // An open request shows its latest state (the dialog stays open).
+  useRealtime(['room-requests', 'schedule'], () => load(true).then(fresh => {
+    if (!fresh || acting || done) return;
+    setOpen(prev => (prev ? fresh.find(r => r.id === prev.id) ?? prev : prev));
+  }), { enabled: !loading });
+  useVisibilityAwareInterval(() => load(true), 60_000);
 
   const showSkeleton = useMinLoading(loading && requests.length === 0, PAGE_SKELETON_MIN_MS);
 
@@ -145,7 +160,7 @@ export default function RoomRequestsAdminClient() {
         setDone(null);
         setOpen(null);
         toast.success(status === 'Approved' ? 'Request approved — the faculty was notified.' : 'Request rejected — the faculty was notified.');
-        load();
+        load(true);
       }, 1300);
     } catch {
       toast.error('Connection error. Please try again.');
@@ -303,7 +318,7 @@ export default function RoomRequestsAdminClient() {
             );
           })}
         </div>
-        <RefreshButton onRefresh={load} loading={loading} />
+        <RefreshButton onRefresh={() => load()} loading={loading} />
       </div>
 
       <PageLoadTransition showSkeleton={showSkeleton} skeleton={<ListSkeleton rows={8} />}>

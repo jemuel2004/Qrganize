@@ -15,6 +15,7 @@ import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { FiltersSkeleton, ListSkeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
+import { useRealtime } from '@/context/RealtimeContext';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const ROOM_TYPES = [
@@ -113,6 +114,8 @@ export default function AvailableRoomsClient() {
   const [booting,   setBooting]   = useState(true);
   useEffect(() => { setBooting(false); }, []);
   const showSkeleton = useMinLoading(booting || (loading && !rooms), LOADING_DELAY);
+  /** Query of the rooms on screen — live updates re-run it */
+  const shownQuery = useRef('');
 
   const handleSearch = useCallback(async () => {
     if (!day || !startTime || !endTime) return;
@@ -136,6 +139,7 @@ export default function AvailableRoomsClient() {
       setRooms(json.rooms ?? []);
       setShownFor({ day, start: startTime, end: endTime });
       setSearchId(n => n + 1);
+      shownQuery.current = params.toString();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -155,6 +159,17 @@ export default function AvailableRoomsClient() {
     const id = window.setTimeout(() => { handleSearch(); }, 200);
     return () => window.clearTimeout(id);
   }, [filterKey, searched, handleSearch]);
+
+  // Live updates: rooms taken, freed or rescheduled elsewhere — the results on
+  // screen re-check quietly (no loading card, no replayed animation)
+  useRealtime(['occupancy', 'schedule', 'rooms', 'room-requests'], () => {
+    const query = shownQuery.current;
+    if (!query) return;
+    return fetch(`/api/instructor/available-rooms?${query}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(json => { if (json && shownQuery.current === query && Array.isArray(json.rooms)) setRooms(json.rooms); })
+      .catch(() => {});
+  }, { enabled: !loading });
 
   const available   = rooms?.filter(r => r.is_available)   ?? [];
   const unavailable = rooms?.filter(r => !r.is_available)  ?? [];

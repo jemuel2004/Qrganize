@@ -1,9 +1,11 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { TrendingUp } from 'lucide-react';
 import { SearchInput } from '@/components/ui/SearchFilter';
+import { Skeleton } from '@/components/ui/skeletons';
 import { useSchoolYear } from '@/context/SchoolYearContext';
+import { useRealtime } from '@/context/RealtimeContext';
 import { useToast } from '@/context/ToastContext';
 import Modal from '@/components/ui/Modal';
 
@@ -65,23 +67,43 @@ export default function OverloadClient() {
   const [returnConfirm, setReturnConfirm] = useState<OverloadRow | null>(null);
   const [returning, setReturning] = useState(false);
 
-  useEffect(() => {
-    fetch('/api/faculty').then(r => r.json()).then(d => setFacultyList(d.faculty || []));
-  }, []);
+  // Faculty list loading — without it the panel said "No faculty found" until the list arrived
+  const [facultyLoading, setFacultyLoading] = useState(true);
+  const loadFacultyList = useCallback(() => fetch('/api/faculty')
+    .then(r => r.json())
+    .then(d => setFacultyList(d.faculty || []))
+    .catch(() => {})
+    .finally(() => setFacultyLoading(false)), []);
+  useEffect(() => { loadFacultyList(); }, [loadFacultyList]);
 
-  const fetchOverloads = useCallback(() => {
-    if (!selectedFaculty || !effectiveSem || !effectiveYear) return;
-    setLoading(true);
+  /** Latest request — an answer for a previously selected faculty is dropped. */
+  const overloadSeq = useRef(0);
+  /** silent: live-update refresh — the table stays on screen */
+  const fetchOverloads = useCallback((silent = false) => {
+    if (!selectedFaculty || !effectiveSem || !effectiveYear) return Promise.resolve();
+    const seq = ++overloadSeq.current;
+    if (!silent) setLoading(true);
     const params = new URLSearchParams({
       faculty_id:    String(selectedFaculty.id),
       semester:      effectiveSem,
       academic_year: effectiveYear,
     });
-    fetch(`/api/overload?${params}`)
+    return fetch(`/api/overload?${params}`)
       .then(r => r.json())
-      .then(d => setOverloads(d.overloads || []))
-      .finally(() => setLoading(false));
+      .then(d => {
+        if (seq !== overloadSeq.current) return;
+        if (Array.isArray(d.overloads)) setOverloads(d.overloads);
+        else if (!silent) setOverloads([]); // a failed refresh keeps the table
+      })
+      .catch(() => {})
+      .finally(() => { if (!silent && seq === overloadSeq.current) setLoading(false); });
   }, [selectedFaculty, effectiveSem, effectiveYear]);
+
+  // Live updates: loads or faculty changed elsewhere — quiet reload, the
+  // selected faculty and any open confirmation stay.
+  useRealtime(['workload', 'faculty'], () => Promise.all([loadFacultyList(), fetchOverloads(true)]), {
+    enabled: !loading && !facultyLoading && !moving && !returning,
+  });
 
   useEffect(() => {
     if (selectedFaculty && effectiveSem && effectiveYear) {
@@ -216,7 +238,16 @@ export default function OverloadClient() {
               />
             </div>
             <div className="p-2 max-h-72 lg:max-h-[calc(100vh-280px)] overflow-y-auto">
-              {filteredFaculty.length === 0 ? (
+              {facultyLoading ? (
+                <div className="space-y-1" role="status" aria-label="Loading faculty">
+                  {Array.from({ length: 7 }, (_, i) => (
+                    <div key={i} className="px-3 py-3 space-y-1.5">
+                      <Skeleton className={`h-3.5 rounded ${i % 2 ? 'w-[55%]' : 'w-[70%]'}`} />
+                      <Skeleton className="h-3 w-[45%] rounded" />
+                    </div>
+                  ))}
+                </div>
+              ) : filteredFaculty.length === 0 ? (
                 <div className="text-center py-6 text-slate-500 text-sm">No faculty found</div>
               ) : filteredFaculty.map(f => (
                 <button
@@ -283,7 +314,7 @@ export default function OverloadClient() {
                 <div className="px-5 py-3 border-b border-white/10 flex items-center justify-between gap-3 flex-wrap">
                   <span className="font-semibold text-slate-200 text-sm">Overload Subjects</span>
                   <span className="text-xs text-slate-500">
-                    {overloads.length} subject{overloads.length !== 1 ? 's' : ''}
+                    {loading ? '…' : <>{overloads.length} subject{overloads.length !== 1 ? 's' : ''}</>}
                     {effectiveSem  ? ` · ${effectiveSem}`  : ''}
                     {effectiveYear ? ` ${effectiveYear}` : ''}
                   </span>
@@ -294,7 +325,17 @@ export default function OverloadClient() {
                     No overload records found.
                   </div>
                 ) : loading ? (
-                  <div className="py-10 text-center text-slate-500 text-sm">Loading…</div>
+                  /* Table-shaped placeholder — same columns as the overload table */
+                  <div className="divide-y divide-white/5" role="status" aria-label="Loading overload subjects">
+                    <div className="px-3 py-3 bg-[#0d1424] grid grid-cols-6 gap-3">
+                      {Array.from({ length: 6 }, (_, c) => <Skeleton key={c} className="h-3 w-[60%] rounded" />)}
+                    </div>
+                    {Array.from({ length: 4 }, (_, r) => (
+                      <div key={r} className="px-3 py-3.5 grid grid-cols-6 gap-3">
+                        {Array.from({ length: 6 }, (_, c) => <Skeleton key={c} className={`h-3 rounded ${c === 1 ? 'w-[85%]' : 'w-[55%]'}`} />)}
+                      </div>
+                    ))}
+                  </div>
                 ) : overloads.length === 0 ? (
                   <div className="py-10 text-center text-slate-500 text-sm">
                     No overload records for {effectiveSem} {effectiveYear}.

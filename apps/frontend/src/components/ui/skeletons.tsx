@@ -173,16 +173,69 @@ export function FiltersSkeleton({ fields = 3 }: { fields?: number }) {
   );
 }
 
-/** Form fields: label + input rows. */
-export function FormSkeleton({ fields = 6 }: { fields?: number }) {
+/** Form fields: label + input rows. `columns={2}` lays fields side by side (sm+);
+ *  `bare` drops the card frame for use inside an existing panel. */
+export function FormSkeleton({ fields = 6, columns = 1, bare = false }: {
+  fields?: number;
+  columns?: 1 | 2;
+  bare?: boolean;
+}) {
   return (
-    <div className="bg-white border border-[#E5E7EB] rounded-lg p-5 space-y-4">
+    <div
+      className={`${bare ? '' : 'bg-white border border-[#E5E7EB] rounded-lg p-5'} ${
+        columns === 2 ? 'grid grid-cols-1 sm:grid-cols-2 gap-3' : 'space-y-4'
+      }`}
+      role="status"
+      aria-label="Loading"
+    >
       {Array.from({ length: fields }, (_, i) => (
         <div key={i} className="space-y-2">
           <Skeleton className="h-3.5 w-28 rounded" />
           <Skeleton className="h-10 w-full rounded-xl" />
         </div>
       ))}
+    </div>
+  );
+}
+
+/** Row of filter chips / count tabs (same height as CountFilterTabs and chips). */
+export function PillsSkeleton({ count = 4, className = '' }: { count?: number; className?: string }) {
+  const widths = ['w-24', 'w-28', 'w-32', 'w-24', 'w-28', 'w-20', 'w-32', 'w-24'];
+  return (
+    <div className={`flex flex-wrap gap-2.5 ${className}`} aria-hidden>
+      {Array.from({ length: count }, (_, i) => (
+        <Skeleton key={i} className={`h-11 ${widths[i % widths.length]} rounded-xl`} />
+      ))}
+    </div>
+  );
+}
+
+/** Printed-form preview (Class Program): page with logo, centred header lines,
+ *  info rows and a schedule table — the shape of the document that loads. */
+export function DocumentSkeleton() {
+  return (
+    <div className="bg-white border border-[#E5E7EB] rounded-lg px-5 sm:px-10 py-8 max-w-[900px] mx-auto w-full" role="status" aria-label="Loading document">
+      <div className="flex flex-col items-center gap-2">
+        <Skeleton className="h-16 w-16 rounded-full mb-1" />
+        <Skeleton className="h-3 w-40 rounded" />
+        <Skeleton className="h-4 w-72 max-w-full rounded" />
+        <Skeleton className="h-3.5 w-56 max-w-full rounded" />
+        <Skeleton className="h-4 w-36 rounded mt-1" />
+        <Skeleton className="h-3 w-28 rounded" />
+      </div>
+      <div className="mt-6 grid grid-cols-2 gap-x-8 gap-y-2">
+        {Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-3.5 w-[70%] rounded" />)}
+      </div>
+      <div className="mt-5 border border-[#E5E7EB] rounded-md overflow-hidden">
+        <Skeleton className="h-9 w-full rounded-none" />
+        <div className="divide-y divide-[#F3F4F6]">
+          {Array.from({ length: 7 }, (_, r) => (
+            <div key={r} className="px-3 py-3 grid grid-cols-6 gap-3">
+              {Array.from({ length: 6 }, (_, c) => <Skeleton key={c} className={`h-3 rounded ${c === 1 ? 'w-[85%]' : 'w-[60%]'}`} />)}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

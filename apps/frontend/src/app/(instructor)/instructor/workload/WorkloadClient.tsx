@@ -3,7 +3,7 @@
 import { motion, useReducedMotion } from 'framer-motion';
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
-import { useRefreshOnNewNotification } from '@/hooks/useRefreshOnNewNotification';
+import { useRealtime } from '@/context/RealtimeContext';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import { RefreshButton } from '@/app/(dashboard)/room-utilization/shared';
@@ -340,9 +340,11 @@ export default function InstructorWorkloadClient() {
   }
 
   const fetchWorkload = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
-    setError(null);
-    setNoPeriod(false);
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+      setNoPeriod(false);
+    }
     try {
       const periodRes = await fetch('/api/settings/school-year');
       const period = periodRes.ok ? await periodRes.json() : null;
@@ -359,6 +361,7 @@ export default function InstructorWorkloadClient() {
       setSemester(sem);
       setAcademicYear(year);
       setPeriodReady(true);
+      setNoPeriod(false);
 
       const res = await fetch('/api/instructor/workload');
       if (!res.ok) {
@@ -374,6 +377,7 @@ export default function InstructorWorkloadClient() {
       if (json.period?.semester) setSemester(json.period.semester);
       if (json.period?.schoolYear) setAcademicYear(json.period.schoolYear);
       setData(json);
+      setError(null);
     } catch (err) {
       if (!silent) setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -383,9 +387,11 @@ export default function InstructorWorkloadClient() {
 
   useEffect(() => { fetchWorkload(); }, [fetchWorkload]);
 
-  useVisibilityAwareInterval(() => fetchWorkload(true), 30_000);
-  // New notification (e.g. a subject assigned) → refresh right away
-  useRefreshOnNewNotification(() => fetchWorkload(true));
+  // Live updates: subjects assigned or moved, schedules, PRAISE or deloading
+  // changed, or a new active term — the workload reloads quietly (the open tab stays)
+  useRealtime(['workload', 'schedule', 'faculty', 'term'], () => fetchWorkload(true), { enabled: !loading });
+  // Fallback only — every change above arrives live
+  useVisibilityAwareInterval(() => fetchWorkload(true), 120_000);
 
   /* ── Derived values (mirrors admin WorkloadClient modal logic) ─────────── */
   const workload = data;

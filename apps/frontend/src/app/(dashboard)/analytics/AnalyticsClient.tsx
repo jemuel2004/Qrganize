@@ -8,6 +8,7 @@ import {
   Monitor, UserX, Users,
 } from 'lucide-react';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
+import { useRealtime } from '@/context/RealtimeContext';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { shownUnitsCap } from '@shared/regularLoad';
@@ -360,6 +361,7 @@ export default function AnalyticsPage() {
     load();
     return () => abortRef.current?.abort();
   }, [load]);
+  useRealtime(['term', 'rooms', 'occupancy', 'schedule', 'workload', 'blocks', 'faculty'], () => load(true), { enabled: !loading });
   useVisibilityAwareInterval(() => load(true), 60_000);
 
   const showSkeleton = useMinLoading(loading && !data, PAGE_SKELETON_MIN_MS);

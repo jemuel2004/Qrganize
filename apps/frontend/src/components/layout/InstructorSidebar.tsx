@@ -12,6 +12,7 @@ import SystemLogo from '@/components/ui/SystemLogo';
 import { useInstructorProfile } from '@/context/InstructorProfileContext';
 import type { LucideIcon } from 'lucide-react';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
+import { useRealtime } from '@/context/RealtimeContext';
 import {
   getInstructorNavSections,
   isInstructorPathActive,
@@ -53,6 +54,7 @@ function useRequestsBadge() {
     return () => { mountedRef.current = false; };
   }, [refreshCount]);
 
+  useRealtime(['room-requests'], refreshCount);
   useVisibilityAwareInterval(refreshCount, 60_000);
 
   return count;

@@ -9,6 +9,8 @@ import {
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import Modal from '@/components/ui/Modal';
+import { Skeleton } from '@/components/ui/skeletons';
+import { useRealtime } from '@/context/RealtimeContext';
 
 /* ─── Types & constants ─────────────────────────────────────────── */
 interface AuditLog {
@@ -73,6 +75,8 @@ export default function AuditLogsClient() {
   const [debouncedQ, setDebouncedQ] = useState('');
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
+  /** Category counts arrive with the first page — until then the chips show a placeholder, not 0 */
+  const [countsReady, setCountsReady] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -102,11 +106,46 @@ export default function AuditLogsClient() {
     let alive = true;
     setLoading(true); setError('');
     fetchPage()
-      .then(d => { if (!alive) return; setLogs(d.logs); setHasMore(d.has_more); if (d.counts) setCounts(d.counts); })
-      .catch(e => { if (alive && (e as Error).name !== 'AbortError') setError((e as Error).message); })
+      .then(d => { if (!alive) return; setLogs(d.logs); setHasMore(d.has_more); if (d.counts) setCounts(d.counts); setCountsReady(true); })
+      .catch(e => { if (alive && (e as Error).name !== 'AbortError') { setError((e as Error).message); setCountsReady(true); } })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; abortRef.current?.abort(); };
   }, [fetchPage]);
+
+  /* Live updates: new activity appears at the top while the pages already
+     loaded below stay (filters, search and an open entry are untouched). If
+     more than a page of activity arrived at once, the list restarts from the
+     newest page so it never has a gap. */
+  const filterQuery = useMemo(() => {
+    const sp = new URLSearchParams({ range });
+    if (category) sp.set('category', category);
+    if (debouncedQ) sp.set('q', debouncedQ);
+    return sp.toString();
+  }, [range, category, debouncedQ]);
+  const shownQuery = useRef(filterQuery);
+  useEffect(() => { shownQuery.current = filterQuery; }, [filterQuery]);
+  const shownLogs = useRef(logs);
+  useEffect(() => { shownLogs.current = logs; }, [logs]);
+  useRealtime(['audit'], () => {
+    const query = filterQuery;
+    return fetch(`/api/audit-logs?${query}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then((d: { logs: AuditLog[]; has_more: boolean; counts?: Record<string, number> } | null) => {
+        if (!d || shownQuery.current !== query) return;
+        if (d.counts) setCounts(d.counts);
+        const prev = shownLogs.current;
+        const seen = new Set(prev.map(l => l.id));
+        const fresh = d.logs.filter(l => !seen.has(l.id));
+        if (fresh.length === 0) return;
+        if (prev.length > 0 && fresh.length === d.logs.length && d.has_more) {
+          setLogs(d.logs); // more than a page arrived — restart from the newest
+          setHasMore(d.has_more);
+        } else {
+          setLogs([...fresh, ...prev]);
+        }
+      })
+      .catch(() => {});
+  }, { enabled: !loading && !loadingMore });
 
   const loadMore = async () => {
     if (!logs.length) return;
@@ -170,10 +209,10 @@ export default function AuditLogsClient() {
 
         {/* Category chips */}
         <div className="flex flex-wrap gap-2">
-          <Chip on={!category} onClick={() => setCategory('')} icon={ScrollText} label="All" n={total} />
+          <Chip on={!category} onClick={() => setCategory('')} icon={ScrollText} label="All" n={countsReady ? total : null} />
           {CATEGORIES.map(c => (
             <Chip key={c.id} on={category === c.id} onClick={() => setCategory(category === c.id ? '' : c.id)}
-              icon={c.icon} label={c.id} n={counts[c.id] ?? 0} />
+              icon={c.icon} label={c.id} n={countsReady ? (counts[c.id] ?? 0) : null} />
           ))}
         </div>
       </section>
@@ -181,14 +220,24 @@ export default function AuditLogsClient() {
       {/* ── List ── */}
       <section className="bg-white rounded-2xl border border-[#E3E9F3] overflow-hidden shadow-[0_8px_24px_-18px_rgba(11,42,91,0.35)]">
         {loading ? (
-          <div className="divide-y divide-[#EEF2F7]">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="flex items-center gap-4 px-5 py-4 animate-pulse">
-                <div className="w-11 h-11 rounded-xl bg-[#EEF2F7]" />
-                <div className="flex-1 space-y-2"><div className="h-4 w-1/2 rounded bg-[#EEF2F7]" /><div className="h-3 w-1/3 rounded bg-[#F4F7FB]" /></div>
-                <div className="h-4 w-16 rounded bg-[#F4F7FB]" />
-              </div>
-            ))}
+          <div role="status" aria-live="polite" aria-label="Loading activity">
+            {/* Same shape as the list: a day header, then rows */}
+            <div className="px-5 py-2.5 bg-[#F6F9FE] border-b border-[#EEF2F7]">
+              <Skeleton className="h-3.5 w-24 rounded" />
+            </div>
+            <div className="divide-y divide-[#EEF2F7]">
+              {Array.from({ length: 7 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-3 sm:gap-4 px-4 sm:px-5 py-3.5">
+                  <Skeleton className="w-11 h-11 rounded-xl flex-shrink-0" />
+                  <div className="flex-1 min-w-0 space-y-2">
+                    <Skeleton className={`h-4 rounded ${i % 2 ? 'w-[45%]' : 'w-[60%]'}`} />
+                    <Skeleton className="h-3 w-[35%] rounded" />
+                  </div>
+                  <Skeleton className="hidden sm:block h-4 w-16 rounded flex-shrink-0" />
+                  <Skeleton className="w-5 h-5 rounded flex-shrink-0" />
+                </div>
+              ))}
+            </div>
           </div>
         ) : error ? (
           <p className="py-14 text-center text-[15px] font-semibold text-[#B91C1C]">{error}</p>
@@ -299,7 +348,8 @@ export default function AuditLogsClient() {
 /* ─── Bits ───────────────────────────────────────────────────────── */
 /** Category filter chip — white with navy text; the navy highlight slides to the selected chip */
 function Chip({ on, onClick, icon: Icon, label, n }: {
-  on: boolean; onClick: () => void; icon: React.ElementType; label: string; n: number;
+  /** null while the counts are still loading */
+  on: boolean; onClick: () => void; icon: React.ElementType; label: string; n: number | null;
 }) {
   const reduceMotion = useReducedMotion();
   return (
@@ -323,11 +373,15 @@ function Chip({ on, onClick, icon: Icon, label, n }: {
         <Icon className="w-4.5 h-4.5" style={{ color: on ? '#FFFFFF' : '#1D5BD6' }} />
       </motion.span>
       <span className="relative">{label}</span>
-      <motion.span key={`${on}-${n}`} className="relative min-w-[26px] h-6 px-1.5 rounded-full text-xs font-bold flex items-center justify-center"
-        initial={reduceMotion ? false : { scale: 0.7, opacity: 0.4 }}
-        animate={{ scale: 1, opacity: 1 }}
-        transition={{ type: 'spring', stiffness: 500, damping: 20 }}
-        style={on ? { backgroundColor: 'rgba(255,255,255,0.2)', color: '#FFFFFF' } : { backgroundColor: '#EFF6FF', color: '#1D5BD6' }}>{n}</motion.span>
+      {n === null ? (
+        <Skeleton className="relative w-[26px] h-6 rounded-full" />
+      ) : (
+        <motion.span key={`${on}-${n}`} className="relative min-w-[26px] h-6 px-1.5 rounded-full text-xs font-bold flex items-center justify-center"
+          initial={reduceMotion ? false : { scale: 0.7, opacity: 0.4 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ type: 'spring', stiffness: 500, damping: 20 }}
+          style={on ? { backgroundColor: 'rgba(255,255,255,0.2)', color: '#FFFFFF' } : { backgroundColor: '#EFF6FF', color: '#1D5BD6' }}>{n}</motion.span>
+      )}
     </motion.button>
   );
 }

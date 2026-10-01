@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useToast } from '@/context/ToastContext';
 import { useSchoolYear } from '@/context/SchoolYearContext';
+import { useRealtime } from '@/context/RealtimeContext';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import { CalendarDays, ChevronDown, Download, Eye, FileSpreadsheet, Loader2, Printer, X } from 'lucide-react';
@@ -223,6 +224,14 @@ export function WorkloadPrintMenu({ facultyId, semester, academicYear, mode = 'p
     setOpen(next);
     if (next && !data && !loadingData) fetchWorkload();
   }
+
+  // Live updates: this faculty's loads may have changed — a closed menu reads
+  // them again on the next open, an open one refreshes its counts now.
+  useRealtime(['workload', 'schedule'], () => {
+    if (!open) { setData(null); return; }
+    if (loadingData) return;
+    return fetchWorkloadPrintData(facultyId, semester, academicYear).then(setData).catch(() => {});
+  });
 
   const { counts } = printLoadSets(data, semester, academicYear);
   const options: { kind: PrintKind; label: string; count: number; dot: string }[] = [
@@ -476,13 +485,13 @@ export default function FacultySchedulesClient({
     setFilters(prev => ({ ...prev, [key]: val }));
   }
 
-  useEffect(() => {
-    fetch('/api/faculty')
-      .then(r => r.json())
-      .then(d => setFacultyList((d.faculty ?? []).map((f: Record<string, unknown>) => ({
-        id: f.id, name: f.name, employment_status: f.employment_status, position: f.position ?? '',
-      }))));
-  }, []);
+  const loadFacultyList = useCallback(() => fetch('/api/faculty')
+    .then(r => r.json())
+    .then(d => setFacultyList((d.faculty ?? []).map((f: Record<string, unknown>) => ({
+      id: f.id, name: f.name, employment_status: f.employment_status, position: f.position ?? '',
+    }))))
+    .catch(() => {}), []);
+  useEffect(() => { loadFacultyList(); }, [loadFacultyList]);
 
   useEffect(() => {
     const raw = initialFacultyQuery.trim();
@@ -508,8 +517,12 @@ export default function FacultySchedulesClient({
     }));
   }, [facultyList, initialFacultyQuery, toast]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  /** Latest request — an older answer (filters changed meanwhile) is dropped. */
+  const loadSeq = useRef(0);
+  /** silent: live-update refresh — no loading state, no error toasts */
+  const load = useCallback(async (silent = false) => {
+    const seq = ++loadSeq.current;
+    if (!silent) setLoading(true);
     try {
       const params = new URLSearchParams();
       if (filters.employment_status) params.set('employment_status', filters.employment_status);
@@ -519,18 +532,23 @@ export default function FacultySchedulesClient({
 
       const res  = await fetch(`/api/faculty-schedules?${params}`);
       const data = await res.json();
-      if (!res.ok) { toast.error(data.error ?? 'Failed to load schedules.'); return; }
+      if (seq !== loadSeq.current) return;
+      if (!res.ok) { if (!silent) toast.error(data.error ?? 'Failed to load schedules.'); return; }
 
       setRows(data.schedules ?? []);
       setSummary(data.summary ?? { totalSchedules: 0, totalInstructors: 0, totalRegular: 0, totalOverload: 0, totalPraise: 0 });
     } catch {
-      toast.error('Connection error. Please try again.');
+      if (!silent && seq === loadSeq.current) toast.error('Connection error. Please try again.');
     } finally {
-      setLoading(false);
+      if (!silent && seq === loadSeq.current) setLoading(false);
     }
   }, [filters.employment_status, filters.faculty_id, globalSemester, globalYear, toast]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Live updates: schedules, loads, rooms or faculty changed elsewhere — quiet
+  // reload; filters, search and the open schedule details stay.
+  useRealtime(['schedule', 'workload', 'rooms', 'faculty'], () => Promise.all([load(true), loadFacultyList()]), { enabled: !loading });
 
   const filteredFaculty = useMemo(() => {
     const byEmp = filters.employment_status

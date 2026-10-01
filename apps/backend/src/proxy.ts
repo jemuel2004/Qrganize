@@ -26,6 +26,15 @@ const PUBLIC_API = new Set([
   'GET:/api/settings/logo',
 ]);
 
+/**
+ * Checked every few seconds by each open tab. It returns version numbers only
+ * and confirms the session itself (re-checked against the database every
+ * 15 s), so the gate verifies the token without a database round trip.
+ */
+const TOKEN_ONLY_API = new Set([
+  'GET:/api/realtime/versions',
+]);
+
 function clearAuth(res: NextResponse) {
   res.cookies.set('auth_token', '', {
     httpOnly: true,
@@ -50,6 +59,8 @@ export async function proxy(req: NextRequest) {
   } catch {
     return clearAuth(NextResponse.json({ error: 'Session expired' }, { status: 401 }));
   }
+
+  if (TOKEN_ONLY_API.has(`${req.method}:${pathname}`)) return NextResponse.next();
 
   try {
     if (!(await evaluateSession(payload)).live) {

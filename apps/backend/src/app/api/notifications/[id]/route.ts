@@ -2,6 +2,7 @@
 import { getAuthUser } from '@/auth/auth';
 import { query } from '@/database/db';
 import { withAudit } from '@/services/audit';
+import { bumpNotifications } from '@/services/realtime';
 
 async function PATCH_handler(
   req: NextRequest,
@@ -20,28 +21,34 @@ async function PATCH_handler(
     const nid = parseInt(id);
     if (isNaN(nid)) return NextResponse.json({ error: 'Invalid id' }, { status: 400 });
 
+    let updated = 0;
     if (authUser.role === 'admin') {
-      await query(`
+      updated = (await query(`
         UPDATE notifications SET is_read = true
-        WHERE id = $1 AND recipient_role = 'admin'
-      `, [nid]);
+        WHERE id = $1 AND is_read = false AND recipient_role = 'admin'
+      `, [nid])).rowCount ?? 0;
     } else if (authUser.role === 'department_chair') {
-      await query(`
+      updated = (await query(`
         UPDATE notifications SET is_read = true
-        WHERE id = $1 AND recipient_role = 'department_chair'
-      `, [nid]);
+        WHERE id = $1 AND is_read = false AND recipient_role = 'department_chair'
+      `, [nid])).rowCount ?? 0;
     } else if (authUser.role === 'program_chair' && authUser.id) {
-      await query(`
+      updated = (await query(`
         UPDATE notifications SET is_read = true
-        WHERE id = $1 AND recipient_role = 'program_chair' AND recipient_id = $2
-      `, [nid, authUser.id]);
+        WHERE id = $1 AND is_read = false AND recipient_role = 'program_chair' AND recipient_id = $2
+      `, [nid, authUser.id])).rowCount ?? 0;
     } else if (authUser.role === 'instructor' && authUser.faculty_id) {
-      await query(`
+      updated = (await query(`
         UPDATE notifications SET is_read = true
-        WHERE id = $1 AND recipient_role = 'instructor' AND recipient_id = $2
-      `, [nid, authUser.faculty_id]);
+        WHERE id = $1 AND is_read = false AND recipient_role = 'instructor' AND recipient_id = $2
+      `, [nid, authUser.faculty_id])).rowCount ?? 0;
     } else {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // The reader's other tabs (and fellow admins sharing the inbox) update too
+    if (updated > 0) {
+      bumpNotifications(authUser.role, authUser.role === 'instructor' ? authUser.faculty_id : authUser.id);
     }
 
     return NextResponse.json({ success: true });

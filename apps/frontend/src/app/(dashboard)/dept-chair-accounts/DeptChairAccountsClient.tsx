@@ -1,7 +1,8 @@
 ﻿'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast } from '@/context/ToastContext';
+import { useRealtime } from '@/context/RealtimeContext';
 import Modal from '@/components/ui/Modal';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
@@ -132,19 +133,26 @@ export default function DeptChairAccountsClient() {
   const [showSaveSkeleton, setShowSaveSkeleton] = useState(false);
   const [deleteSuccess, setDeleteSuccess] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  /** Latest request — an answer for an older search is dropped. */
+  const loadSeq = useRef(0);
+  /** silent: live-update refresh — the table stays on screen */
+  const load = useCallback(async (silent = false) => {
+    const seq = ++loadSeq.current;
+    if (!silent) setLoading(true);
     try {
       const qs = search.trim() ? `?search=${encodeURIComponent(search.trim())}` : '';
       const res = await fetch(`/api/dept-chair-accounts${qs}`);
       if (!res.ok) return;
       const d = await res.json();
-      setAccounts(d.accounts ?? []);
+      if (seq === loadSeq.current) setAccounts(d.accounts ?? []);
     } catch { /* silent */ }
-    finally { setLoading(false); }
+    finally { if (!silent && seq === loadSeq.current) setLoading(false); }
   }, [search]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Live updates: accounts changed elsewhere — quiet reload (search, filters, open forms stay)
+  useRealtime(['accounts', 'programs'], () => load(true), { enabled: !loading });
 
   useEffect(() => {
     fetch('/api/programs')

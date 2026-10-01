@@ -1,4 +1,5 @@
 ﻿import { query } from '@/database/db';
+import { bumpNotifications } from '@/services/realtime';
 
 export type NotificationType =
   | 'qr_scan_success'
@@ -94,7 +95,7 @@ export async function createNotification(payload: NotificationPayload): Promise<
       payload.type.startsWith('room_request_') && payload.relatedId != null;
 
     if (isRoomRequestEvent) {
-      await query(`
+      const added = await query(`
         INSERT INTO notifications
           (recipient_id, recipient_role, title, message, type, related_module, related_id)
         SELECT $1, $2, $3, $4, $5, $6, $7
@@ -114,6 +115,7 @@ export async function createNotification(payload: NotificationPayload): Promise<
         payload.relatedModule ?? null,
         payload.relatedId,
       ]);
+      if ((added.rowCount ?? 0) > 0) bumpNotifications(payload.recipientRole, payload.recipientId);
       return;
     }
 
@@ -130,6 +132,7 @@ export async function createNotification(payload: NotificationPayload): Promise<
       payload.relatedModule ?? null,
       payload.relatedId ?? null,
     ]);
+    bumpNotifications(payload.recipientRole, payload.recipientId);
   } catch (e) {
     console.error('[createNotification]', e);
   }

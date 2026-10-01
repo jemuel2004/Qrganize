@@ -4,6 +4,7 @@ import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
+import { useRealtime } from '@/context/RealtimeContext';
 import { useToast } from '@/context/ToastContext';
 import { useSchoolYear } from '@/context/SchoolYearContext';
 import { SearchInput, FilterBar } from '@/components/ui/SearchFilter';
@@ -610,7 +611,7 @@ export default function WorkloadPage({
   }, []);
 
   const loadBlocks = useCallback(() => {
-    fetch('/api/blocks?include=unassigned_subjects')
+    return fetch('/api/blocks?include=unassigned_subjects')
       .then(async r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
@@ -627,7 +628,7 @@ export default function WorkloadPage({
    *  (which swaps out the whole page and looked like an auto-refresh). */
   const loadFacultyList = useCallback((opts: { silent?: boolean } = {}) => {
     if (!opts.silent) setFacultyListLoading(true);
-    fetch('/api/faculty')
+    return fetch('/api/faculty')
       .then(async r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
@@ -892,9 +893,9 @@ export default function WorkloadPage({
   ]);
 
   const loadFacultySummaries = useCallback(() => {
-    if (!listSemester) { setFacultySummaries({}); return; }
+    if (!listSemester) { setFacultySummaries({}); return Promise.resolve(); }
     const params = new URLSearchParams({ semester: listSemester, academic_year: listYear });
-    fetch(`/api/workload/summaries?${params}`)
+    return fetch(`/api/workload/summaries?${params}`)
       .then(r => r.json())
       .then(d => setFacultySummaries(d.summaries || {}))
       .catch(() => {});
@@ -902,12 +903,12 @@ export default function WorkloadPage({
 
   useEffect(() => { loadFacultySummaries(); }, [loadFacultySummaries]);
 
-  // Background refresh every 30s (and on returning to the tab) — quiet, no skeleton.
+  // Fallback refresh (live updates below cover changes made elsewhere) — quiet, no skeleton.
   useVisibilityAwareInterval(() => {
     loadBlocks();
     loadFacultyList({ silent: true });
     loadFacultySummaries();
-  }, 30_000);
+  }, 120_000);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -919,11 +920,10 @@ export default function WorkloadPage({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  function loadAvailable() {
-    if (!allFiltersSet) return;
-    setAvailLoading(true);
-    setFiltersApplied(true);
-    const params = new URLSearchParams({
+  /** Filters of the subject list on screen — a late answer for older filters is dropped. */
+  const availKey = useRef('');
+  function availParams() {
+    return new URLSearchParams({
       status: 'Unassigned',
       program_id: filterProgram,
       block_id: filterBlock,
@@ -931,10 +931,45 @@ export default function WorkloadPage({
       semester: filterSemester,
       academic_year: filterAcademicYear,
     });
+  }
+
+  function loadAvailable() {
+    if (!allFiltersSet) return;
+    setAvailLoading(true);
+    setFiltersApplied(true);
+    const params = availParams();
+    const key = params.toString();
+    availKey.current = key;
     fetch('/api/master-schedule?' + params)
       .then(r => r.json())
-      .then(d => { setAvailableSchedules(d.schedules || []); setAvailLoading(false); })
-      .catch(() => setAvailLoading(false));
+      .then(d => {
+        if (availKey.current !== key) return;
+        setAvailableSchedules(d.schedules || []);
+        setAvailLoading(false);
+      })
+      .catch(() => { if (availKey.current === key) setAvailLoading(false); });
+  }
+
+  /** Live updates: re-read the subject list without its loading state. Subjects
+   *  someone else just assigned leave the list (and the multi-select). */
+  function refreshAvailable(): Promise<void> {
+    if (!allFiltersSet || !filtersApplied || availLoading) return Promise.resolve();
+    const params = availParams();
+    const key = params.toString();
+    if (availKey.current !== key) return Promise.resolve();
+    return fetch('/api/master-schedule?' + params)
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => {
+        if (!d || availKey.current !== key || !Array.isArray(d.schedules)) return;
+        const fresh = d.schedules as Schedule[];
+        setAvailableSchedules(fresh);
+        const stillOpen = new Set(fresh.map(s => s.id));
+        setPickedIds(prev => {
+          const next = new Set([...prev].filter(id => stillOpen.has(id)));
+          return next.size === prev.size ? prev : next;
+        });
+      })
+      .catch(() => {});
   }
 
   useEffect(() => {
@@ -1832,6 +1867,23 @@ export default function WorkloadPage({
   const [bulkTotal, setBulkTotal] = useState(0);
   const [bulkNote, setBulkNote] = useState('');
   useEffect(() => { setPickedIds(new Set()); }, [selectedFaculty?.id, filterBlock, filterSemester, filterAcademicYear]);
+
+  /* Live updates: loads, blocks, schedules or faculty changed elsewhere (another
+     admin, another tab). Everything reloads quietly — the picked faculty,
+     filters, subject tab, search and any open dialog stay as they are. Held
+     while a multi-subject save runs. */
+  useRealtime(
+    ['workload', 'schedule', 'blocks', 'faculty'],
+    () => Promise.all([
+      loadBlocks(),
+      loadFacultyList({ silent: true }),
+      loadFacultySummaries(),
+      loadWorkload(),
+      loadAllFacultyLoads(),
+      refreshAvailable(),
+    ]),
+    { enabled: !facultyListLoading && bulkState !== 'saving' },
+  );
   const pickedSchedules = offeredSchedules.filter(s => pickedIds.has(s.id));
   const loadUnit = isPermanent ? 'units' : 'hours';
   const scheduleValue = (s: Schedule) => isPermanent

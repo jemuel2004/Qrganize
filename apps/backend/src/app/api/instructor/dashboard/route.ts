@@ -2,6 +2,7 @@
 import { getAuthUser } from '@/auth/auth';
 import { query } from '@/database/db';
 import { ensureRoomOccupancy, expireStaleOccupancy } from '@/services/ensureRoomOccupancy';
+import { bumpTopics } from '@/services/realtime';
 
 export async function GET(req: NextRequest) {
   try {
@@ -17,7 +18,7 @@ export async function GET(req: NextRequest) {
 
     /* Restore occupancy for In-Use requests that were auto-expired while
        still waiting for the faculty to release the room. */
-    await query(`
+    const restored = await query(`
       INSERT INTO room_occupancy (room_id, faculty_id, status, reserved_at, expires_at, occupied_at)
       SELECT rcr.requested_room_id, rcr.faculty_id, 'Occupied', NOW(), NOW() + INTERVAL '4 hours', NOW()
       FROM   room_change_requests rcr
@@ -29,7 +30,8 @@ export async function GET(req: NextRequest) {
                WHERE  ro.room_id = rcr.requested_room_id
                  AND  ro.status IN ('Pending', 'Occupied')
              )
-    `, [facultyId]).catch(() => {});
+    `, [facultyId]).catch(() => null);
+    if ((restored?.rowCount ?? 0) > 0) bumpTopics(['occupancy']);
 
     /* ── 1. My active reservation ───────────────────────────────── */
     const reservationRes = await query(`

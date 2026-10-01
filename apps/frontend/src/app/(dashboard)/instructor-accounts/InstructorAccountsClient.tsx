@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast } from '@/context/ToastContext';
+import { useRealtime } from '@/context/RealtimeContext';
 import Modal from '@/components/ui/Modal';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
@@ -264,20 +265,28 @@ export default function InstructorAccountsClient() {
 
   // ── Data loading ──────────────────────────────────────────────────────────
 
-  const loadAccounts = useCallback(() => {
-    setLoading(true);
+  /** Latest request — an answer for an older search / filter is dropped. */
+  const accountsSeq = useRef(0);
+  /** silent: live-update refresh — the table stays on screen */
+  const loadAccounts = useCallback((silent = false) => {
+    const seq = ++accountsSeq.current;
+    if (!silent) setLoading(true);
     const p = new URLSearchParams();
     if (search)         p.set('search', search);
     if (filterStatus)   p.set('status', filterStatus);
     if (filterPosition) p.set('position', filterPosition);
-    fetch('/api/instructor-accounts?' + p.toString())
+    return fetch('/api/instructor-accounts?' + p.toString())
       .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d) setAccounts(d.accounts || []); })
+      .then(d => { if (d && seq === accountsSeq.current) setAccounts(d.accounts || []); })
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!silent && seq === accountsSeq.current) setLoading(false); });
   }, [search, filterStatus, filterPosition]);
 
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
+
+  // Live updates: accounts created, edited, (de)activated or linked elsewhere —
+  // quiet reload; search, filters and open forms stay.
+  useRealtime(['accounts', 'faculty'], () => loadAccounts(true), { enabled: !loading });
 
   useEffect(() => {
     fetch('/api/programs')

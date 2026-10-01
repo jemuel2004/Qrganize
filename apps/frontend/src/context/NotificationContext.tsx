@@ -5,6 +5,7 @@ import React, {
   useEffect, useMemo, useRef, useState,
 } from 'react';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
+import { useRealtime } from '@/context/RealtimeContext';
 
 export interface AppNotification {
   id: number;
@@ -44,7 +45,18 @@ const NotificationContext = createContext<NotificationContextValue>({
   refresh: () => {},
 });
 
-const POLL_MS = 30_000;
+/** Fallback only — new and changed notifications arrive through live updates. */
+const POLL_MS = 60_000;
+
+/** Same items in the same order with the same text and read state. */
+function sameNotifications(a: AppNotification[], b: AppNotification[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i], y = b[i];
+    if (x.id !== y.id || x.is_read !== y.is_read || x.title !== y.title || x.message !== y.message) return false;
+  }
+  return true;
+}
 
 interface Props {
   children: React.ReactNode;
@@ -74,22 +86,11 @@ export function NotificationProvider({ children, role }: Props) {
       const incomingUnread: number      = data.unread_count ?? 0;
 
       /*
-       * Skip setState entirely when the data hasn't changed.
-       * Polling fires every 15 s — without this guard, every poll
-       * creates a new array reference and re-renders all subscribers
-       * even when nothing actually changed.
-       *
-       * Fast heuristic: compare count + newest-item id + unread count.
-       * Catches the overwhelmingly common case (no new activity) in O(1).
+       * Skip setState when nothing changed, so subscribers don't re-render.
+       * Every item is compared — live alerts keep their id while their text
+       * changes (e.g. "3 classes not yet scheduled" → "2 classes").
        */
-      setNotifications(prev => {
-        if (
-          prev.length     === incoming.length &&
-          prev[0]?.id     === incoming[0]?.id &&
-          prev[0]?.is_read === incoming[0]?.is_read
-        ) return prev;   // same reference â†’ no re-render
-        return incoming;
-      });
+      setNotifications(prev => (sameNotifications(prev, incoming) ? prev : incoming));
       setUnreadCount(prev => (prev === incomingUnread ? prev : incomingUnread));
       setIsInitialLoad(false);
     } catch { /* silent */ } finally {
@@ -104,7 +105,11 @@ export function NotificationProvider({ children, role }: Props) {
     return () => { mountedRef.current = false; };
   }, [fetchNotifications]);
 
-  // Visibility-aware polling: pauses when tab is hidden, resumes on focus
+  // Live updates: this inbox changed (new, updated, read elsewhere or removed)
+  useRealtime(['notifications'], () => fetchNotifications(true), { enabled: !isInitialLoad });
+
+  // Fallback polling (pauses while the tab is hidden) — also lets the server
+  // refresh time-based alerts
   useVisibilityAwareInterval(() => fetchNotifications(true), POLL_MS);
 
   const markRead = useCallback(async (id: number) => {

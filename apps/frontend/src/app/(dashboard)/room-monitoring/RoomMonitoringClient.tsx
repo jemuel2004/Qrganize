@@ -16,7 +16,8 @@ import { Clock, DoorOpen, Hourglass, User, AlertTriangle, CheckCircle2 } from 'l
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import { SearchInput } from '@/components/ui/SearchFilter';
-import { CardSkeleton } from '@/components/ui/skeletons';
+import { CardSkeleton, PillsSkeleton, Skeleton } from '@/components/ui/skeletons';
+import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import CountFilterTabs from '@/components/ui/CountFilterTabs';
 import {
   fmt12, RefreshButton, RoomIcon, useUtilization,
@@ -218,6 +219,9 @@ type Filter = 'all' | Exclude<LiveStatus, 'No check-in'>;
 
 export default function RoomMonitoringClient() {
   const { data, loading, error, reload } = useUtilization('', 'daily', undefined, 30_000);
+  /* First load: the live strip, status tabs and room grid switch from skeleton to
+     content together (later 30-second refreshes keep the current data on screen). */
+  const firstLoad = useMinLoading(!data && !error, LOADING_DELAY);
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
 
@@ -260,14 +264,21 @@ export default function RoomMonitoringClient() {
             <span className="absolute inline-flex w-full h-full rounded-full bg-[#1D5BD6] opacity-50 animate-ping" />
             <span className="relative inline-flex w-3 h-3 rounded-full bg-[#1D5BD6]" />
           </span>
-          <div>
-            <div className="text-base font-bold text-[#0B2A5B]">
-              Live — {data ? fmt12(data.now) : '…'}
+          {firstLoad ? (
+            <div className="space-y-1.5" aria-hidden>
+              <Skeleton className="h-5 w-32 rounded" />
+              <Skeleton className="h-3 w-56 rounded" />
             </div>
-            <div className="text-xs text-[#64748B]">
-              {data?.term.semester ? `${data.term.semester} · A.Y. ${data.term.school_year} · ` : ''}Updates every 30 seconds
+          ) : (
+            <div>
+              <div className="text-base font-bold text-[#0B2A5B]">
+                Live — {data ? fmt12(data.now) : '—'}
+              </div>
+              <div className="text-xs text-[#64748B]">
+                {data?.term.semester ? `${data.term.semester} · A.Y. ${data.term.school_year} · ` : ''}Updates every 30 seconds
+              </div>
             </div>
-          </div>
+          )}
         </div>
         <div className="w-full sm:w-72">
           <SearchInput value={search} onChange={setSearch} placeholder="Search room, subject, faculty…" />
@@ -276,7 +287,7 @@ export default function RoomMonitoringClient() {
 
       {/* Written warning, not only colour */}
       <AnimatePresence initial={false}>
-        {noCheckIn > 0 && (
+        {!firstLoad && noCheckIn > 0 && (
           <motion.div
             role="alert"
             initial={{ opacity: 0, height: 0 }}
@@ -296,28 +307,36 @@ export default function RoomMonitoringClient() {
         )}
       </AnimatePresence>
 
-      <CountFilterTabs
-        className="mb-5"
-        label="Filter rooms by status"
-        layoutId="room-monitoring-filter"
-        value={filter}
-        onChange={setFilter}
-        options={[
-          { key: 'all', label: 'All rooms', count: searched.length, color: '#0B2A5B' },
-          { key: 'In use', label: 'In use', count: count('In use'), color: '#0B2A5B', dot: '#0B2A5B' },
-          { key: 'Free', label: 'Available', count: count('Free'), color: '#1E4FB8', dot: LIVE_TONE.Free.bar },
-          { key: 'Waiting', label: 'Waiting', count: count('Waiting'), color: LIVE_TONE.Waiting.bar, dot: LIVE_TONE.Waiting.bar },
-        ]}
-      />
+      {/* Counts come from the same data — placeholder until it arrives, not 0 */}
+      {firstLoad ? (
+        <PillsSkeleton count={4} className="mb-5" />
+      ) : (
+        <CountFilterTabs
+          className="mb-5"
+          label="Filter rooms by status"
+          layoutId="room-monitoring-filter"
+          value={filter}
+          onChange={setFilter}
+          options={[
+            { key: 'all', label: 'All rooms', count: searched.length, color: '#0B2A5B' },
+            { key: 'In use', label: 'In use', count: count('In use'), color: '#0B2A5B', dot: '#0B2A5B' },
+            { key: 'Free', label: 'Available', count: count('Free'), color: '#1E4FB8', dot: LIVE_TONE.Free.bar },
+            { key: 'Waiting', label: 'Waiting', count: count('Waiting'), color: LIVE_TONE.Waiting.bar, dot: LIVE_TONE.Waiting.bar },
+          ]}
+        />
+      )}
 
       {error && (
         <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
       )}
 
-      {!data && loading ? (
+      {firstLoad ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4" role="status" aria-label="Loading rooms">
           {Array.from({ length: 6 }, (_, i) => <CardSkeleton key={i} className="min-h-[220px]" />)}
         </div>
+      ) : !data ? (
+        // Load failed — the error above explains it; no misleading "No rooms yet"
+        null
       ) : shown.length === 0 ? (
         <div className="rounded-2xl border border-[#E2E8F0] bg-white px-6 py-14 text-center text-sm font-semibold text-[#64748B]">
           {rooms.length === 0 ? 'No rooms yet — add them in Room Management.' : 'No rooms match this filter.'}

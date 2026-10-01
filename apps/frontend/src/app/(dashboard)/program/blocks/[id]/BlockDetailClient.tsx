@@ -1,8 +1,9 @@
 ﻿'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useToast } from '@/context/ToastContext';
 import { useSchoolYear } from '@/context/SchoolYearContext';
+import { useRealtime } from '@/context/RealtimeContext';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -260,15 +261,17 @@ export default function BlockDetailPage() {
   }, []);
 
   /* load blocks — chairs scoped to assigned program; admin gets all for switcher */
+  const blocksUrl = isChair && selProgram
+    ? `/api/blocks?${new URLSearchParams({ program_id: selProgram })}`
+    : '/api/blocks';
+  const loadAllBlocks = useCallback(() => fetch(blocksUrl)
+    .then(r => r.json())
+    .then(d => setAllBlocks(d.blocks ?? []))
+    .catch(() => {}), [blocksUrl]);
   useEffect(() => {
     if (!roleReady) return;
-    const url = isChair && selProgram
-      ? `/api/blocks?${new URLSearchParams({ program_id: selProgram })}`
-      : '/api/blocks';
-    fetch(url)
-      .then(r => r.json())
-      .then(d => setAllBlocks(d.blocks ?? []));
-  }, [roleReady, isChair, selProgram]);
+    loadAllBlocks();
+  }, [roleReady, loadAllBlocks]);
 
   /* load block by id */
   const loadBlock = useCallback((blockId: string) => {
@@ -283,6 +286,18 @@ export default function BlockDetailPage() {
   }, []);
 
   useEffect(() => { loadBlock(id); }, [id, loadBlock]);
+
+  /* Live updates: subjects assigned, scheduled, added or removed elsewhere —
+     the block reloads quietly (filter chips, search and open dialogs stay). */
+  const shownId = useRef(id);
+  useEffect(() => { shownId.current = id; }, [id]);
+  useRealtime(['blocks', 'workload', 'schedule', 'curriculum'], () => Promise.all([
+    fetch(`/api/blocks/${id}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d?.block && String(d.block.id) === shownId.current) setBlock(d.block); })
+      .catch(() => {}),
+    roleReady ? loadAllBlocks() : undefined,
+  ]), { enabled: !loading && !reloading && addingId == null });
 
   /* Skeleton (held for the shared minimum so it never just flashes) only on first
      open or a block switch — refreshes after adding/removing subjects keep the page up. */

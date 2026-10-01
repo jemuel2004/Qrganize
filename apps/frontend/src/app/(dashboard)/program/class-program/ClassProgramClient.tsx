@@ -4,6 +4,7 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Download, Printer, RotateCcw, Settings2 } from 'lucide-react';
 import { useSchoolYear } from '@/context/SchoolYearContext';
+import { useRealtime } from '@/context/RealtimeContext';
 import { useDayCombinations } from '@/lib/dayCombinations';
 import {
   DEFAULT_COORDINATORS, EMPTY_SIGNATORY, downloadClassProgramExcel, expandToDisplayRows, fmtNum,
@@ -13,7 +14,7 @@ import {
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import { FilterBar, FilterSelect, SF_INPUT } from '@/components/ui/SearchFilter';
-import { CardSkeleton, FiltersSkeleton } from '@/components/ui/skeletons';
+import { DocumentSkeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import { isScopedChairRole } from '@/lib/roleAccess';
 import {
@@ -79,6 +80,9 @@ export default function ClassProgramPage() {
   // ── Abort controllers ─────────────────────────────────────────────────────
   const blocksAbortRef = useRef<AbortController | null>(null);
   const docAbortRef    = useRef<AbortController | null>(null);
+  /** Queries of the block list / document on screen (live updates re-use them) */
+  const blocksQuery    = useRef('');
+  const docQuery       = useRef('');
 
   // ── Programs (loaded once — just need the list for the dropdown) ──────────
   const [programs, setPrograms] = useState<Program[]>([]);
@@ -267,6 +271,7 @@ export default function ClassProgramPage() {
 
     if (!filterProgram || !filterYearLevel || !globalSemester || !globalYear) {
       blocksAbortRef.current?.abort();
+      blocksQuery.current = '';
       setBlocks([]);
       setBlocksLoading(false);
       setBlocksError('');
@@ -287,6 +292,7 @@ export default function ClassProgramPage() {
       semester:     globalSemester,
       academic_year: globalYear,
     });
+    blocksQuery.current = params.toString();
 
     fetch(`/api/blocks?${params}`, { signal: controller.signal })
       .then(r => r.json().then(data => ({ ok: r.ok, data })))
@@ -319,6 +325,7 @@ export default function ClassProgramPage() {
     // Guard: all three user selections + active semester/year are required
     if (!filterProgram || !filterYearLevel || !selectedBlockId || !globalSemester || !globalYear) {
       docAbortRef.current?.abort();
+      docQuery.current = '';
       setBlockDetail(null);
       setSchedules([]);
       setHasLoaded(false);
@@ -344,6 +351,7 @@ export default function ClassProgramPage() {
       year_level: filterYearLevel,
       semester:   globalSemester,
     });
+    docQuery.current = params.toString();
 
     fetch(`/api/class-program?${params}`, { signal: controller.signal })
       .then(res => res.json().then(data => ({ ok: res.ok, data })))
@@ -365,6 +373,28 @@ export default function ClassProgramPage() {
 
     return () => { controller.abort(); };
   }, [filterProgram, filterYearLevel, selectedBlockId, globalSemester, globalYear]);
+
+  // ── Live updates: schedules, instructors or rooms changed elsewhere ───────
+  // The open document and the block list reload quietly — no skeleton, the
+  // selections and print settings stay. Answers for older selections are dropped.
+  useRealtime(['schedule', 'workload', 'blocks', 'rooms'], () => {
+    const docQ = docQuery.current;
+    const blocksQ = blocksQuery.current;
+    return Promise.all([
+      docQ && fetch(`/api/class-program?${docQ}`)
+        .then(res => (res.ok ? res.json() : null))
+        .then(data => {
+          if (!data || docQuery.current !== docQ) return;
+          setBlockDetail(data.block);
+          setSchedules(data.schedules || []);
+        })
+        .catch(() => {}),
+      blocksQ && fetch(`/api/blocks?${blocksQ}`)
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => { if (data && blocksQuery.current === blocksQ) setBlocks(data.blocks || []); })
+        .catch(() => {}),
+    ]);
+  }, { enabled: !loading && !blocksLoading });
 
   // ── Derived display data ──────────────────────────────────────────────────
   const displayRows     = expandToDisplayRows(schedules);
@@ -646,9 +676,9 @@ export default function ClassProgramPage() {
 
       {/* ── Loading / Empty / Document ── */}
       {showSkeleton ? (
-        <div className="no-print space-y-4" role="status" aria-live="polite" aria-label="Loading class program">
-          <FiltersSkeleton fields={2} />
-          <CardSkeleton className="min-h-[320px]" />
+        // Shaped like the printed Class Program that loads (the filters above stay real)
+        <div className="no-print" role="status" aria-live="polite" aria-label="Loading class program">
+          <DocumentSkeleton />
         </div>
       ) : !showDocument ? (
         <div className="no-print rounded-2xl border border-[#E2E8F0] bg-white px-6 py-14 text-center shadow-sm">

@@ -8,6 +8,7 @@ import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import TrashDropAnimation from '@/components/ui/TrashDropAnimation';
 import { useSchoolYear } from '@/context/SchoolYearContext';
+import { useRealtime } from '@/context/RealtimeContext';
 import {
   Users, ChevronRight, BookOpen, Monitor,
   AlertTriangle, CheckCircle, Clock, Trash2, X,
@@ -1360,47 +1361,59 @@ export default function SchedulingClient() {
     }
   }, [syLoading, globalYear, globalSemester]);
 
-  useEffect(() => {
-    fetch('/api/rooms?status=Active')
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d) setRooms(d.rooms || []); })
-      .catch(() => {});
-  }, []);
+  const loadRooms = useCallback(() => fetch('/api/rooms?status=Active')
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) setRooms(d.rooms || []); })
+    .catch(() => {}), []);
+  useEffect(() => { loadRooms(); }, [loadRooms]);
 
-  useEffect(() => {
-    setFacultyLoading(true);
-    fetch('/api/faculty')
+  /** quiet: live-update refresh — the list stays on screen (no loading state) */
+  const loadFacultyList = useCallback((quiet = false) => {
+    if (!quiet) setFacultyLoading(true);
+    return fetch('/api/faculty')
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) setFacultyList(d.faculty || d || []); })
       .catch(() => {})
-      .finally(() => setFacultyLoading(false));
+      .finally(() => { if (!quiet) setFacultyLoading(false); });
   }, []);
+  useEffect(() => { loadFacultyList(); }, [loadFacultyList]);
+
+  /** Bumped by live updates when no faculty is open (nothing else would refetch the summaries). */
+  const [liveTick, setLiveTick] = useState(0);
 
   /* `/api/faculty` only returns each instructor's load LIMIT (30 hrs, or
      18.25 − designation units), not what's left after assignments. Pull the
      real per-term remaining load from the same endpoint the Workload page
      uses, so "complete" means the same thing on both pages. Refetched when
      the term changes or the selected faculty's workload is updated. */
+  const summariesTerm = useRef('');
   useEffect(() => {
     if (!semester || !schoolYear) return;
     const controller = new AbortController();
-    setSummariesLoading(true);
+    const term = `${semester}|${schoolYear}`;
+    // Only a new term shows the loading state — refreshes keep the badges on screen
+    if (summariesTerm.current !== term) setSummariesLoading(true);
     const qs = new URLSearchParams({ semester, academic_year: schoolYear }).toString();
     fetch(`/api/workload/summaries?${qs}`, { signal: controller.signal })
       .then(r => (r.ok ? r.json() : null))
-      .then(d => { if (d?.summaries) setLoadSummaries(d.summaries); setUnscheduledMap(d?.unscheduled ?? {}); })
+      .then(d => {
+        if (d?.summaries) { setLoadSummaries(d.summaries); summariesTerm.current = term; }
+        setUnscheduledMap(d?.unscheduled ?? {});
+      })
       .catch(() => {})
       .finally(() => { if (!controller.signal.aborted) setSummariesLoading(false); });
     return () => controller.abort();
-  }, [semester, schoolYear, workload]);
+  }, [semester, schoolYear, workload, liveTick]);
 
   /** Term the current `workload` was fetched for (guards the Master Schedule deep link). */
   const workloadTermRef = useRef('');
+  // By id: a refreshed faculty list gives a new object for the same faculty
+  const selId = selFaculty?.id ?? null;
   const fetchWorkload = useCallback(() => {
-    if (!selFaculty) return;
+    if (selId == null) return;
     setFetchingW(true);
     const qs = new URLSearchParams({ semester, academic_year: schoolYear }).toString();
-    fetch(`/api/workload/${selFaculty.id}?${qs}`)
+    fetch(`/api/workload/${selId}?${qs}`)
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (!data || data.error) { setWorkload(null); return; }
@@ -1409,9 +1422,29 @@ export default function SchedulingClient() {
       })
       .catch(() => setWorkload(null))
       .finally(() => setFetchingW(false));
-  }, [selFaculty, semester, schoolYear]);
+  }, [selId, semester, schoolYear]);
 
   useEffect(() => { fetchWorkload(); }, [fetchWorkload]);
+
+  /** Faculty + term on screen, so a late live-update answer never lands on another faculty. */
+  const workloadKey = useRef('');
+  useEffect(() => { workloadKey.current = `${selId}|${semester}|${schoolYear}`; }, [selId, semester, schoolYear]);
+
+  /** Live updates: re-read the open faculty's workload without the skeleton.
+   *  The subject being scheduled and its unsaved sessions are left alone. */
+  const refreshWorkloadQuietly = useCallback(() => {
+    if (selId == null) return Promise.resolve();
+    const key = `${selId}|${semester}|${schoolYear}`;
+    const qs = new URLSearchParams({ semester, academic_year: schoolYear }).toString();
+    return fetch(`/api/workload/${selId}?${qs}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data || data.error || workloadKey.current !== key) return; // keep what is on screen
+        workloadTermRef.current = `${semester}|${schoolYear}`;
+        setWorkload(data);
+      })
+      .catch(() => {});
+  }, [selId, semester, schoolYear]);
 
   useEffect(() => {
     setSelLoad(null); setSessions([]); setManualCount(1);
@@ -1547,7 +1580,18 @@ export default function SchedulingClient() {
       .then(d => setRoomBookings(Array.isArray(d.bookings) ? d.bookings : []))
       .catch(() => {});
     return () => controller.abort();
-  }, [semester, schoolYear, workload]);
+  }, [semester, schoolYear, workload, liveTick]);
+
+  /* Live updates: classes, loads, rooms or faculty changed elsewhere (another
+     admin, another tab). The faculty list, rooms, the open workload and room
+     availability reload quietly; the wizard step, the subject being scheduled
+     and its unsaved sessions stay. Held while this page saves or deletes. */
+  useRealtime(['schedule', 'workload', 'blocks', 'rooms', 'faculty'], () => {
+    const jobs: Promise<unknown>[] = [loadFacultyList(true), loadRooms()];
+    if (selId != null) jobs.push(refreshWorkloadQuietly()); // its effects refresh summaries + bookings
+    else setLiveTick(t => t + 1);
+    return Promise.all(jobs);
+  }, { enabled: !facultyLoading && !fetchingW && !saving && !deleting });
 
   /** Why a room can't be used for this session ('' = free). Ignores the
    *  component being edited (saving replaces its sessions). */

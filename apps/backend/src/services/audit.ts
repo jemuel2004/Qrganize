@@ -3,6 +3,9 @@ import { query } from '@/database/db';
 import { ensureAuditTable } from '@/database/auditSchema';
 import { getAuthUser } from '@/auth/auth';
 import { getClientIp } from '@/auth/clientIp';
+import { bumpTopics } from '@/services/realtime';
+import { scheduleWorkloadMonitoringSync } from '@/services/workloadMonitoring';
+import { topicsForWrite, type RealtimeTopic } from '@shared/realtime';
 
 /**
  * Audit trail — every successful write (POST / PUT / PATCH / DELETE) made
@@ -84,6 +87,9 @@ const RULES: Rule[] = [
 
 const DEFAULT_VERB: Record<string, string> = { POST: 'Created', PUT: 'Updated', PATCH: 'Updated', DELETE: 'Deleted' };
 
+/** Writes to these areas can raise or clear workload / schedule / room-request alerts. */
+const ALERT_TOPICS = new Set<RealtimeTopic>(['term', 'faculty', 'blocks', 'schedule', 'workload', 'room-requests']);
+
 /** Keys never stored (secrets, big blobs). */
 const SECRET_KEY = /pass|otp|code_hash|^code$|token|secret|credential|picture|image|logo|photo|file|data_url|base64/i;
 /** Body fields that best name the thing that changed, in priority order. */
@@ -132,12 +138,20 @@ export function describe(method: string, path: string, body: Record<string, unkn
 
 type Handler<C> = (req: NextRequest, ctx: C) => Promise<Response> | Response;
 
-/** Wraps a route handler so successful writes land in the audit trail. */
+/**
+ * Wraps a route handler so successful writes land in the audit trail and tell
+ * open tabs which data changed (real-time sync, services/realtime.ts).
+ */
 export function withAudit<C = unknown>(handler: Handler<C>): (req: NextRequest, ctx: C) => Promise<Response> {
   return async (req: NextRequest, ctx: C) => {
     const path = req.nextUrl?.pathname ?? new URL(req.url).pathname;
     const method = req.method.toUpperCase();
-    if (method === 'GET' || SKIP.some(re => re.test(path))) return handler(req, ctx);
+    if (method === 'GET') return handler(req, ctx);
+    if (SKIP.some(re => re.test(path))) {
+      const res = await handler(req, ctx);
+      if (res.status < 400) bumpTopics(topicsForWrite(method, path));
+      return res;
+    }
 
     // Read the JSON body from a copy — the handler still gets the original.
     let body: Record<string, unknown> | null = null;
@@ -152,6 +166,12 @@ export function withAudit<C = unknown>(handler: Handler<C>): (req: NextRequest, 
 
     const isLogin = /^\/api\/auth\/(login|google-login|login-otp)$/.test(path);
     const ok = res.status < 400;
+    if (ok) {
+      const topics = topicsForWrite(method, path);
+      bumpTopics(topics);
+      // Workload routes re-check alerts themselves
+      if (!path.startsWith('/api/workload/') && topics.some(t => ALERT_TOPICS.has(t))) scheduleWorkloadMonitoringSync();
+    }
     // Keep failed sign-in attempts too (security); other failures are noise.
     if (ok || (isLogin && [401, 403, 429].includes(res.status))) {
       // Copy the sign-in response now — Next streams the original to the client.
@@ -190,4 +210,5 @@ async function record(a: {
     [actorId, actorRole, actorName ? String(actorName).slice(0, 120) : null, category, action, summary.slice(0, 300),
       a.method, a.path, a.status, a.ok, getClientIp(a.req), Object.keys(details).length ? JSON.stringify(details) : null],
   );
+  bumpTopics(['audit']);
 }
