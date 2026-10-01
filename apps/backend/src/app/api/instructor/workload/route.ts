@@ -190,6 +190,9 @@ export async function GET(req: NextRequest) {
       return s + lh * 1.0 + labh * 0.75; // non-split: curriculum WU
     }, 0);
     const totalRegularHours = regular.reduce((s, r) => {
+      // Split (Contractual): the row keeps only its regular hours — the rest is in
+      // overloads, which is counted separately (same rule as the workload table)
+      if ((parseFloat(r.split_overload_hours) || 0) > 0) return s + (parseFloat(r.hours) || 0);
       return s + (parseFloat(r.curriculum_total_hours) || parseFloat(r.hours) || 0);
     }, 0);
 

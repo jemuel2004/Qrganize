@@ -97,6 +97,59 @@ export type PrintDeduction = {
   deducted_units: number;
 };
 
+/** Research / Extension types go on the form's "Add: Research/Extension" line — for
+ *  Praise records and for load deductions alike (official form). */
+export function isResearchExtensionType(type: string | null | undefined): boolean {
+  return /^(research|extension|research\s*\/\s*extension)$/i.test(String(type ?? '').trim());
+}
+
+export type DesignationFooterLine = {
+  key: string;
+  /** "Designation", or "Add: <type>" — exactly the Deloading type selected */
+  label: string;
+  description: string;
+  units: number;
+};
+
+/** Deloading types in the order they appear on the form (others after) */
+const DELOADING_ORDER = ['Designation', 'Extension', 'Research/Extension'];
+const rank = (type: string) => {
+  const i = DELOADING_ORDER.indexOf(type);
+  return i < 0 ? DELOADING_ORDER.length : i;
+};
+
+/** Workload form lines for Deloading (Special Assignment has its own line): one line
+ *  per deduction with its own units, labelled with the type that was selected —
+ *  "Designation", "Add: Extension", "Add: Research/Extension". With none, the
+ *  template's blank "Designation" line stays. */
+export function designationFooterLines(
+  deductions: (Pick<PrintDeduction, 'deduction_type' | 'description' | 'deducted_units'> & { id?: number })[],
+): DesignationFooterLine[] {
+  const lines = deductions
+    .filter(d => d.deduction_type !== 'Special Assignment')
+    // Form order: Designation, Extension, Research/Extension, then any other type
+    .sort((a, b) => rank(a.deduction_type) - rank(b.deduction_type))
+    .map((d, i): DesignationFooterLine => ({
+      key: `ded-${d.id ?? i}`,
+      label: d.deduction_type === 'Designation' ? 'Designation' : `Add: ${d.deduction_type}`,
+      description: (d.description ?? '').trim() || d.deduction_type,
+      units: Number(d.deducted_units) || 0,
+    }));
+  return lines.length > 0
+    ? lines
+    : [{ key: 'designation-none', label: 'Designation', description: 'No Designation', units: 0 }];
+}
+
+/** "Designation" row text on the workload form: each deduction's description
+ *  (e.g. "ICT Coordinator"), falling back to its type when none was typed.
+ *  Special Assignment has its own row, so it is left out here. */
+export function designationRowText(deductions: Pick<PrintDeduction, 'deduction_type' | 'description'>[]): string {
+  const rows = deductions.filter(d => d.deduction_type !== 'Special Assignment');
+  return rows.length > 0
+    ? rows.map(d => (d.description ?? '').trim() || d.deduction_type).join(' + ')
+    : 'No Designation';
+}
+
 type SplitRow = {
   key: string;
   load: PrintWorkloadLoad;
@@ -459,22 +512,10 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
 
   /* Praise entries live under Other; schedule slots stay as the full template above. */
   if (documentKind === 'praise') {
+    // Praise records are listed on the footer lines (Add: Research/Extension,
+    // Add: Special Assignment), as on the official form — not repeated here.
     const other: WorkloadFormRow[] = unmatchedPrint.map(loadRow);
-    if (praiseArr.length === 0 && unmatchedPrint.length === 0) {
-      other.push({ kind: 'blank', time: '' });
-    } else {
-      for (const p of praiseArr) {
-        const units = parseFloat(String(p.equivalent_units)) || 0;
-        const hours = parseFloat(String(p.equivalent_hours ?? '')) || 0;
-        other.push({
-          kind: 'praise',
-          code: p.praise_type || '',
-          description: p.description || '',
-          units: units % 1 === 0 ? units.toFixed(0) : units.toFixed(2),
-          hours: hours > 0.001 ? (hours % 1 === 0 ? hours.toFixed(0) : hours.toFixed(2)) : '',
-        });
-      }
-    }
+    if (other.length === 0) other.push({ kind: 'blank', time: '' });
     sections.push({ label: 'Other', rows: other });
   } else if (unmatchedPrint.length > 0) {
     sections.push({ label: 'Other', rows: unmatchedPrint.map(loadRow) });
@@ -502,13 +543,6 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
 
   const row = (bold: boolean, cells: WorkloadFormCell[]): WorkloadFormSummaryRow => ({ bold, cells });
 
-  const designationText = designationDeds.length > 0
-    ? designationDeds.map(d => d.deduction_type).join(' + ')
-    : 'No Designation';
-  const designationUnitsStr = designationUnitsTotal > 0
-    ? (designationUnitsTotal % 1 === 0 ? designationUnitsTotal.toFixed(0) : designationUnitsTotal.toFixed(2))
-    : '';
-
   /* Label spans TIME/DAY + Subject Code (colspan 2) so print matches the on-screen form width.
      Remaining cells keep Description / Course / Students / Units / Hours / Room alignment. */
   const noOfUnitsRow = row(true, [
@@ -517,14 +551,6 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
     { text: totalRegularWU.toFixed(2), center: true },
     { text: String(Math.round(totalRegularHours)), center: true },
     {},
-  ]);
-
-  const designationRow = row(false, [
-    { text: 'Designation', labelPad: true, colspan: 2 },
-    { text: designationText, center: true },
-    {}, {},
-    { text: designationUnitsStr, center: true, bold: true },
-    {}, {},
   ]);
 
   const specialRows: WorkloadFormSummaryRow[] = specialAssignmentDeds.length > 0
@@ -562,23 +588,63 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
     (s, p) => s + (parseFloat(String(p.equivalent_units)) || 0),
     0,
   );
-  const praiseHoursTotal = praiseSubjectHours + praiseArr.reduce(
-    (s, p) => s + (parseFloat(String(p.equivalent_hours ?? '')) || 0),
-    0,
-  );
+
+  /* Deloading lines — one per deduction, labelled with its type (Regular and Overload) */
+  const designationRows = designationFooterLines(designationDeds).map(l => row(false, [
+    { text: l.label, labelPad: true, colspan: 2 },
+    { text: l.description, center: true },
+    {}, {},
+    l.units > 0 ? { text: l.units % 1 === 0 ? l.units.toFixed(0) : l.units.toFixed(2), center: true, bold: true } : {},
+    {}, {},
+  ]));
 
   let summary: WorkloadFormSummaryRow[];
   if (documentKind === 'regular' || documentKind === 'deload') {
     /* Keep Regular summary identical to the approved official form (Actual Load reuses it). */
-    summary = [noOfUnitsRow, designationRow, ...specialRows, noOfPrepRow, totalUnitsRow];
+    summary = [noOfUnitsRow, ...designationRows, ...specialRows, noOfPrepRow, totalUnitsRow];
+  } else if (documentKind === 'praise') {
+    /* Praise: the official form's lines — teaching units, each Research/Extension
+       record, each other record as Special Assignment, preparations, total. */
+    const fmtN = (n: number) => (n % 1 === 0 ? n.toFixed(0) : n.toFixed(2));
+    const recordRow = (label: string, p?: PrintPraise) => row(false, [
+      { text: label, labelPad: true, colspan: 2 },
+      p ? { text: p.description || p.praise_type || '', center: true } : {},
+      {}, {},
+      p ? { text: fmtN(parseFloat(String(p.equivalent_units)) || 0), center: true, bold: true } : {},
+      {}, {},
+    ]);
+    const research = praiseArr.filter(p => isResearchExtensionType(p.praise_type));
+    const special = praiseArr.filter(p => !isResearchExtensionType(p.praise_type));
+    const hasTeaching = praiseSubjectWU > 0.001;
+    summary = [
+      row(true, [
+        { text: 'No. of Units', labelPad: true, colspan: 2 },
+        {}, {}, {},
+        hasTeaching ? { text: praiseSubjectWU.toFixed(2), center: true } : {},
+        hasTeaching ? { text: String(Math.round(praiseSubjectHours)), center: true } : {},
+        {},
+      ]),
+      ...(research.length > 0 ? research.map(p => recordRow('Add: Research/Extension', p)) : [recordRow('Add: Research/Extension')]),
+      ...(special.length > 0 ? special.map(p => recordRow('Add: Special Assignment', p)) : [recordRow('Add: Special Assignment')]),
+      row(false, [
+        { text: 'No. of Preparation', labelPad: true, colspan: 2 },
+        hasTeaching && distinctSubjects > 0 ? { text: String(distinctSubjects), center: true } : {},
+        {}, {}, {}, {}, {},
+      ]),
+      row(true, [
+        { text: 'Total No. of Units', labelPad: true, colspan: 2 },
+        { text: 'Praise Load', center: true },
+        {}, {},
+        { text: praiseUnitsTotal.toFixed(2), center: true },
+        {}, {},
+      ]),
+    ];
   } else {
-    /* Overload / Praise: same row skeleton as Regular; only values + load label differ. */
-    const loadLabel = documentKind === 'overload' ? 'Overload' : 'Praise Load';
-    const unitsVal = documentKind === 'overload'
-      ? (isP ? totalRegularWU : totalRegularHours)
-      : praiseUnitsTotal;
-    const hoursVal = documentKind === 'overload' ? totalRegularHours : praiseHoursTotal;
-    const prepCount = documentKind === 'praise' ? 0 : distinctSubjects;
+    /* Overload: same row skeleton as Regular; only values + load label differ. */
+    const loadLabel = 'Overload';
+    const unitsVal = isP ? totalRegularWU : totalRegularHours;
+    const hoursVal = totalRegularHours;
+    const prepCount = distinctSubjects;
     summary = [
       row(true, [
         { text: 'No. of Units', labelPad: true, colspan: 2 },
@@ -587,11 +653,9 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
         { text: String(Math.round(hoursVal)), center: true },
         {},
       ]),
-      designationRow,
-      row(false, [
-        { text: 'Add: Special Assignment', labelPad: true, colspan: 2 },
-        {}, {}, {}, {}, {}, {},
-      ]),
+      // Same Deloading lines as the Regular form (info only — Overload total is unchanged)
+      ...designationRows,
+      ...specialRows,
       row(false, [
         { text: 'No. of Preparation', labelPad: true, colspan: 2 },
         { text: String(prepCount), center: true },

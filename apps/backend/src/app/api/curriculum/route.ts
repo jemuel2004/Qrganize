@@ -3,7 +3,7 @@ import { query, transaction } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { ensureCurriculumFields } from '@/database/migrateCurriculum';
 import { normalizeYearLevel, normalizeSemester } from '@shared/normalizeCurriculum';
-import { categoryFromHours } from '@shared/subjectCategory';
+import { categoryFromHours, coerceSubjectCategory, resolveSubjectCategory } from '@shared/subjectCategory';
 import {
   DEFAULT_CURRICULUM_VERSION,
   parseCurriculumVersion,
@@ -66,7 +66,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       curriculums: result.rows.map(r => ({
         ...r,
-        subject_category: categoryFromHours(r.lecture_hours, r.laboratory_hours, r.subject_code),
+        // A hand-picked category wins; otherwise the current default rule
+        subject_category: r.subject_category_manual
+          ? coerceSubjectCategory(r.subject_category, categoryFromHours(r.lecture_hours, r.laboratory_hours, r.subject_code))
+          : categoryFromHours(r.lecture_hours, r.laboratory_hours, r.subject_code),
       })),
     });
   } catch {
@@ -94,8 +97,8 @@ async function POST_handler(req: NextRequest) {
     if (!(await canAccessProgram(auth, Number(program_id)))) {
       return NextResponse.json({ error: 'You can only manage curriculum for your assigned program.' }, { status: 403 });
     }
-    /* Category is derived from hours, never from client-supplied labels or codes. */
-    const category = categoryFromHours(lecture_hours, laboratory_hours, subject_code);
+    /* Default from code + hours; an explicit Minor/Major picked on the form overrides it. */
+    const { category, manual } = resolveSubjectCategory(body.subject_category, lecture_hours, laboratory_hours, subject_code);
     if (lecture_hours < 0 || laboratory_hours < 0) {
       return NextResponse.json({ error: 'Hours cannot be negative' }, { status: 400 });
     }
@@ -131,10 +134,11 @@ async function POST_handler(req: NextRequest) {
             UPDATE curriculums
                SET is_active = true, subject_name = $1,
                    lecture_hours = $2, laboratory_hours = $3, units = $4,
-                   prerequisites = $5, grade = $6, subject_category = $7, updated_at = NOW()
+                   prerequisites = $5, grade = $6, subject_category = $7,
+                   subject_category_manual = $9, updated_at = NOW()
              WHERE id = $8
              RETURNING *
-          `, [subject_name, lecH, labH, unitsVal, prereqVal, gradeVal, category, row.id]);
+          `, [subject_name, lecH, labH, unitsVal, prereqVal, gradeVal, category, row.id, manual]);
           return updated.rows[0];
         }
         throw new Error('DUPLICATE_ACTIVE_SUBJECT');
@@ -143,12 +147,13 @@ async function POST_handler(req: NextRequest) {
       const inserted = await client.query(`
         INSERT INTO curriculums
           (program_id, year_level, semester, subject_code, subject_name,
-           lecture_hours, laboratory_hours, units, prerequisites, grade, subject_category, curriculum_version)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+           lecture_hours, laboratory_hours, units, prerequisites, grade, subject_category, curriculum_version,
+           subject_category_manual)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         RETURNING *
       `, [
         program_id, normYear, normSem, normCode, subject_name,
-        lecH, labH, unitsVal, prereqVal, gradeVal, category, version,
+        lecH, labH, unitsVal, prereqVal, gradeVal, category, version, manual,
       ]);
       return inserted.rows[0];
     });

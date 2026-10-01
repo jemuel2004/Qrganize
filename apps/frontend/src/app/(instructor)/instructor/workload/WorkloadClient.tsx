@@ -12,7 +12,7 @@ import {
 import OfficialWorkloadFormTable, { type OfficialFormRow } from '@/components/OfficialWorkloadFormTable';
 import { buildOfficialGroups, loadDayPatterns, matchOfficialSlot, formatOfficialNumber, formatOfficialTimeRange, occupiedRangeFromScheduleTimes } from '@/lib/officialWorkloadSlots';
 import { useDayCombinations } from '@/lib/dayCombinations';
-import { printRegularLoadDocument } from '@/lib/instructorWorkloadPrintDocument';
+import { designationFooterLines, designationRowText, isResearchExtensionType, printRegularLoadDocument } from '@/lib/instructorWorkloadPrintDocument';
 import { openWorkloadPrintableVersion } from '@/lib/openPrintHtmlDocument';
 import { REGULAR_LOAD_MAX_UNITS, formatLoadCap, shownUnitsCap, shownUnitsOver } from '@shared/regularLoad';
 import { LOAD_TONE } from '@/lib/loadTone';
@@ -520,23 +520,29 @@ export default function InstructorWorkloadClient() {
       });
     }
   }
-  const designationText = (() => {
-    const t = (workload?.faculty.designation_type || '').trim();
-    if (!t || /^none$/i.test(t) || /^no designation$/i.test(t)) return 'No Designation';
-    return t;
-  })();
+  // Same text as the admin form and print: each deduction's description (e.g. "ICT Coordinator")
+  const designationText = designationRowText(workload?.deductions ?? []);
   const officialRegularSummary = {
     unitsText: formatOfficialNumber(totalRegularWU),
     hoursText: formatOfficialNumber(totalRegularHoursDisplay),
     designation: designationText,
-    specialAssignments: (workload?.praise ?? []).map((p, i) => ({
-      key: String(p.id ?? i),
-      description: String(p.praise_type || p.description || ''),
-      units: formatOfficialNumber(parseFloat(String(p.equivalent_units)) || 0),
+    // Same lines as the admin form and print: one per deduction, labelled by type
+    designationLines: designationFooterLines(isP ? (workload?.deductions ?? []) : []).map(l => ({
+      key: l.key, label: l.label, description: l.description,
+      units: l.units > 0 ? formatOfficialNumber(l.units) : '',
     })),
+    // Special Assignment = the Special Assignment deduction (Praise Load has its own form)
+    specialAssignments: (isP ? (workload?.deductions ?? []) : [])
+      .filter(d => d.deduction_type === 'Special Assignment')
+      .map((d, i) => ({
+        key: String(d.id ?? i),
+        description: d.description || 'Special Assignment',
+        units: formatOfficialNumber(parseFloat(String(d.deducted_units)) || 0),
+      })),
     preparations: String(preparationCount),
+    // Regular Load = teaching + deductions (Praise is not part of it — as on the admin form and print)
     totalUnitsText: formatOfficialNumber(
-      isP ? totalRegularWU + totalDeductionUnits + praiseTotal : totalRegularHoursDisplay + praiseTotal
+      isP ? totalRegularWU + totalDeductionUnits : totalRegularHoursDisplay
     ),
   };
 
@@ -648,8 +654,19 @@ export default function InstructorWorkloadClient() {
     unitsText: formatOfficialNumber(olVal),
     hoursText: formatOfficialNumber(overloadContactHours),
     designation: '',
-    specialAssignments: [] as { key: string; description: string; units: string }[],
-    preparations: '',
+    // Same Deloading lines as the Regular form
+    designationLines: designationFooterLines(isP ? (workload?.deductions ?? []) : []).map(l => ({
+      key: l.key, label: l.label, description: l.description,
+      units: l.units > 0 ? formatOfficialNumber(l.units) : '',
+    })),
+    specialAssignments: (isP ? (workload?.deductions ?? []) : [])
+      .filter(d => d.deduction_type === 'Special Assignment')
+      .map((d, i) => ({
+        key: String(d.id ?? i),
+        description: d.description || 'Special Assignment',
+        units: formatOfficialNumber(parseFloat(String(d.deducted_units)) || 0),
+      })),
+    preparations: String(mergeSameSubjects([...overloadPrintLoads, ...splitPrintLoads]).length),
     totalUnitsText: formatOfficialNumber(olVal),
     totalDescription: 'Overload',
   };
@@ -659,10 +676,7 @@ export default function InstructorWorkloadClient() {
   }, 0) + praiseSplitLoads.reduce((sum, l) => {
     if (!isP) return sum + (parseFloat(String(l.split_overload_hours)) || 0);
     return sum + (parseFloat(String(l.overload_component === 'lab' ? l.laboratory_hours : l.lecture_hours)) || 0);
-  }, 0) + (workload?.praise ?? []).reduce(
-    (sum, p) => sum + (parseFloat(String(p.equivalent_hours)) || 0),
-    0,
-  );
+  }, 0);
   const officialPraiseRows: OfficialFormRow[] = [
     ...praiseSubjectLoads.flatMap((load) =>
       splitLoad(load, isP).map((row) => {
@@ -721,25 +735,24 @@ export default function InstructorWorkloadClient() {
         };
       });
     }),
-    ...(workload?.praise ?? []).map(p => ({
-    key: `praise-${p.id}`,
-    slotId: null,
-    timeLabel: '',
-    subjectCode: String(p.praise_type || ''),
-    description: String(p.description || p.remarks || ''),
-    course: '',
-    students: '',
-    units: formatOfficialNumber(parseFloat(String(p.equivalent_units)) || 0),
-    hours: formatOfficialNumber(parseFloat(String(p.equivalent_hours)) || 0),
-    room: p.description && p.remarks ? String(p.remarks) : '',
-  })),
   ];
+  /* Official Praise Load form: No. of Units is teaching only; each praise record
+     goes on "Add: Research/Extension" or "Add: Special Assignment" (same as admin + print). */
+  const praiseRecordLine = (p: { id?: number; praise_type?: string; description?: string; remarks?: string; equivalent_units?: unknown }, i: number) => ({
+    key: `praise-${p.id ?? i}`,
+    description: String(p.description || p.remarks || p.praise_type || ''),
+    units: formatOfficialNumber(parseFloat(String(p.equivalent_units)) || 0),
+  });
+  const praiseRecords = workload?.praise ?? [];
+  const praiseTeaching = praiseSubjectVal > 0.001;
+  const praisePreparations = mergeSameSubjects([...praiseSubjectLoads, ...praiseSplitLoads]).length;
   const officialPraiseSummary = {
-    unitsText: formatOfficialNumber(praiseTotal),
-    hoursText: formatOfficialNumber(praiseHoursSum),
+    unitsText: praiseTeaching ? formatOfficialNumber(praiseSubjectVal) : '',
+    hoursText: praiseTeaching ? formatOfficialNumber(praiseHoursSum) : '',
     designation: '',
-    specialAssignments: [] as { key: string; description: string; units: string }[],
-    preparations: '',
+    researchExtension: praiseRecords.filter(p => isResearchExtensionType(p.praise_type)).map(praiseRecordLine),
+    specialAssignments: praiseRecords.filter(p => !isResearchExtensionType(p.praise_type)).map(praiseRecordLine),
+    preparations: praiseTeaching && praisePreparations > 0 ? String(praisePreparations) : '',
     totalUnitsText: formatOfficialNumber(praiseTotal),
     totalDescription: 'Praise Load',
   };
@@ -758,7 +771,8 @@ export default function InstructorWorkloadClient() {
           ? [...praiseSubjectLoads, ...praiseSplitLoads]
           : (workload.loads ?? []),
       praise: kind === 'praise' ? (workload.praise ?? []) : (kind === 'regular' ? (workload.praise ?? []) : []),
-      deductions: kind === 'regular' ? (workload.deductions ?? []) : [],
+      // Regular and Overload both list the Deloading lines
+      deductions: kind !== 'praise' ? (workload.deductions ?? []) : [],
       semester,
       academicYear,
       documentKind: kind,

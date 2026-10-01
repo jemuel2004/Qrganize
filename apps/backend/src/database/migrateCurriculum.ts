@@ -182,11 +182,14 @@ export async function ensureCurriculumFields(): Promise<void> {
   await query(`ALTER TABLE curriculums ADD COLUMN IF NOT EXISTS prerequisites TEXT NOT NULL DEFAULT ''`);
   await query(`ALTER TABLE curriculums ADD COLUMN IF NOT EXISTS grade VARCHAR(50) NOT NULL DEFAULT ''`);
   await query(`ALTER TABLE curriculums ADD COLUMN IF NOT EXISTS subject_category VARCHAR(10) NOT NULL DEFAULT 'Minor'`);
+  // true = Minor/Major was picked by hand on the Curriculum form — the sync below leaves it alone
+  await query(`ALTER TABLE curriculums ADD COLUMN IF NOT EXISTS subject_category_manual BOOLEAN NOT NULL DEFAULT false`);
   await ensureCurriculumVersion();
   await ensureWideHourColumns();
 
   /* CS / CPE / IT course code or any laboratory hours → Major; otherwise Minor.
-     Idempotent: only rewrites rows that do not already match the rule. */
+     Idempotent: only rewrites rows that do not already match the rule, and never
+     a category the user picked by hand. */
   if (!categorySynced) {
     try {
       await query(`
@@ -194,6 +197,7 @@ export async function ensureCurriculumFields(): Promise<void> {
         SET subject_category = ${subjectCategorySql()},
             updated_at = NOW()
         WHERE subject_category IS DISTINCT FROM (${subjectCategorySql()})
+          AND NOT subject_category_manual
       `);
     } catch (err) {
       console.warn('[migrate] subject_category sync warning (non-fatal):', err);

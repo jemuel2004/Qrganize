@@ -20,6 +20,25 @@ export function manilaCalendarDateString(now = new Date()): string {
   }).format(now);
 }
 
+/** Current Manila wall-clock time ("HH:MM:SS") and weekday ("Monday"), whatever the server's timezone. */
+export function manilaClock(now = new Date()): { time: string; dayOfWeek: string } {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: APP_TIMEZONE,
+    weekday: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(now);
+  const get = (type: string) => parts.find(p => p.type === type)?.value ?? '00';
+  return { time: `${get('hour')}:${get('minute')}:${get('second')}`, dayOfWeek: get('weekday') };
+}
+
+/** SQL timestamptz for "today (Manila) at <timeSql>" — CURRENT_DATE would use the DB session's timezone. */
+export function manilaTodayAtSql(timeSql: string): string {
+  return `(((NOW() AT TIME ZONE '${APP_TIMEZONE}')::date + ${timeSql}) AT TIME ZONE '${APP_TIMEZONE}')`;
+}
+
 /**
  * Half-open [start, end) range for a Manila calendar day.
  * Use with: timestamp >= start AND timestamp < end

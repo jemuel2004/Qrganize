@@ -3,7 +3,7 @@ import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { ensureCurriculumFields } from '@/database/migrateCurriculum';
 import { normalizeYearLevel, normalizeSemester } from '@shared/normalizeCurriculum';
-import { categoryFromHours } from '@shared/subjectCategory';
+import { resolveSubjectCategory } from '@shared/subjectCategory';
 import { canAccessProgram, isScopedChair } from '@/services/programScope';
 import { withAudit } from '@/services/audit';
 
@@ -27,13 +27,14 @@ async function PUT_handler(req: NextRequest, { params }: { params: Promise<{ id:
     }
 
     const { program_id, year_level, semester, subject_code, subject_name,
-            lecture_hours, laboratory_hours, units, prerequisites, grade } = await req.json();
+            lecture_hours, laboratory_hours, units, prerequisites, grade, subject_category } = await req.json();
 
     if (!(await canAccessProgram(auth, Number(program_id)))) {
       return NextResponse.json({ error: 'You can only manage curriculum for your assigned program.' }, { status: 403 });
     }
 
-    const category = categoryFromHours(lecture_hours, laboratory_hours, subject_code);
+    // Default from code + hours; an explicit Minor/Major picked on the form overrides it
+    const { category, manual } = resolveSubjectCategory(subject_category, lecture_hours, laboratory_hours, subject_code);
 
     const normYear = normalizeYearLevel(year_level) || year_level;
     const normSem  = normalizeSemester(semester)    || semester;
@@ -42,7 +43,7 @@ async function PUT_handler(req: NextRequest, { params }: { params: Promise<{ id:
       UPDATE curriculums
       SET program_id=$1, year_level=$2, semester=$3, subject_code=$4, subject_name=$5,
           lecture_hours=$6, laboratory_hours=$7, units=$8,
-          prerequisites=$9, grade=$10, subject_category=$11, updated_at=NOW()
+          prerequisites=$9, grade=$10, subject_category=$11, subject_category_manual=$13, updated_at=NOW()
       WHERE id=$12
       RETURNING *
     `, [
@@ -53,6 +54,7 @@ async function PUT_handler(req: NextRequest, { params }: { params: Promise<{ id:
       prerequisites || '', grade || '',
       category,
       id,
+      manual,
     ]);
 
     if (result.rows.length === 0) return NextResponse.json({ error: 'Not found' }, { status: 404 });

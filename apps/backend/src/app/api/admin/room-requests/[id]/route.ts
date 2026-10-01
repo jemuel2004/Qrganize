@@ -5,6 +5,7 @@ import { expireStaleOccupancy, expireStaleRoomRequests } from '@/services/ensure
 import { createNotification } from '@/services/notifications';
 import { withAudit } from '@/services/audit';
 import { canManageRooms } from '@/services/rooms';
+import { manilaTodayAtSql } from '@/services/appTimezone';
 
 async function PATCH_handler(
   req: NextRequest,
@@ -119,14 +120,14 @@ async function PATCH_handler(
               UPDATE room_occupancy
               SET    expires_at      = GREATEST(
                        expires_at,
-                       CURRENT_DATE + $1::time + INTERVAL '30 minutes'
+                       ${manilaTodayAtSql('$1::time')} + INTERVAL '30 minutes'
                      ),
                      scheduled_start = $2::time,
                      scheduled_end   = $1::time
               WHERE  room_id    = $3
                 AND  faculty_id = $4
                 AND  status     = 'Occupied'
-                AND  CURRENT_DATE + $1::time + INTERVAL '30 minutes' > NOW()
+                AND  ${manilaTodayAtSql('$1::time')} + INTERVAL '30 minutes' > NOW()
             `, [
               sessRes.rows[0].end_time,
               sessRes.rows[0].start_time,

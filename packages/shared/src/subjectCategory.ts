@@ -26,7 +26,7 @@ export function isMajorCourseCode(subjectCode: unknown): boolean {
 }
 
 /**
- * Source of truth for saved rows (category is derived, never typed in):
+ * Default category (the user may override it on the Curriculum form):
  * CS / CPE / IT course code → Major, even when lecture only
  * Any laboratory hours → Major
  * Everything else (lecture only, other codes) → Minor
@@ -47,6 +47,29 @@ export function categoryFromSubjectType(
 ): SubjectCategory {
   if (type === 'Laboratory' || type === 'Lecture + Laboratory') return 'Major';
   return isMajorCourseCode(subjectCode) ? 'Major' : 'Minor';
+}
+
+/**
+ * Category to save: a Minor/Major picked on the form wins when it differs from
+ * the default (stored with subject_category_manual = true); otherwise the
+ * default applies and the row keeps following the rule.
+ */
+export function resolveSubjectCategory(
+  requested: unknown,
+  lectureHours: unknown,
+  laboratoryHours: unknown,
+  subjectCode: unknown,
+): { category: SubjectCategory; manual: boolean } {
+  const auto = categoryFromHours(lectureHours, laboratoryHours, subjectCode);
+  const picked = parseSubjectCategory(requested);
+  return picked && picked !== auto ? { category: picked, manual: true } : { category: auto, manual: false };
+}
+
+/** PostgreSQL: the stored category when it was set by hand, otherwise the default rule. */
+export function effectiveSubjectCategorySql(alias = ''): string {
+  const p = alias ? `${alias}.` : '';
+  return `CASE WHEN COALESCE(${p}subject_category_manual, false) THEN ${p}subject_category
+               ELSE ${subjectCategorySql(alias)} END`;
 }
 
 /** PostgreSQL expression matching categoryFromHours. Pass a table alias when joining. */

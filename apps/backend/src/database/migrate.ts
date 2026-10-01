@@ -870,6 +870,11 @@ async function v46_semesterDayCombinations() {
   await query(`CREATE INDEX IF NOT EXISTS semester_day_combinations_term_idx ON semester_day_combinations (academic_year, semester)`);
 }
 
+/** Minor/Major picked by hand on the Curriculum form (overrides the default rule). */
+async function v47_curriculumCategoryManual() {
+  await query(`ALTER TABLE curriculums ADD COLUMN IF NOT EXISTS subject_category_manual BOOLEAN NOT NULL DEFAULT false`);
+}
+
 /** One-time: each faculty is assigned the blocks they already teach, so the new
  *  block filter on Faculty Workload doesn't hide their current classes. */
 async function v45_seedFacultyBlocks() {
@@ -974,6 +979,7 @@ const MIGRATIONS: Array<{ version: number; name: string; fn: () => Promise<void>
   { version: 44, name: 'faculty_blocks table',                    fn: v44_facultyBlocks },
   { version: 45, name: 'seed faculty_blocks from current loads',  fn: v45_seedFacultyBlocks },
   { version: 46, name: 'semester_day_combinations table',         fn: v46_semesterDayCombinations },
+  { version: 47, name: 'curriculum manual subject_category',      fn: v47_curriculumCategoryManual },
 ];
 
 // ─── public entry point ───────────────────────────────────────────────────────

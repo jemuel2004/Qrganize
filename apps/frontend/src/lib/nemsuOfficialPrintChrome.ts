@@ -36,7 +36,7 @@ function officialPrintTypographyAndTableCss(): string {
 .page { padding: 0.44in 0.5in 0.75in; }
 
 .hdr { text-align: center; margin-bottom: 4px; line-height: 1.28; }
-.hdr img { width: 60px; height: 60px; object-fit: contain; display: block; margin: 0 auto 3px; }
+.hdr img { width: 80px; height: 80px; object-fit: contain; display: block; margin: 0 auto 4px; }
 .hdr-rep  { font-size: 8pt; }
 .hdr-univ { font-size: 9.5pt; font-weight: bold; }
 .hdr-dept { font-size: 11.5pt; font-weight: bold; margin-top: 1px; }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { query } from '@/database/db';
+import { query, transaction } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { syncWorkloadMonitoringNotifications } from '@/services/workloadMonitoring';
 import { canAccessMasterSchedule } from '@/services/programScope';
@@ -113,31 +113,34 @@ async function POST_handler(req: NextRequest) {
       });
       if (capError) return NextResponse.json({ error: capError, overload_limit_reached: true }, { status: 409 });
 
-      await query(
-        `UPDATE instructor_loads
-         SET load_category = 'Regular', units = $1, hours = $2, overload_component = $3
-         WHERE faculty_id = $4 AND master_schedule_id = $5`,
-        [
-          isPermanent ? parseFloat(regularPart.toFixed(2)) : 0,
-          !isPermanent ? parseFloat(regularPart.toFixed(2)) : 0,
-          overloadComponent,
-          faculty_id, master_schedule_id,
-        ]
-      );
+      // All-or-nothing: a failure part-way must not leave the load moved without its overload row
+      await transaction(async (client) => {
+        await client.query(
+          `UPDATE instructor_loads
+           SET load_category = 'Regular', units = $1, hours = $2, overload_component = $3
+           WHERE faculty_id = $4 AND master_schedule_id = $5`,
+          [
+            isPermanent ? parseFloat(regularPart.toFixed(2)) : 0,
+            !isPermanent ? parseFloat(regularPart.toFixed(2)) : 0,
+            overloadComponent,
+            faculty_id, master_schedule_id,
+          ]
+        );
 
-      // Upsert: delete any existing overloads row then insert the new one
-      await query('DELETE FROM overloads WHERE faculty_id=$1 AND master_schedule_id=$2', [faculty_id, master_schedule_id]);
-      await query(`
-        INSERT INTO overloads
-          (faculty_id, master_schedule_id, units, hours, reason, academic_year, semester)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-      `, [
-        faculty_id, master_schedule_id,
-        isPermanent ? parseFloat(overloadPart.toFixed(2)) : 0,
-        !isPermanent ? parseFloat(overloadPart.toFixed(2)) : 0,
-        `Split load — ${regularPart.toFixed(2)} ${unit} Regular, ${overloadPart.toFixed(2)} ${unit} Overload`,
-        loadRow.academic_year, loadRow.semester,
-      ]);
+        // Upsert: delete any existing overloads row then insert the new one
+        await client.query('DELETE FROM overloads WHERE faculty_id=$1 AND master_schedule_id=$2', [faculty_id, master_schedule_id]);
+        await client.query(`
+          INSERT INTO overloads
+            (faculty_id, master_schedule_id, units, hours, reason, academic_year, semester)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [
+          faculty_id, master_schedule_id,
+          isPermanent ? parseFloat(overloadPart.toFixed(2)) : 0,
+          !isPermanent ? parseFloat(overloadPart.toFixed(2)) : 0,
+          `Split load — ${regularPart.toFixed(2)} ${unit} Regular, ${overloadPart.toFixed(2)} ${unit} Overload`,
+          loadRow.academic_year, loadRow.semester,
+        ]);
+      });
 
     void syncWorkloadMonitoringNotifications(true);
     return NextResponse.json({
@@ -166,23 +169,26 @@ async function POST_handler(req: NextRequest) {
       if (capError) return NextResponse.json({ error: capError, overload_limit_reached: true }, { status: 409 });
     }
 
-    await query(
-      "UPDATE instructor_loads SET load_category='Overload', overload_component='full' WHERE faculty_id=$1 AND master_schedule_id=$2",
-      [faculty_id, master_schedule_id]
-    );
+    // All-or-nothing, like the other move/return routes
+    await transaction(async (client) => {
+      await client.query(
+        "UPDATE instructor_loads SET load_category='Overload', overload_component='full' WHERE faculty_id=$1 AND master_schedule_id=$2",
+        [faculty_id, master_schedule_id]
+      );
 
-    await query('DELETE FROM overloads WHERE faculty_id=$1 AND master_schedule_id=$2', [faculty_id, master_schedule_id]);
-    await query(`
-      INSERT INTO overloads
-        (faculty_id, master_schedule_id, units, hours, reason, academic_year, semester)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-    `, [
-      faculty_id, master_schedule_id,
-      isPermanent  ? parseFloat(subjectTotal.toFixed(2)) : 0,
-      !isPermanent ? parseFloat(subjectTotal.toFixed(2)) : 0,
-      'Teaching overload — manually promoted by admin',
-      loadRow.academic_year, loadRow.semester,
-    ]);
+      await client.query('DELETE FROM overloads WHERE faculty_id=$1 AND master_schedule_id=$2', [faculty_id, master_schedule_id]);
+      await client.query(`
+        INSERT INTO overloads
+          (faculty_id, master_schedule_id, units, hours, reason, academic_year, semester)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `, [
+        faculty_id, master_schedule_id,
+        isPermanent  ? parseFloat(subjectTotal.toFixed(2)) : 0,
+        !isPermanent ? parseFloat(subjectTotal.toFixed(2)) : 0,
+        'Teaching overload — manually promoted by admin',
+        loadRow.academic_year, loadRow.semester,
+      ]);
+    });
 
     void syncWorkloadMonitoringNotifications(true);
     return NextResponse.json({

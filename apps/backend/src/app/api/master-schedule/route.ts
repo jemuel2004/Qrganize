@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { ensureCurriculumFields } from '@/database/migrateCurriculum';
-import { subjectCategorySql } from '@shared/subjectCategory';
+import { effectiveSubjectCategorySql } from '@shared/subjectCategory';
 import { resolveProgramScope, isScopedChair } from '@/services/programScope';
 
 export async function GET(req: NextRequest) {
@@ -121,7 +121,7 @@ export async function GET(req: NextRequest) {
           c.laboratory_hours,
           c.total_hours,
           c.units,
-          ${subjectCategorySql('c')} AS subject_category,
+          ${effectiveSubjectCategorySql('c')} AS subject_category,
           b.id             AS block_id,
           b.block_name,
           b.year_level,

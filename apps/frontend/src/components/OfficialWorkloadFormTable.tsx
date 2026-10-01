@@ -33,7 +33,12 @@ export type OfficialFormSummary = {
   designation: string;
   /** Units deducted from the regular load limit for this designation (e.g. "3.00"). */
   designationUnitsText?: string;
-  specialAssignments: { key: string; description: string; units: string }[];
+  /** Regular form: one line per deduction ("Designation" / "Add: Research/Extension").
+   *  When given, replaces the single Designation line. */
+  designationLines?: { key: string; label: string; description: string; units: string }[];
+  specialAssignments: { key: string; description: string; units: string; action?: React.ReactNode }[];
+  /** Praise Load only: the "Add: Research/Extension" lines (official form). */
+  researchExtension?: { key: string; description: string; units: string; action?: React.ReactNode }[];
   preparations: string;
   totalUnitsText: string;
   /** Label in the Total row Description cell (default: Regular Load). */
@@ -171,6 +176,7 @@ function SummaryRow({
   showActions,
   emphasizeNumbers = false,
   emphasizeDescription = false,
+  action,
 }: {
   label: string;
   description?: string;
@@ -179,6 +185,8 @@ function SummaryRow({
   showActions: boolean;
   emphasizeNumbers?: boolean;
   emphasizeDescription?: boolean;
+  /** e.g. a delete button for a praise record listed on this line */
+  action?: React.ReactNode;
 }) {
   return (
     <tr>
@@ -197,7 +205,11 @@ function SummaryRow({
       <td className={`${cell} ${emphasizeNumbers ? 'font-bold' : ''}`}>{units}</td>
       <td className={`${cell} ${emphasizeNumbers ? 'font-bold' : ''}`}>{hours}</td>
       <td className={cell}></td>
-      <ActionCell show={showActions} />
+      {showActions && action ? (
+        <td className={`${cell} print:hidden px-0.5`}><ActionCellContent>{action}</ActionCellContent></td>
+      ) : (
+        <ActionCell show={showActions} />
+      )}
     </tr>
   );
 }
@@ -486,12 +498,22 @@ export default function OfficialWorkloadFormTable({
                   showActions={showActions}
                   emphasizeNumbers
                 />
-                <SummaryRow
-                  label="Designation"
-                  description={summary.designation}
-                  units={summary.designationUnitsText}
-                  showActions={showActions}
-                />
+                {summary.designationLines ? summary.designationLines.map(l => (
+                  <SummaryRow
+                    key={l.key}
+                    label={l.label}
+                    description={l.description}
+                    units={l.units}
+                    showActions={showActions}
+                  />
+                )) : (
+                  <SummaryRow
+                    label="Designation"
+                    description={summary.designation}
+                    units={summary.designationUnitsText}
+                    showActions={showActions}
+                  />
+                )}
                 {specialRows.map(sa => (
                   <SummaryRow
                     key={sa.key}
@@ -517,7 +539,53 @@ export default function OfficialWorkloadFormTable({
               </>
             )}
 
-            {summary && variant !== 'regular' && (
+            {summary && variant === 'praise' && (
+              <>
+                {/* Same lines as the official Praise Load form */}
+                <SummaryRow
+                  label="No. of Units"
+                  units={summary.unitsText}
+                  hours={summary.hoursText}
+                  showActions={showActions}
+                  emphasizeNumbers
+                />
+                {(summary.researchExtension?.length ? summary.researchExtension : [{ key: 'research-empty', description: '', units: '' }]).map(r => (
+                  <SummaryRow
+                    key={r.key}
+                    label="Add: Research/Extension"
+                    description={r.description}
+                    units={r.units}
+                    showActions={showActions}
+                    action={'action' in r ? r.action : undefined}
+                  />
+                ))}
+                {specialRows.map(sa => (
+                  <SummaryRow
+                    key={sa.key}
+                    label="Add: Special Assignment"
+                    description={sa.description}
+                    units={sa.units}
+                    showActions={showActions}
+                    action={'action' in sa ? sa.action : undefined}
+                  />
+                ))}
+                <SummaryRow
+                  label="No. of Preparation"
+                  description={summary.preparations}
+                  showActions={showActions}
+                />
+                <SummaryRow
+                  label="Total No. of Units"
+                  description={totalDescription}
+                  units={summary.totalUnitsText}
+                  showActions={showActions}
+                  emphasizeNumbers
+                  emphasizeDescription
+                />
+              </>
+            )}
+
+            {summary && variant === 'overload' && (
               <>
                 <SummaryRow
                   label="No. of Units"
@@ -526,6 +594,18 @@ export default function OfficialWorkloadFormTable({
                   showActions={showActions}
                   emphasizeNumbers
                 />
+                {/* Same Deloading lines as the Regular form (info only — Overload total is unchanged) */}
+                {summary.designationLines && (
+                  <>
+                    {summary.designationLines.map(l => (
+                      <SummaryRow key={l.key} label={l.label} description={l.description} units={l.units} showActions={showActions} />
+                    ))}
+                    {specialRows.map(sa => (
+                      <SummaryRow key={sa.key} label="Add: Special Assignment" description={sa.description} units={sa.units} showActions={showActions} />
+                    ))}
+                    <SummaryRow label="No. of Preparation" description={summary.preparations} showActions={showActions} />
+                  </>
+                )}
                 <SummaryRow
                   label="Total No. of Units"
                   description={totalDescription}

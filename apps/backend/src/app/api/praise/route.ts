@@ -2,10 +2,11 @@
 import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { withAudit } from '@/services/audit';
+import { canAccessProgram, getChairAssignedProgramId, isScopedChair } from '@/services/programScope';
 
 export async function GET(req: NextRequest) {
   try {
-    const auth = await getAuthUser(req) as { role?: string } | null;
+    const auth = await getAuthUser(req) as { id?: number; role?: string } | null;
     if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -24,6 +25,12 @@ export async function GET(req: NextRequest) {
     const params: unknown[] = [];
     let idx = 1;
 
+    // Program Chairs only see their own program's faculty
+    if (isScopedChair(auth)) {
+      const chairProgramId = auth.id ? await getChairAssignedProgramId(Number(auth.id)) : null;
+      if (!chairProgramId) return NextResponse.json({ praise: [] });
+      sql += ` AND f.program_id = $${idx++}`; params.push(chairProgramId);
+    }
     if (facultyId) { sql += ` AND p.faculty_id = $${idx++}`; params.push(facultyId); }
     if (academicYear) { sql += ` AND p.academic_year = $${idx++}`; params.push(academicYear); }
     if (semester) { sql += ` AND p.semester = $${idx++}`; params.push(semester); }
@@ -39,7 +46,7 @@ export async function GET(req: NextRequest) {
 
 async function POST_handler(req: NextRequest) {
   try {
-    const auth = await getAuthUser(req) as { role?: string } | null;
+    const auth = await getAuthUser(req) as { id?: number; role?: string } | null;
     if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -51,8 +58,12 @@ async function POST_handler(req: NextRequest) {
     }
 
     // Check if faculty is Permanent (employment_status is a generated column)
-    const facultyResult = await query('SELECT employment_status FROM faculty WHERE id=$1', [faculty_id]);
+    const facultyResult = await query('SELECT employment_status, program_id FROM faculty WHERE id=$1', [faculty_id]);
     if (facultyResult.rows.length === 0) return NextResponse.json({ error: 'Faculty not found' }, { status: 404 });
+    // Program Chairs only manage faculty in their own program (same rule as Deloading)
+    if (!(await canAccessProgram(auth, facultyResult.rows[0].program_id))) {
+      return NextResponse.json({ error: 'Faculty not found' }, { status: 404 });
+    }
 
     if (facultyResult.rows[0].employment_status !== 'Permanent') {
       return NextResponse.json({ error: 'Contractual faculty cannot have Praise assignments' }, { status: 400 });

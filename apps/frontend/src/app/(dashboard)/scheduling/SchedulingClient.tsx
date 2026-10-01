@@ -27,6 +27,7 @@ import DayPicker from '@/components/ui/DayPicker';
 import { TT_DAY_TONES, TT_TONE_MTH, TT_TONE_OVERLOAD, TT_TONE_SAT, TT_TONE_TF, TT_TONE_W, type DayTone } from '@/lib/dayTones';
 import { useDayCombinations } from '@/lib/dayCombinations';
 import { dayCombinationError, daysCode, daysLabel, matchCombination } from '@shared/dayCombination';
+import { blockCode } from '@shared/blockCode';
 import { LOAD_GRACE_UNITS, formatLoadCap } from '@shared/regularLoad';
 
 /* ─── types ─────────────────────────────────────────────────── */
@@ -601,7 +602,7 @@ function WeeklyTimetableGrid({
             const tooltip = [
               `${load.subject_code} — ${load.subject_name}${isOverload ? ' · OVERLOAD' : ''}`,
               `${fmt12(st)} – ${fmt12(et)}`,
-              `${typeLabel} · Block ${load.block_name} · ${roomLabel}`,
+              `${typeLabel} · ${blockCode(load.year_level, load.block_name)} · ${roomLabel}`,
             ].join('\n');
 
             return (
@@ -656,7 +657,7 @@ Click for details`}
                       </span>
                       {load.block_name && (
                         <span className="flex-shrink-0 text-[11px] font-bold px-1.5 rounded bg-[#1E4FB8] leading-[17px] whitespace-nowrap" style={{ color: '#FFFFFF' }}>
-                          {load.block_name}
+                          {blockCode(load.year_level, load.block_name)}
                         </span>
                       )}
                     </div>
@@ -685,7 +686,7 @@ Click for details`}
                         // White set inline — the light-mode rule repaints `text-white` as dark ink
                         style={{ color: '#FFFFFF' }}
                       >
-                        Block {load.block_name}
+                        {blockCode(load.year_level, load.block_name)}
                       </span>
                     )}
                   </div>
@@ -1146,7 +1147,7 @@ function LoadSection({ title, tone, rows, selLoadKey, onSelect, onPreview, empty
                         style={{ color: '#FFFFFF' }}
                         title={[row.load.program_code, row.load.year_level, `Block ${row.load.block_name}`].filter(Boolean).join(' · ')}
                       >
-                        Block {row.load.block_name}
+                        {blockCode(row.load.year_level, row.load.block_name)}
                       </span>
                     )}
                   </div>
@@ -1326,6 +1327,8 @@ export default function SchedulingClient() {
     }, 1500);
   }, [router, fromMsId]);
   const [sessions, setSessions]       = useState<SessionItem[]>([]);
+  /** "<session id>:start_time" / ":room_id" set by hand on session 2+ — session 1 no longer fills them */
+  const manualSessionFields = useRef(new Set<string>());
   const [manualCount, setManualCount] = useState(1);
   /** Days to place on the next freshly created sessions (from a Day combination click) */
   const comboDaysRef = useRef<string[] | null>(null);
@@ -1619,7 +1622,7 @@ export default function SchedulingClient() {
       const end = sessionEndMinutes(b.start_time, b.end_time);
       if (sameBlock) out.push({
         start, end, kind: 'Block',
-        label: `Block ${b.block_name} has ${b.subject_code} ${time}${b.faculty_name ? ` (${b.faculty_name})` : ''}`,
+        label: `${blockCode(selLoad?.load.year_level, b.block_name)} has ${b.subject_code} ${time}${b.faculty_name ? ` (${b.faculty_name})` : ''}`,
       });
       if (sameRoom) out.push({
         start, end, kind: 'Room',
@@ -1687,23 +1690,46 @@ export default function SchedulingClient() {
   }
 
   function updateSession(id: string, key: string, val: string | number) {
-    setSessions(prev => prev.map(s => {
-      if (s.id !== id) return s;
-      const updated = { ...s, [key]: val };
-      // Picking a day — or a room — where the current time is already taken
-      // (by the instructor, the block, or that room) → jump to the first free start
-      if ((key === 'day' || key === 'room_id') && val && updated.day) {
-        const free = freeStartTimes(updated, prev);
-        if (free.length > 0 && !free.includes(updated.start_time)) {
-          updated.start_time = free[0];
-          updated.end_time = addMinutes(free[0], Math.round(toNum(updated.hours) * 60));
+    /* Session 1's time / room fill the other sessions; a row the admin changes
+       by hand keeps its own value from then on. */
+    const idx = sessions.findIndex(s => s.id === id);
+    const followed = key === 'start_time' || key === 'room_id';
+    if (idx > 0 && followed) manualSessionFields.current.add(`${id}:${key}`);
+
+    setSessions(prev => {
+      let next = prev.map(s => {
+        if (s.id !== id) return s;
+        const updated = { ...s, [key]: val };
+        // Picking a day — or a room — where the current time is already taken
+        // (by the instructor, the block, or that room) → jump to the first free start
+        if ((key === 'day' || key === 'room_id') && val && updated.day) {
+          const free = freeStartTimes(updated, prev);
+          if (free.length > 0 && !free.includes(updated.start_time)) {
+            updated.start_time = free[0];
+            updated.end_time = addMinutes(free[0], Math.round(toNum(updated.hours) * 60));
+          }
         }
+        if (key === 'start_time') {
+          updated.end_time = addMinutes(String(val), Math.round(toNum(updated.hours) * 60));
+        }
+        return updated;
+      });
+
+      if (idx === 0 && followed) {
+        const v = String(next[0][key as 'start_time' | 'room_id']);
+        next = next.map((s, i) => {
+          if (i === 0 || manualSessionFields.current.has(`${s.id}:${key}`)) return s;
+          if (key === 'start_time') {
+            const copy = { ...s, start_time: v, end_time: addMinutes(v, Math.round(toNum(s.hours) * 60)) };
+            // Only where that time is free on this session's day — never copy a conflict in
+            return freeStartTimes(copy, next).includes(v) ? copy : s;
+          }
+          // Room: only if it is free at this session's time
+          return v && roomBusyWith(s, Number(v)) ? s : { ...s, room_id: v };
+        });
       }
-      if (key === 'start_time') {
-        updated.end_time = addMinutes(String(val), Math.round(toNum(updated.hours) * 60));
-      }
-      return updated;
-    }));
+      return next;
+    });
     if (key === 'day' || key === 'start_time' || key === 'room_id') {
       setConflictsVerified(false); setSessionConflicts([]);
     }
@@ -1905,7 +1931,7 @@ export default function SchedulingClient() {
       }
       await res.json().catch(() => null);
       const saved = selLoad;
-      setSuccess(`Schedule saved for ${saved.load.subject_code} (${saved.label}) — Block ${saved.load.block_name}`);
+      setSuccess(`Schedule saved for ${saved.load.subject_code} (${saved.label}) — ${blockCode(saved.load.year_level, saved.load.block_name)}`);
       fetchWorkload();
       // Check animation plays for 1.3s (same as Faculty / Blocks / Curriculum),
       // then the form clears and the toast confirms.
@@ -1913,7 +1939,7 @@ export default function SchedulingClient() {
       setTimeout(() => {
         setSaveSuccess(false);
         setSelLoad(null); setSessions([]);
-        toast.success(`Schedule saved for ${saved.load.subject_code} — Block ${saved.load.block_name}.`);
+        toast.success(`Schedule saved for ${saved.load.subject_code} — ${blockCode(saved.load.year_level, saved.load.block_name)}.`);
       }, 1300);
     } catch { setError('Connection error.'); toast.error('Connection error. Please try again.'); }
     finally { setSaving(false); }
@@ -2691,7 +2717,7 @@ export default function SchedulingClient() {
                     ))}
                   </div>
                   <div className="px-4 py-2.5 bg-[#F8FAFC] border-t border-[#E2E8F0] flex items-center gap-4 text-sm text-[#64748B] flex-wrap">
-                    <span><span className="text-[#94A3B8]">Block:</span> <span className="font-semibold text-[#475569]">{selLoad.load.block_name}</span></span>
+                    <span><span className="text-[#94A3B8]">Block:</span> <span className="font-semibold text-[#475569]">{blockCode(selLoad.load.year_level, selLoad.load.block_name)}</span></span>
                     <span><span className="text-[#94A3B8]">Year:</span> <span className="font-semibold text-[#475569]">{selLoad.load.year_level}</span></span>
                     <span><span className="text-[#94A3B8]">Sem:</span> <span className="font-semibold text-[#475569]">{selLoad.load.block_semester}</span></span>
                     <span><span className="text-[#94A3B8]">Program:</span> <span className="font-semibold text-[#475569]">{selLoad.load.program_code}</span></span>
@@ -2852,6 +2878,11 @@ export default function SchedulingClient() {
                         </tbody>
                       </table>
                     </div>
+                    {sessions.length > 1 && (
+                      <p className="px-4 py-2.5 text-xs text-[#64748B] border-t border-[#F1F5F9]">
+                        Session 1&apos;s time and room fill the other sessions — change any row to set it on its own.
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -3310,7 +3341,7 @@ export default function SchedulingClient() {
                             </div>
                             <div className="text-[15px] font-bold text-[#0B2A5B] truncate">{si.faculty_name}</div>
                             <div className="text-xs text-[#64748B] truncate">
-                              {[si.program_code, si.year_level, `Block ${si.block_name}`].filter(Boolean).join(' · ')}
+                              {[si.program_code, blockCode(si.year_level, si.block_name)].filter(Boolean).join(' · ')}
                             </div>
                           </div>
                           <motion.button
@@ -3339,7 +3370,7 @@ export default function SchedulingClient() {
                     <div className="text-xs text-[#64748B]">Faculty</div>
                     <div className="text-[15px] font-bold text-[#0B2A5B] truncate">{viewingInstructor.faculty_name}</div>
                     <div className="text-xs text-[#64748B] truncate">
-                      {[viewingInstructor.program_code, viewingInstructor.year_level, `Block ${viewingInstructor.block_name}`].filter(Boolean).join(' · ')}
+                      {[viewingInstructor.program_code, blockCode(viewingInstructor.year_level, viewingInstructor.block_name)].filter(Boolean).join(' · ')}
                     </div>
                   </div>
                 </motion.div>

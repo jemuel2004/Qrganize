@@ -227,7 +227,8 @@ async function POST_handler(req: NextRequest) {
             `UPDATE curriculums
                 SET is_active=true, subject_name=$1,
                     lecture_hours=$2, laboratory_hours=$3, units=$4,
-                    prerequisites=$5, grade=$6, subject_category=$7, updated_at=NOW()
+                    prerequisites=$5, grade=$6,
+                    subject_category=CASE WHEN subject_category_manual THEN subject_category ELSE $7 END, updated_at=NOW()
               WHERE id=$8`,
             [row.subjectName, row.lecHours, row.labHours, row.units, row.prereq, row.grade, row.category, existing.id],
           );
@@ -251,7 +252,8 @@ async function POST_handler(req: NextRequest) {
           await client.query(
             `UPDATE curriculums
                 SET subject_name=$1, lecture_hours=$2, laboratory_hours=$3, units=$4,
-                    prerequisites=$5, grade=$6, subject_category=$7, updated_at=NOW()
+                    prerequisites=$5, grade=$6,
+                    subject_category=CASE WHEN subject_category_manual THEN subject_category ELSE $7 END, updated_at=NOW()
               WHERE id=$8 AND is_active=true`,
             [row.subjectName, row.lecHours, row.labHours, row.units, row.prereq, row.grade, row.category, existing.id],
           );

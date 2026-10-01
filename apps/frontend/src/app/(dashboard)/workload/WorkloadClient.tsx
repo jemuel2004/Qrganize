@@ -23,7 +23,7 @@ import {
 } from '@/lib/officialWorkloadSlots';
 import { useDayCombinations } from '@/lib/dayCombinations';
 import { LOAD_INK, LOAD_TONE } from '@/lib/loadTone';
-import { printRegularLoadDocument } from '@/lib/instructorWorkloadPrintDocument';
+import { designationFooterLines, designationRowText, isResearchExtensionType, printRegularLoadDocument } from '@/lib/instructorWorkloadPrintDocument';
 import { openWorkloadPrintableVersion } from '@/lib/openPrintHtmlDocument';
 import { coerceSubjectCategory } from '@shared/subjectCategory';
 import {
@@ -365,13 +365,25 @@ function designationLabel(f: Faculty): string {
   return t;
 }
 
-const EMPTY_PRAISE_FORM = {
-  praise_type: '',
-  description: '',
-  equivalent_units: '0',
-  equivalent_hours: '0',
-  remarks: '',
-};
+/** Praise Load types — picked like Faculty Deloading: tick a type, fill its fields. */
+const PRAISE_TYPES = [
+  'Research', 'Extension', 'Special Assignment',
+  'Administrative Assignment', 'Committee Work', 'Other Non-Teaching Load',
+] as const;
+/** One praise record in the Praise Load modal — `id` set when it is already saved. */
+interface PraiseEntry { key: string; id?: number; type: string; description: string; units: string; }
+type PraiseRecordLite = { id: number; praise_type?: string; description?: string; equivalent_units?: unknown };
+/** Saved praise records → modal entries (the modal opens with what is already there). */
+function praiseEntriesFrom(records: PraiseRecordLite[]): PraiseEntry[] {
+  return records.map(p => ({
+    key: `saved-${p.id}`, id: p.id,
+    type: String(p.praise_type || 'Other Non-Teaching Load'),
+    description: String(p.description ?? ''),
+    units: String(parseFloat(String(p.equivalent_units)) || 0),
+  }));
+}
+let praiseKeySeq = 0;
+const newPraiseEntry = (type: string): PraiseEntry => ({ key: `new-${++praiseKeySeq}`, type, description: '', units: '' });
 
 /** Allow empty and in-progress decimals (e.g. "2.") while typing. */
 function isNonNegDecimalDraft(raw: string): boolean {
@@ -514,6 +526,8 @@ export default function WorkloadPage({
   const [splitRegularAmount, setSplitRegularAmount] = useState(0);
   /* Units the admin wants to keep as Regular for the specific component being moved */
   const [componentSplitUnits, setComponentSplitUnits] = useState(0);
+  /** What is typed in Move to Overload → Keep as Regular (may be empty; empty counts as 0) */
+  const [splitInput, setSplitInput] = useState('');
 
   const [instructorPanelCollapsed, setInstructorPanelCollapsed] = useState(false);
   const [workloadModalOpen, setWorkloadModalOpen] = useState(false);
@@ -529,7 +543,9 @@ export default function WorkloadPage({
   const [printError, setPrintError] = useState('');
   const [printOfferFallback, setPrintOfferFallback] = useState(false);
   const [praiseModalOpen, setPraiseModalOpen] = useState(false);
-  const [praiseForm, setPraiseForm] = useState(EMPTY_PRAISE_FORM);
+  const [praiseEntries, setPraiseEntries] = useState<PraiseEntry[]>([]);
+  /** What was saved when the modal opened — Save sends only the differences */
+  const [praiseOriginal, setPraiseOriginal] = useState<PraiseEntry[]>([]);
   const [praiseError, setPraiseError] = useState('');
   const [praiseLoading, setPraiseLoading] = useState(false);
   const [deletePraiseTarget, setDeletePraiseTarget] = useState<{ id: number; praise_type: string } | null>(null);
@@ -561,12 +577,16 @@ export default function WorkloadPage({
   const [removeWorkloadTarget, setRemoveWorkloadTarget] = useState<WorkloadLoad | null>(null);
   const [removingWorkload, setRemovingWorkload] = useState(false);
 
-  /* Load Deduction modal — opened only via Edit Deduction */
+  /* Load Deduction modal — opened only via the Deloading button */
   const [designationPending, setDesignationPending] = useState<Faculty | null>(null);
   const [deductionEntries, setDeductionEntries] = useState<DeductionEntry[]>([]);
   const [deductionNone, setDeductionNone] = useState(true);
   const [designationError, setDesignationError] = useState('');
   const [designationLoading, setDesignationLoading] = useState(false);
+  /** Deloading saved — the animated check shows this note, then the modal closes */
+  const [deloadSavedNote, setDeloadSavedNote] = useState<string | null>(null);
+  /** Praise Load saved — same animated check */
+  const [praiseSavedNote, setPraiseSavedNote] = useState<string | null>(null);
   const [modalDeductionsLoading, setModalDeductionsLoading] = useState(false);
   const [deductionMsg, setDeductionMsg] = useState('');
   const [subjectSearch, setSubjectSearch] = useState('');
@@ -1043,6 +1063,7 @@ export default function WorkloadPage({
       /* Component-specific: user will choose entire-vs-split in the modal.
          componentSplitUnits tracks the regular portion (in wu/units) for the selected component. */
       setComponentSplitUnits(0);
+      setSplitInput('');
     } else {
       /* Full / single-component: keep the existing max-regular pre-fill for the split slider */
       const subjectTotal = isPermanent ? calcWorkloadUnits(lec, lab) : lec + lab;
@@ -1051,6 +1072,7 @@ export default function WorkloadPage({
         : 0;
       setSplitRegularAmount(maxRegular);
       setComponentSplitUnits(0);
+      setSplitInput(String(maxRegular));
     }
     setMoveToOverloadTarget({ load, component });
   }
@@ -1336,44 +1358,81 @@ export default function WorkloadPage({
     }
   }
 
-  async function addPraise(e: React.FormEvent) {
+  /** Differences between the modal and what is saved (empty boxes count as 0). */
+  function praiseChanges(entries: PraiseEntry[], original: PraiseEntry[]) {
+    const unitsOf = (u: string) => parseNonNegDecimal(u.trim() || '0') ?? 0;
+    const rows = entries.map(en => ({ ...en, description: en.description.trim(), units: en.units.trim() || '0' }));
+    const toDelete = original.filter(o => !rows.some(r => r.id === o.id));
+    const toUpdate = rows.filter(r => {
+      if (r.id == null) return false;
+      const o = original.find(x => x.id === r.id);
+      return !!o && (o.description.trim() !== r.description || unitsOf(o.units) !== unitsOf(r.units));
+    });
+    const toCreate = rows.filter(r => r.id == null);
+    return { rows, toDelete, toUpdate, toCreate, unitsOf, dirty: toDelete.length + toUpdate.length + toCreate.length > 0 };
+  }
+
+  async function savePraise(e: React.FormEvent) {
     e.preventDefault();
-    if (!filterSemester) { setPraiseError('Please select a semester before adding a Praise assignment.'); return; }
-    const units = parseNonNegDecimal(praiseForm.equivalent_units);
-    const hours = parseNonNegDecimal(praiseForm.equivalent_hours);
-    if (units === null) { setPraiseError('Equivalent Units must be a valid non-negative number.'); return; }
-    if (hours === null) { setPraiseError('Equivalent Hours must be a valid non-negative number.'); return; }
-    if (
-      !hasAtMostThreeNumericDigits(praiseForm.equivalent_units)
-      || !hasAtMostThreeNumericDigits(praiseForm.equivalent_hours)
-    ) {
-      setPraiseError('Maximum of 3 digits only (e.g., 1.23).');
-      return;
+    if (!selectedFaculty) return;
+    if (!filterSemester) { setPraiseError('Please select a semester before saving Praise Load.'); return; }
+    const { rows, toDelete, toUpdate, toCreate, unitsOf, dirty } = praiseChanges(praiseEntries, praiseOriginal);
+    if (!dirty) { setPraiseModalOpen(false); return; }
+    for (const r of rows) {
+      if (parseNonNegDecimal(r.units) === null) { setPraiseError(`${r.type}: units must be a valid non-negative number.`); return; }
+      if (!hasAtMostThreeNumericDigits(r.units)) { setPraiseError(`${r.type}: maximum of 3 digits only (e.g., 1.23).`); return; }
     }
     setPraiseLoading(true); setPraiseError('');
+    const fid = selectedFaculty.id;
+    const headers = { 'Content-Type': 'application/json' };
+    const send = async (label: string, url: string, init: RequestInit) => {
+      const res = await fetch(url, init);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(`${label}: ${data.error || 'could not be saved.'}`);
+    };
     try {
-      const res = await fetch('/api/praise', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          faculty_id: selectedFaculty?.id,
-          praise_type: praiseForm.praise_type,
-          description: praiseForm.description,
-          remarks: praiseForm.remarks,
-          equivalent_units: units,
-          equivalent_hours: hours,
-          academic_year: filterAcademicYear,
-          semester: filterSemester,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setPraiseError(data.error); toast.error(data.error || 'Failed to add PRAISE assignment.'); return; }
-      toast.success('PRAISE assignment added successfully.');
-      setPraiseForm(EMPTY_PRAISE_FORM);
-      setPraiseModalOpen(false);
+      for (const o of toDelete) {
+        await send(o.type, `/api/praise-loads/${o.id}?faculty_id=${fid}`, { method: 'DELETE' });
+      }
+      for (const r of toUpdate) {
+        await send(r.type, `/api/praise-loads/${r.id}`, {
+          method: 'PUT', headers,
+          body: JSON.stringify({ faculty_id: fid, description: r.description, equivalent_units: unitsOf(r.units) }),
+        });
+      }
+      for (const r of toCreate) {
+        await send(r.type, '/api/praise', {
+          method: 'POST', headers,
+          body: JSON.stringify({
+            faculty_id: fid, praise_type: r.type, description: r.description, remarks: '',
+            equivalent_units: unitsOf(r.units),
+            equivalent_hours: 0, // hours aren't asked for Praise Load (API still expects the field)
+            academic_year: filterAcademicYear, semester: filterSemester,
+          }),
+        });
+      }
+      // Animated check inside the modal, then it closes on its own
+      const praiseTotal = rows.reduce((sum, r) => sum + unitsOf(r.units), 0);
+      setPraiseSavedNote(rows.length === 0 ? 'All Praise Load removed.' : `Total Praise Load: ${praiseTotal.toFixed(2)} units`);
+      setTimeout(() => { setPraiseModalOpen(false); setPraiseSavedNote(null); }, 1500);
       loadWorkload(); loadAllFacultyLoads();
-    } catch { setPraiseError('Connection error'); toast.error('Connection error. Please try again.'); }
-    finally { setPraiseLoading(false); }
+    } catch (err) {
+      const msg = err instanceof TypeError ? 'Connection error. Please try again.'
+        : err instanceof Error && err.message ? err.message : 'Failed to save Praise Load.';
+      // Part of the changes may be saved — reload and show exactly what is saved,
+      // so pressing Save again never duplicates anything.
+      const fresh = await loadWorkload();
+      loadAllFacultyLoads();
+      if (fresh) {
+        const current = praiseEntriesFrom((fresh.praise ?? []) as PraiseRecordLite[]);
+        setPraiseEntries(current);
+        setPraiseOriginal(current);
+      }
+      setPraiseError(`${msg} The list now shows what is saved — check it and save again.`);
+      toast.error(msg);
+    } finally {
+      setPraiseLoading(false);
+    }
   }
 
   const handleDeletePraise = useCallback(async () => {
@@ -1533,10 +1592,11 @@ export default function WorkloadPage({
       };
       setFaculty(prev => prev.map(f => f.id === updated.id ? updated : f));
       setSelectedFaculty(updated);
-      setDesignationPending(null);
       setDeductionMsg('Load deduction saved. Workload updated.');
       const availableLoad = Math.max(0, REGULAR_LOAD_MAX_UNITS - (Number(data.total_deduction) || 0));
-      toast.success(`Load deduction saved successfully. ${loadDisplay(availableLoad)} units remaining.`);
+      // Animated check inside the modal, then it closes on its own
+      setDeloadSavedNote(`${loadDisplay(availableLoad)} units regular load available.`);
+      setTimeout(() => { setDesignationPending(null); setDeloadSavedNote(null); }, 1500);
       loadWorkload();
       loadAllFacultyLoads();
       loadFacultySummaries();
@@ -1962,14 +2022,21 @@ export default function WorkloadPage({
               className="inline-flex items-center justify-center gap-1.5 px-3.5 min-h-10 rounded-xl text-sm font-semibold border border-[#E2E8F0] bg-[var(--surface-elevated)] text-[#0B2A5B] hover:bg-[var(--background-secondary)] transition-colors"
             >
               <Pencil className="w-3.5 h-3.5" />
-              Edit Deduction
+              Deloading
             </button>
           )}
           {selectedFaculty && isPermanent && (
             <button
               type="button"
               onClick={() => {
-                setPraiseForm(EMPTY_PRAISE_FORM);
+                const fill = (w: WorkloadSummary | null) => {
+                  const current = praiseEntriesFrom((w?.praise ?? []) as PraiseRecordLite[]);
+                  setPraiseEntries(current);
+                  setPraiseOriginal(current);
+                };
+                fill(workload);
+                // Workload not loaded yet → fill in as soon as it arrives
+                if (!workload) void loadWorkload().then(fill);
                 setPraiseError('');
                 setPraiseModalOpen(true);
               }}
@@ -2951,23 +3018,15 @@ export default function WorkloadPage({
             const unit = isPermanent ? 'units' : 'hrs';
 
             /* -- Component-specific helpers -- */
-            const componentTotalHours = component === 'lec' ? lec : lab;
             const componentTotalWU    = component === 'lec'
               ? (isPermanent ? lec : lec)
               : (isPermanent ? lab * 0.75 : lab);
-            const otherTotalWU = component === 'lec'
-              ? (isPermanent ? lab * 0.75 : lab)
-              : (isPermanent ? lec : lec);
             const componentLabel = component === 'lec' ? 'Lecture' : component === 'lab' ? 'Laboratory' : '';
             const otherLabel     = component === 'lec' ? 'Laboratory' : 'Lecture';
 
             /* split preview for component-specific (input is in units/wu) */
             const compRegularWU  = componentSplitUnits;
-            const compRegularHours = isPermanent
-              ? (component === 'lec' ? componentSplitUnits : Math.round(componentSplitUnits / 0.75))
-              : componentSplitUnits;
-            const compOverloadWU    = Math.max(0, componentTotalWU - componentSplitUnits);
-            const compOverloadHours = Math.max(0, componentTotalHours - compRegularHours);
+            const compOverloadWU = Math.max(0, componentTotalWU - componentSplitUnits);
 
             /* -- Full / single-component helpers -- */
             const subjectTotal    = isPermanent ? calcWorkloadUnits(lec, lab) : lec + lab;
@@ -2984,8 +3043,8 @@ export default function WorkloadPage({
                   type="button"
                   onClick={() => {
                     setMoveToOverloadMode(mode);
-                    if (mode === 'split' && !isComponentSpecific) setSplitRegularAmount(maxRegularPart);
-                    if (mode === 'split' && isComponentSpecific) setComponentSplitUnits(0);
+                    if (mode === 'split' && !isComponentSpecific) { setSplitRegularAmount(maxRegularPart); setSplitInput(String(maxRegularPart)); }
+                    if (mode === 'split' && isComponentSpecific) { setComponentSplitUnits(0); setSplitInput(''); }
                   }}
                   className={`w-full text-left px-3.5 py-3 rounded-xl border transition ${
                     active
@@ -3037,21 +3096,27 @@ export default function WorkloadPage({
               return { afterRegular, afterOverload, afterRemaining, isAfterExceeded, deltaOverload };
             })() : null;
 
+            /* Keep as Regular box: free text so it can be erased; the number is clamped */
+            const splitMax = isComponentSpecific ? parseFloat((componentTotalWU - 0.01).toFixed(2)) : maxRegularPart;
+            const onSplitInput = (text: string) => {
+              setSplitInput(text);
+              const raw = parseFloat(text);
+              const v = parseFloat(Math.max(0, Math.min(splitMax, Number.isNaN(raw) ? 0 : raw)).toFixed(2));
+              if (isComponentSpecific) setComponentSplitUnits(v); else setSplitRegularAmount(v);
+            };
+            const splitRegular  = isComponentSpecific ? compRegularWU : splitRegularAmount;
+            const splitOverload = isComponentSpecific ? compOverloadWU : Math.max(0, overloadPortion);
+
             return (
               <>
                 <div>
-                  <div className="flex items-baseline gap-2 flex-wrap">
-                    <span className="text-sm font-semibold text-[#0B2A5B]">{load.subject_code}</span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-base font-bold text-[#0B2A5B]">{load.subject_code}</span>
                     {isComponentSpecific && (
-                      <span className="text-[13px] text-[#64748B]">{componentLabel}</span>
+                      <span className="px-2 py-0.5 rounded-md text-xs font-semibold bg-[#F1F5F9] text-[#475569]">{componentLabel}</span>
                     )}
                   </div>
-                  <p className="text-[13px] text-[#64748B] mt-0.5">{load.subject_name}</p>
-                  <p className="text-[13px] text-[#0B2A5B] mt-1.5">
-                    {isComponentSpecific
-                      ? <>{componentTotalWU.toFixed(2)} {unit}{isPermanent ? ` (${componentTotalHours.toFixed(2)} hrs)` : ''}. {otherLabel} stays Regular ({otherTotalWU.toFixed(2)} {unit}).</>
-                      : <>{subjectTotal.toFixed(2)} {unit}</>}
-                  </p>
+                  <p className="text-sm text-[#64748B] mt-0.5">{load.subject_name}</p>
                 </div>
 
                 <ChoiceBtn
@@ -3059,79 +3124,42 @@ export default function WorkloadPage({
                   active={moveToOverloadMode === 'entire'}
                   label={isComponentSpecific ? `Move all of ${componentLabel}` : 'Move all'}
                   description={isComponentSpecific
-                    ? `${componentTotalWU.toFixed(2)} ${unit} will be counted as Overload. ${otherLabel} stays Regular.`
-                    : `All ${subjectTotal.toFixed(2)} ${unit} will be counted as Overload.`}
+                    ? `${componentTotalWU.toFixed(2)} ${unit} to Overload · ${otherLabel} stays Regular`
+                    : `${subjectTotal.toFixed(2)} ${unit} to Overload`}
                 />
                 <ChoiceBtn
                   mode="split"
                   active={moveToOverloadMode === 'split'}
                   label="Split"
-                  description={isComponentSpecific
-                    ? `Keep some of ${componentLabel} as Regular and move the rest.`
-                    : 'Keep some as Regular and move the rest to Overload.'}
+                  description="Keep part as Regular, move the rest"
                 />
+
                 {moveToOverloadMode === 'split' && (
-                  <div className="rounded-xl border border-[#E2E8F0] px-3.5 py-3 space-y-2.5">
-                    {isComponentSpecific ? (
-                      <>
-                        <div>
-                          <label className="text-[13px] text-[#64748B]">Keep as Regular ({unit})</label>
-                          <input
-                            type="number"
-                            min={0}
-                            max={parseFloat((componentTotalWU - 0.01).toFixed(2))}
-                            step={0.25}
-                            value={componentSplitUnits}
-                            onChange={e => {
-                              const raw = parseFloat(e.target.value);
-                              const v   = isNaN(raw) ? 0 : raw;
-                              setComponentSplitUnits(
-                                parseFloat(Math.max(0, Math.min(componentTotalWU, v)).toFixed(2))
-                              );
-                            }}
-                            className="mt-1 w-full bg-white border border-[#CBD5E1] text-[#0B2A5B] rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D5BD6]/40 focus:border-[#1D5BD6]"
-                          />
-                          <p className="text-[12px] text-[#94A3B8] mt-1">Up to {(componentTotalWU - 0.01).toFixed(2)}</p>
-                        </div>
-                        <p className="text-[13px] text-[#0B2A5B]">
-                          Regular {compRegularWU.toFixed(2)} {unit}
-                          {isPermanent ? ` (${compRegularHours.toFixed(2)} hrs)` : ''}
-                          <span className="text-[#94A3B8]"> · </span>
-                          Overload {compOverloadWU.toFixed(2)} {unit}
-                          {isPermanent ? ` (${compOverloadHours.toFixed(2)} hrs)` : ''}
-                        </p>
-                        {compOverloadWU <= 0.001 && (
-                          <p className="text-[13px] text-[#B91C1C]">Enter a Regular amount less than the full load so something moves to Overload.</p>
-                        )}
-                      </>
-                    ) : (
-                      <>
-                        <div>
-                          <label className="text-[13px] text-[#64748B]">Keep as Regular ({unit})</label>
-                          <input
-                            type="number"
-                            min={0}
-                            max={maxRegularPart}
-                            step={0.25}
-                            value={splitRegularAmount}
-                            onChange={e => {
-                              const raw = parseFloat(e.target.value);
-                              const v   = isNaN(raw) ? 0 : raw;
-                              setSplitRegularAmount(parseFloat(Math.max(0, Math.min(maxRegularPart, v)).toFixed(2)));
-                            }}
-                            className="mt-1 w-full bg-white border border-[#CBD5E1] text-[#0B2A5B] rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D5BD6]/40 focus:border-[#1D5BD6]"
-                          />
-                          <p className="text-[12px] text-[#94A3B8] mt-1">Up to {maxRegularPart.toFixed(2)}</p>
-                        </div>
-                        <p className="text-[13px] text-[#0B2A5B]">
-                          Regular {splitRegularAmount.toFixed(2)} {unit}
-                          <span className="text-[#94A3B8]"> · </span>
-                          Overload {Math.max(0, overloadPortion).toFixed(2)} {unit}
-                        </p>
-                        {overloadPortion <= 0.001 && (
-                          <p className="text-[13px] text-[#B91C1C]">Enter a Regular amount less than the full load so something moves to Overload.</p>
-                        )}
-                      </>
+                  <div className="rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] px-3.5 py-3 space-y-2">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <label htmlFor="keep-regular" className="text-sm font-medium text-[#334155]">Keep as Regular ({unit})</label>
+                      <span className="text-xs text-[#94A3B8] tabular-nums">Max {splitMax.toFixed(2)}</span>
+                    </div>
+                    <input
+                      id="keep-regular"
+                      type="number"
+                      inputMode="decimal"
+                      min={0}
+                      max={splitMax}
+                      step={0.25}
+                      placeholder="0"
+                      value={splitInput}
+                      onChange={e => onSplitInput(e.target.value)}
+                      onBlur={() => { if (splitInput !== '') setSplitInput(String(splitRegular)); }}
+                      className="w-full bg-white border border-[#CBD5E1] text-[#0B2A5B] rounded-lg px-3 py-2.5 text-base tabular-nums focus:outline-none focus:ring-2 focus:ring-[#1D5BD6]/40 focus:border-[#1D5BD6]"
+                    />
+                    <p className="text-sm text-[#475569] tabular-nums">
+                      Regular <span className="font-semibold text-[#0B2A5B]">{splitRegular.toFixed(2)}</span>
+                      <span className="text-[#CBD5E1]"> · </span>
+                      Overload <span className="font-semibold text-[#C2410C]">{splitOverload.toFixed(2)}</span> {unit}
+                    </p>
+                    {splitOverload <= 0.001 && (
+                      <p className="text-sm text-[#B91C1C]">Keep less than the full amount so some moves to Overload.</p>
                     )}
                   </div>
                 )}
@@ -3139,27 +3167,30 @@ export default function WorkloadPage({
                 {impactPreview && summary && (() => {
                   const { afterRegular, afterOverload, afterRemaining, isAfterExceeded } = impactPreview;
                   const overBy = Math.max(0, afterRegular - summary.regular_load_limit);
+                  const regularOver = isAfterExceeded && afterRegular > summary.regular_load_limit + 0.001;
                   return (
-                    <div className="pt-1">
-                      <p className="text-[13px] text-[#334155] leading-relaxed">
-                        After this move, Regular will be {afterRegular.toFixed(2)} {unit}
-                        {' '}(now {regularVal.toFixed(2)}) and Overload will be {afterOverload.toFixed(2)} {unit}.
-                      </p>
-                      {isAfterExceeded && afterRegular > summary.regular_load_limit + 0.001 && (
-                        <p className="text-[13px] text-[#B45309] mt-1.5 leading-relaxed">
-                          Regular will be {(isPermanent ? shownUnitsOver(afterRegular, summary.regular_load_limit) : overBy).toFixed(2)} {unit} over the maximum of {capText(summary.regular_load_limit, isPermanent)}. You can still move this.
+                    <div className="border-t border-[#E2E8F0] pt-3 space-y-1.5">
+                      {/* After the move — before → after, one line each */}
+                      <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm tabular-nums">
+                        <span className="text-[#64748B]">Regular</span>
+                        <span className="text-[#0B2A5B]">
+                          {regularVal.toFixed(2)} → <span className="font-semibold">{afterRegular.toFixed(2)}</span> {unit}
+                        </span>
+                        <span className="text-[#64748B]">Overload</span>
+                        <span className="text-[#0B2A5B]">
+                          {overloadVal.toFixed(2)} → <span className="font-semibold">{afterOverload.toFixed(2)}</span> {unit}
+                        </span>
+                      </div>
+                      {regularOver ? (
+                        <p className="flex items-start gap-1.5 text-sm text-[#B45309]">
+                          <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" aria-hidden />
+                          {(isPermanent ? shownUnitsOver(afterRegular, summary.regular_load_limit) : overBy).toFixed(2)} {unit} over the {capText(summary.regular_load_limit, isPermanent)} limit — you can still move it.
                         </p>
-                      )}
-                      {isAfterExceeded && afterRegular <= summary.regular_load_limit + 0.001 && (
-                        <p className="text-[13px] text-[#64748B] mt-1.5 leading-relaxed">
-                          Combined load will still be above the regular maximum. You can still move this.
+                      ) : !isAfterExceeded && leftNum(afterRemaining, isPermanent) > 0.001 ? (
+                        <p className="text-sm text-[#64748B]">
+                          {leftNum(afterRemaining, isPermanent).toFixed(2)} {unit} still open in Regular.
                         </p>
-                      )}
-                      {!isAfterExceeded && leftNum(afterRemaining, isPermanent) > 0.001 && (
-                        <p className="text-[13px] text-[#64748B] mt-1.5">
-                          {leftNum(afterRemaining, isPermanent).toFixed(2)} {unit} still available under the regular maximum.
-                        </p>
-                      )}
+                      ) : null}
                     </div>
                   );
                 })()}
@@ -3547,8 +3578,19 @@ export default function WorkloadPage({
           unitsText: formatOfficialNumber(olVal),
           hoursText: formatOfficialNumber(overloadContactHours),
           designation: '',
-          specialAssignments: [] as { key: string; description: string; units: string }[],
-          preparations: '',
+          // Same Deloading lines as the Regular form
+          designationLines: designationFooterLines(isP ? (workload.deductions ?? []) : []).map(l => ({
+            key: l.key, label: l.label, description: l.description,
+            units: l.units > 0 ? formatOfficialNumber(l.units) : '',
+          })),
+          specialAssignments: (isP ? (workload.deductions ?? []) : [])
+            .filter(d => d.deduction_type === 'Special Assignment')
+            .map(d => ({
+              key: String(d.id),
+              description: d.description || 'Special Assignment',
+              units: formatOfficialNumber(parseFloat(String(d.deducted_units)) || 0),
+            })),
+          preparations: String(mergeSameSubjects([...overloadPrintLoads, ...splitPrintLoads]).length),
           totalUnitsText: formatOfficialNumber(olVal),
           totalDescription: 'Overload',
         };
@@ -3619,20 +3661,14 @@ export default function WorkloadPage({
               return { ...base, key: `${row.key}-split-praise`, description: `${row.description} · Source: Regular` };
             });
           }),
-          ...(workload.praise ?? []).map((p: {
-          id: number; praise_type?: string; description?: string; remarks?: string;
-          equivalent_units?: unknown; equivalent_hours?: unknown;
+        ];
+        /* … and go on the official footer lines, each with its own remove button */
+        const praiseRecordLine = (p: {
+          id: number; praise_type?: string; description?: string; remarks?: string; equivalent_units?: unknown;
         }) => ({
           key: `praise-${p.id}`,
-          slotId: null,
-          timeLabel: '',
-          subjectCode: String(p.praise_type || ''),
-          description: String(p.description || p.remarks || ''),
-          course: '',
-          students: '',
+          description: String(p.description || p.remarks || p.praise_type || ''),
           units: formatOfficialNumber(parseFloat(String(p.equivalent_units)) || 0),
-          hours: formatOfficialNumber(parseFloat(String(p.equivalent_hours)) || 0),
-          room: p.description && p.remarks ? String(p.remarks) : '',
           action: (
             <button
               type="button"
@@ -3645,8 +3681,10 @@ export default function WorkloadPage({
               <Trash2 className="w-3.5 h-3.5" />
             </button>
           ),
-        })),
-        ];
+        });
+        const praiseRecords = (workload.praise ?? []) as {
+          id: number; praise_type?: string; description?: string; remarks?: string; equivalent_units?: unknown;
+        }[];
 
         const praiseSubjectHours = praiseSubjectLoads.reduce((sum, l) => {
           return sum + (parseFloat(String(l.lecture_hours)) || 0) + (parseFloat(String(l.laboratory_hours)) || 0);
@@ -3659,16 +3697,16 @@ export default function WorkloadPage({
           (sum: number, p: { equivalent_units?: unknown }) => sum + (parseFloat(String(p.equivalent_units)) || 0),
           0,
         );
-        const praiseHoursSum = praiseSubjectHours + (workload.praise ?? []).reduce(
-          (sum: number, p: { equivalent_hours?: unknown }) => sum + (parseFloat(String(p.equivalent_hours)) || 0),
-          0,
-        );
+        /* Official Praise Load form: No. of Units is teaching only; records are added below it */
+        const praiseTeaching = praiseSubjectVal > 0.001;
+        const praisePreparations = mergeSameSubjects([...praiseSubjectLoads, ...praiseSplitLoads]).length;
         const officialPraiseSummary = {
-          unitsText: formatOfficialNumber(praiseUnitsSum),
-          hoursText: formatOfficialNumber(praiseHoursSum),
+          unitsText: praiseTeaching ? formatOfficialNumber(praiseSubjectVal) : '',
+          hoursText: praiseTeaching ? formatOfficialNumber(praiseSubjectHours) : '',
           designation: '',
-          specialAssignments: [] as { key: string; description: string; units: string }[],
-          preparations: '',
+          researchExtension: praiseRecords.filter(p => isResearchExtensionType(p.praise_type)).map(praiseRecordLine),
+          specialAssignments: praiseRecords.filter(p => !isResearchExtensionType(p.praise_type)).map(praiseRecordLine),
+          preparations: praiseTeaching && praisePreparations > 0 ? String(praisePreparations) : '',
           totalUnitsText: formatOfficialNumber(praiseUnitsSum),
           totalDescription: 'Praise Load',
         };
@@ -3689,15 +3727,18 @@ export default function WorkloadPage({
         const specialAssignmentUnitsTotal = specialAssignmentDeductions.reduce(
           (sum, d) => sum + (parseFloat(String(d.deducted_units)) || 0), 0
         );
-        const designationText = designationDeductions.length > 0
-          ? designationDeductions.map(d => d.deduction_type).join(' + ')
-          : 'No Designation';
+        const designationText = designationRowText(designationDeductions);
 
         const officialRegularSummary = {
           unitsText: formatOfficialNumber(totalRegularWU),
           hoursText: formatOfficialNumber(totalRegularHours),
           designation: designationText,
           designationUnitsText: designationUnitsTotal > 0 ? formatOfficialNumber(designationUnitsTotal) : undefined,
+          // One line per deduction, labelled by type (same as print)
+          designationLines: designationFooterLines(designationDeductions).map(l => ({
+            key: l.key, label: l.label, description: l.description,
+            units: l.units > 0 ? formatOfficialNumber(l.units) : '',
+          })),
           specialAssignments: specialAssignmentDeductions.map(d => ({
             key: String(d.id),
             description: d.description || 'Special Assignment',
@@ -3727,7 +3768,8 @@ export default function WorkloadPage({
                 ? [...praiseSubjectLoads, ...praiseSplitLoads]
                 : (workload.loads ?? []),
             praise: kind === 'praise' ? (workload.praise ?? []) : [],
-            deductions: kind === 'regular' ? (workload.deductions ?? []) : [],
+            // Regular and Overload both list the Deloading lines
+            deductions: kind !== 'praise' ? (workload.deductions ?? []) : [],
             semester: listSemester,
             academicYear: listYear,
             documentKind: kind,
@@ -4500,10 +4542,11 @@ export default function WorkloadPage({
       </Modal>
 
       {/* -- Load Deduction Modal -----------------------------------------------
-          Opened via Edit Deduction. Lets the admin set or update load deductions
+          Opened via the Deloading button. Lets the admin set or update load deductions
           for a Permanent faculty without interrupting faculty selection.
           ------------------------------------------------------------------- */}
-      <Modal open={!!designationPending} onClose={() => setDesignationPending(null)} title="Faculty Deloading">
+      <Modal open={!!designationPending} onClose={() => { if (deloadSavedNote === null) setDesignationPending(null); }} title="Faculty Deloading">
+        {deloadSavedNote !== null && <AssignSuccess title="Deloading saved!" note={deloadSavedNote} />}
         {designationPending && (() => {
           const totalDeduction = deductionEntries.reduce((s, e) => s + (parseFloat(e.units) || 0), 0);
           const availableLoad  = Math.max(0, REGULAR_LOAD_MAX_UNITS - totalDeduction);
@@ -4545,7 +4588,7 @@ export default function WorkloadPage({
 
               {/* Deduction type checkboxes */}
               <div className="space-y-2">
-                <div className="text-sm font-semibold text-slate-300 mb-3">Deduction Types</div>
+                <div className="text-sm font-semibold text-slate-300 mb-3">Deloading Types</div>
 
                 {/* None — a switch that pauses the entries below without erasing them:
                     checking it stops them being counted or saved, unchecking brings them back. */}
@@ -4758,83 +4801,152 @@ export default function WorkloadPage({
         })()}
       </Modal>
 
-      {/* Praise Modal */}
-      <Modal open={praiseModalOpen} onClose={() => setPraiseModalOpen(false)} title="Add Praise Assignment">
-        <form onSubmit={addPraise} className="space-y-4">
+      {/* Praise Modal — like Faculty Deloading: opens with the current praise; tick to add, untick to remove */}
+      <Modal open={praiseModalOpen} onClose={() => { if (!praiseLoading && praiseSavedNote === null) setPraiseModalOpen(false); }} title="Praise Load">
+        {praiseSavedNote !== null && <AssignSuccess title="Praise Load saved!" note={praiseSavedNote} />}
+        {(() => {
+          const { dirty } = praiseChanges(praiseEntries, praiseOriginal);
+          // Fixed types first, then any older type already saved for this faculty
+          const typeList = [...PRAISE_TYPES as readonly string[]];
+          for (const en of [...praiseOriginal, ...praiseEntries]) if (!typeList.includes(en.type)) typeList.push(en.type);
+          const updateEntry = (key: string, patch: Partial<PraiseEntry>) =>
+            setPraiseEntries(prev => prev.map(x => x.key === key ? { ...x, ...patch } : x));
+          return (
+        <form onSubmit={savePraise} className="space-y-4">
           {praiseError && (
             <div className="bg-[#FEE2E2] border border-[#FECACA] text-[#DC2626] px-4 py-3 rounded-xl text-sm">{praiseError}</div>
           )}
-          <div className="bg-[#EFF6FF] border border-[#BFDBFE] rounded-xl p-3 text-sm text-[#1D5BD6]">
-            Praise is for non-teaching assignments only (Research, Extension, Administrative, etc.)
+          <p className="text-sm text-[#64748B]">Non-teaching assignments only (Research, Extension, Administrative, etc.).</p>
+
+          <div className="space-y-2">
+            <span className="text-sm font-semibold text-[#334155]">Praise Types</span>
+            {typeList.map(opt => {
+              const list = praiseEntries.filter(en => en.type === opt);
+              const checked = list.length > 0;
+              return (
+                <div key={opt}>
+                  <label className={`flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer transition-[background-color,border-color,color] duration-300 select-none ${
+                    checked
+                      ? 'bg-[#1D5BD6]/10 border-[#1D5BD6]/40 text-blue-300'
+                      : 'bg-white/[0.03] border-white/10 text-slate-400 hover:border-white/20 hover:text-slate-300'
+                  }`}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={ev => {
+                        setPraiseError('');
+                        setPraiseEntries(prev => ev.target.checked
+                          ? [...prev, newPraiseEntry(opt)]
+                          : prev.filter(x => x.type !== opt));
+                      }}
+                      className="w-4 h-4 accent-[#1D5BD6] flex-shrink-0"
+                    />
+                    <span className="text-sm font-medium flex-1">{opt}</span>
+                    {list.some(en => en.id != null) && (
+                      <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-[#ECFDF5] text-[#047857]">Saved</span>
+                    )}
+                  </label>
+
+                  <AnimatePresence initial={false}>
+                  {list.map((entry, i) => (
+                    <motion.div
+                      key={entry.key}
+                      initial={reduceMotion ? false : { opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
+                      className="overflow-hidden"
+                    >
+                    <div className="ml-4 mt-2 mb-1 pl-4 border-l-2 border-[#1D5BD6]/30 space-y-2">
+                      {list.length > 1 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Entry {i + 1}</span>
+                          <button type="button" onClick={() => setPraiseEntries(prev => prev.filter(x => x.key !== entry.key))}
+                            className="text-xs font-semibold text-[#DC2626] hover:underline underline-offset-2">
+                            Remove
+                          </button>
+                        </div>
+                      )}
+                      <div>
+                        <label className="text-[11px] font-medium text-slate-500 uppercase tracking-wide mb-1 block">
+                          Description <span className="normal-case text-slate-600">(optional)</span>
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Research Coordinator"
+                          value={entry.description}
+                          onChange={ev => updateEntry(entry.key, { description: ev.target.value })}
+                          className="w-full bg-[#0b0f1a] border border-white/10 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#1D5BD6]/50 placeholder:text-slate-600"
+                        />
+                      </div>
+                      <div className="flex items-end gap-3">
+                        <div>
+                          <label className="text-[11px] font-medium text-slate-500 uppercase tracking-wide mb-1 block">
+                            Equivalent units
+                          </label>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            placeholder="0"
+                            value={entry.units}
+                            onChange={ev => {
+                              const raw = ev.target.value;
+                              if (!isNonNegDecimalDraft(raw)) return;
+                              updateEntry(entry.key, { units: raw });
+                              setPraiseError('');
+                            }}
+                            className="w-28 bg-[#0b0f1a] border border-white/10 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#1D5BD6]/50 placeholder:text-slate-600"
+                          />
+                        </div>
+                        {entry.units !== '' && !isNaN(parseFloat(entry.units)) && (
+                          <span className="text-xs text-[#A16207] pb-2">+{parseFloat(entry.units).toFixed(2)} units</span>
+                        )}
+                      </div>
+                    </div>
+                    </motion.div>
+                  ))}
+                  </AnimatePresence>
+                </div>
+              );
+            })}
           </div>
-          <div>
-            <label className="block text-sm font-semibold text-[#64748B] mb-1.5">Praise Type *</label>
-            <select value={praiseForm.praise_type} onChange={e => setPraiseForm(f => ({ ...f, praise_type: e.target.value }))} required
-              className="w-full bg-slate-100 border-0 rounded-xl px-3 py-2.5 text-sm text-slate-800 appearance-none cursor-pointer transition-all duration-200 outline-none hover:bg-slate-200/60 focus:bg-white focus:shadow-[0_2px_10px_rgba(0,0,0,0.08)]">
-              <option value="">Select Praise Type</option>
-              <option>Research</option>
-              <option>Extension</option>
-              <option>Special Assignment</option>
-              <option>Administrative Assignment</option>
-              <option>Committee Work</option>
-              <option>Other Non-Teaching Load</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-semibold text-[#64748B] mb-1.5">Description</label>
-            <textarea value={praiseForm.description} onChange={e => setPraiseForm(f => ({ ...f, description: e.target.value }))}
-              className="w-full border border-[#CBD5E1] bg-white text-[#0B2A5B] rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D5BD6]/40 focus:border-[#1D5BD6] transition-colors h-20 resize-none placeholder:text-[#CBD5E1]" />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-semibold text-[#64748B] mb-1.5">Equivalent Units</label>
-              <input
-                type="text"
-                inputMode="decimal"
-                value={praiseForm.equivalent_units}
-                onChange={e => {
-                  const raw = e.target.value;
-                  if (!isNonNegDecimalDraft(raw)) return;
-                  setPraiseForm(f => ({ ...f, equivalent_units: raw }));
-                }}
-                className="w-full bg-slate-100 border-0 rounded-xl px-3 py-2.5 text-sm text-slate-800 transition-all duration-200 outline-none hover:bg-slate-200/60 focus:bg-white focus:shadow-[0_2px_10px_rgba(0,0,0,0.08)]"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-semibold text-[#64748B] mb-1.5">Equivalent Hours</label>
-              <input
-                type="text"
-                inputMode="decimal"
-                value={praiseForm.equivalent_hours}
-                onChange={e => {
-                  const raw = e.target.value;
-                  if (!isNonNegDecimalDraft(raw)) return;
-                  setPraiseForm(f => ({ ...f, equivalent_hours: raw }));
-                }}
-                className="w-full bg-slate-100 border-0 rounded-xl px-3 py-2.5 text-sm text-slate-800 transition-all duration-200 outline-none hover:bg-slate-200/60 focus:bg-white focus:shadow-[0_2px_10px_rgba(0,0,0,0.08)]"
-              />
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-semibold text-[#64748B] mb-1.5">Remarks</label>
-            <textarea value={praiseForm.remarks} onChange={e => setPraiseForm(f => ({ ...f, remarks: e.target.value }))}
-              className="w-full border border-[#CBD5E1] bg-white text-[#0B2A5B] rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D5BD6]/40 focus:border-[#1D5BD6] transition-colors h-16 resize-none placeholder:text-[#CBD5E1]" />
-          </div>
+
+          {/* Live summary — like Deloading's */}
+          {praiseEntries.length > 0 ? (() => {
+            const total = praiseEntries.reduce((sum, en) => sum + (parseFloat(en.units) || 0), 0);
+            return (
+              <div className="rounded-xl border p-4 space-y-2 bg-[#0d1424] border-white/10">
+                {praiseEntries.map(en => (
+                  <div key={en.key} className="flex items-center justify-between text-sm">
+                    <span className="text-slate-400">{en.type}{en.description.trim() ? ` — ${en.description.trim()}` : ''}</span>
+                    <span className="font-semibold tabular-nums text-[#A16207]">+{(parseFloat(en.units) || 0).toFixed(2)} units</span>
+                  </div>
+                ))}
+                <div className="border-t border-white/10 pt-2 flex items-center justify-between">
+                  <span className="text-sm font-semibold text-slate-300">Total Praise Load</span>
+                  <span className="font-bold text-base tabular-nums text-[#A16207]">{total.toFixed(2)} <span className="text-xs font-normal">units</span></span>
+                </div>
+              </div>
+            );
+          })() : praiseOriginal.length > 0 ? (
+            <p className="text-sm text-[#B45309]">Saving will remove all of this faculty&apos;s Praise Load.</p>
+          ) : null}
+
           <div className="flex gap-3 pt-1">
-            <button type="button" onClick={() => setPraiseModalOpen(false)}
-              className="flex-1 border border-[#E2E8F0] text-[#64748B] py-2.5 rounded-xl text-sm font-semibold hover:bg-[#F8FAFC] transition">
+            <button type="button" onClick={() => setPraiseModalOpen(false)} disabled={praiseLoading}
+              className="flex-1 border border-white/10 text-slate-300 py-2.5 rounded-xl text-sm font-semibold hover:bg-white/5 transition disabled:opacity-50">
               Cancel
             </button>
-            <button type="submit" disabled={praiseLoading}
-              className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white disabled:opacity-50 transition"
-              style={{ backgroundColor: '#1D5BD6', color: '#ffffff' }}
-              onMouseEnter={e => { if (!praiseLoading) e.currentTarget.style.backgroundColor = '#2E7DD1'; }}
-              onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#1D5BD6')}
-            >
-              {praiseLoading ? 'Saving…' : 'Add Praise'}
+            <button type="submit" disabled={praiseLoading || !dirty}
+              className="flex-1 bg-[#1D5BD6] text-white py-2.5 rounded-xl text-sm font-bold hover:bg-[#2E7DD1] transition disabled:opacity-60 flex items-center justify-center gap-2">
+              {praiseLoading
+                ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Saving…</>
+                : 'Save Praise Load'}
             </button>
           </div>
         </form>
+          );
+        })()}
       </Modal>
     </div>
   );

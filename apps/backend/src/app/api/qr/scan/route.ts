@@ -1,5 +1,5 @@
 ﻿import { NextRequest, NextResponse } from 'next/server';
-import { manilaCalendarDateString } from '@/services/appTimezone';
+import { manilaCalendarDateString, manilaClock, manilaTodayAtSql } from '@/services/appTimezone';
 import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import {
@@ -21,7 +21,7 @@ import { withAudit } from '@/services/audit';
     Rejected       : scan_time > scheduled_end  (class already over)
 
   Room occupancy expiry always uses SCHEDULED end time (never scan time):
-    expires_at = CURRENT_DATE + scheduled_end + INTERVAL '30 minutes'
+    expires_at = today (Manila) + scheduled_end + INTERVAL '30 minutes'
 
   Walk-in (lecture room, no class assigned, room available):
     Faculty or admin → OCCUPIED immediately (QR is the presence check)
@@ -149,17 +149,15 @@ async function POST_handler(req: NextRequest) {
       return NextResponse.json({
         status:    'Invalid',
         message:   'Invalid Room QR Code.',
-        scan_time: new Date().toTimeString().slice(0, 8),
+        scan_time: manilaClock().time,
       }, { status: 404 });
     }
     const room = roomResult.rows[0];
 
+    // Manila wall clock, like scanDate — the server's own timezone may be UTC
     const now      = new Date();
-    const scanTime = now.toTimeString().slice(0, 8); // HH:MM:SS
+    const { time: scanTime, dayOfWeek } = manilaClock(now); // HH:MM:SS, "Monday"
     const scanDate = manilaCalendarDateString(now);
-    const dayOfWeek = [
-      'Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday',
-    ][now.getDay()];
 
     // ── STEP 2 · Expire stale occupancy for this room ─────────────────────────
     await expireStaleOccupancy(room.id);
@@ -264,7 +262,7 @@ async function POST_handler(req: NextRequest) {
         // Override expires_at to use scheduled end time (+ 30-min buffer)
         await query(`
           UPDATE room_occupancy
-          SET    expires_at      = CURRENT_DATE + $1::time + INTERVAL '30 minutes',
+          SET    expires_at      = ${manilaTodayAtSql('$1::time')} + INTERVAL '30 minutes',
                  scheduled_start = $2::time,
                  scheduled_end   = $1::time
           WHERE  room_id    = $3
@@ -506,7 +504,7 @@ async function POST_handler(req: NextRequest) {
             (room_id, faculty_id, status, reserved_at, expires_at, occupied_at,
              scheduled_start, scheduled_end)
           VALUES ($1, $2, 'Occupied', NOW(),
-                  CURRENT_DATE + $3::time + INTERVAL '30 minutes',
+                  ${manilaTodayAtSql('$3::time')} + INTERVAL '30 minutes',
                   NOW(), $4::time, $3::time)
         `, [room.id, faculty_id, sched.end_time, sched.start_time]);
       } catch (insertErr) {

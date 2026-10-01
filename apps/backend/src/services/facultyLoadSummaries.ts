@@ -91,7 +91,9 @@ export async function loadFacultyLoadSummaries(options: {
         GROUP  BY faculty_id
       ),
       overloaded_ms AS (
-        SELECT DISTINCT faculty_id, master_schedule_id FROM overloads
+        SELECT faculty_id, master_schedule_id, SUM(hours) AS split_hours
+        FROM overloads
+        GROUP BY faculty_id, master_schedule_id
       )
       SELECT
         f.id                                                      AS faculty_id,
@@ -117,9 +119,13 @@ export async function loadFacultyLoadSummaries(options: {
           ELSE 0 END
         ), 0)                                                     AS total_regular_units,
 
+        -- Split (Contractual): the row keeps only its regular hours; the rest is in overloads
         COALESCE(SUM(
-          CASE WHEN il.load_category = 'Regular'
-            THEN COALESCE(c2.total_hours, il.hours, 0)
+          CASE WHEN il.load_category = 'Regular' THEN
+            CASE
+              WHEN COALESCE(oms.split_hours, 0) > 0 THEN COALESCE(il.hours, 0)
+              ELSE COALESCE(c2.total_hours, il.hours, 0)
+            END
           ELSE 0 END
         ), 0)                                                     AS total_regular_hours,
 

@@ -150,6 +150,10 @@ export default function CurriculumPage() {
     search: '',
   });
   const [form, setForm]               = useState(emptyForm);
+  /** Minor/Major picked by hand — otherwise it follows the Course Code + Subject Type */
+  const [categoryManual, setCategoryManual] = useState(false);
+  const suggestedCategory = categoryFromSubjectType(form.subject_type, form.subject_code);
+  const shownCategory: SubjectCategory = categoryManual ? form.subject_category : suggestedCategory;
   const [editId, setEditId]           = useState<number | null>(null);
   const [modalOpen, setModalOpen]     = useState(false);
   const [formError, setFormError]     = useState('');
@@ -256,6 +260,7 @@ export default function CurriculumPage() {
       year_level: filters.year_level,
       semester:   filters.semester,
     });
+    setCategoryManual(false);
     setEditId(null);
     setFormError('');
     setSaveSuccess(false);
@@ -269,15 +274,16 @@ export default function CurriculumPage() {
       subject_code: c.subject_code, subject_name: c.subject_name,
       lecture_hours: String(c.lecture_hours), laboratory_hours: String(c.laboratory_hours),
       units: String(c.units), prerequisites: c.prerequisites || '', grade: c.grade || '',
-      subject_category: categoryFromSubjectType(inferSubjectType(c.lecture_hours, c.laboratory_hours), c.subject_code),
+      subject_category: c.subject_category,
     });
+    // Saved category differs from the rule → it was picked by hand; keep it
+    setCategoryManual(c.subject_category !== categoryFromSubjectType(inferSubjectType(c.lecture_hours, c.laboratory_hours), c.subject_code));
     setEditId(c.id); setFormError(''); setSaveSuccess(false); setModalOpen(true);
   }
 
   function handleSubjectTypeChange(type: SubjectType) {
     setForm(f => ({
       ...f, subject_type: type,
-      subject_category: categoryFromSubjectType(type, f.subject_code),
       lecture_hours:    type === 'Laboratory' ? '' : f.lecture_hours,
       laboratory_hours: type === 'Lecture'    ? '' : f.laboratory_hours,
     }));
@@ -300,7 +306,7 @@ export default function CurriculumPage() {
           lecture_hours: lec,
           laboratory_hours: lab,
           units: parseFloat(String(form.units)) || 0,
-          subject_category: categoryFromSubjectType(form.subject_type, form.subject_code),
+          subject_category: shownCategory,
           curriculum_version: filters.curriculum_version,
         }),
       });
@@ -1035,11 +1041,11 @@ export default function CurriculumPage() {
                           <td className="px-4 py-3 font-medium text-[#0B2A5B]">{c.subject_name}</td>
                           <td className="px-4 py-3 text-center">
                             <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-                              categoryFromHours(c.lecture_hours, c.laboratory_hours, c.subject_code) === 'Major'
+                              c.subject_category === 'Major'
                                 ? 'bg-[#EFF6FF] text-[#1D5BD6] border border-[#BFDBFE]'
                                 : 'bg-[#F1F5F9] text-[#64748B] border border-[#E2E8F0]'
                             }`}>
-                              {categoryFromHours(c.lecture_hours, c.laboratory_hours, c.subject_code)}
+                              {c.subject_category}
                             </span>
                           </td>
                           <td className="px-4 py-3 text-center text-[#64748B]">{Number(c.lecture_hours)}</td>
@@ -1211,32 +1217,43 @@ export default function CurriculumPage() {
             <label className="block text-sm font-semibold mb-1.5" style={{ color: '#64748B' }}>Subject Category</label>
             <div className="grid grid-cols-2 gap-2">
               {(['Minor', 'Major'] as const).map(cat => {
-                const active = form.subject_type
-                  ? categoryFromSubjectType(form.subject_type, form.subject_code) === cat
-                  : false;
+                const active = shownCategory === cat;
                 return (
-                  <div
+                  <button
                     key={cat}
-                    aria-disabled="true"
-                    className={`py-3.5 px-2 rounded-xl border-2 text-sm font-semibold text-center leading-snug cursor-default
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => {
+                      setForm(f => ({ ...f, subject_category: cat }));
+                      setCategoryManual(cat !== suggestedCategory);
+                    }}
+                    className={`py-3.5 px-2 rounded-xl border-2 text-sm font-semibold text-center leading-snug transition-all
                       ${active
                         ? 'border-[#1D5BD6] bg-[#1D5BD6] text-white'
-                        : 'border-[#E2E8F0] bg-[#F8FAFC]'}`}
-                    style={!active ? { color: '#94A3B8' } : {}}
+                        : 'border-[#E2E8F0] bg-white hover:border-[#1D5BD6]/50 hover:bg-[#EFF6FF]'}`}
+                    style={!active ? { color: '#64748B' } : {}}
                   >
                     {cat}
                     <div className={`text-xs font-normal mt-0.5 ${active ? 'text-blue-100' : ''}`}
-                      style={!active ? { color: '#CBD5E1' } : {}}>
+                      style={!active ? { color: '#94A3B8' } : {}}>
                       {cat === 'Minor' ? 'Other lecture subjects' : 'CS / CPE / IT, or with lab'}
                     </div>
-                  </div>
+                  </button>
                 );
               })}
             </div>
             <p className="text-xs mt-1.5" style={{ color: '#94A3B8' }}>
-              {form.subject_type
-                ? `${categoryFromSubjectType(form.subject_type, form.subject_code)} — set automatically from the Course Code and Subject Type`
-                : 'Select a Subject Type to set the category automatically.'}
+              {categoryManual ? (
+                <>
+                  Set manually · suggested: {suggestedCategory}.{' '}
+                  <button type="button" onClick={() => setCategoryManual(false)}
+                    className="font-semibold text-[#1D5BD6] hover:underline underline-offset-2">
+                    Use suggested
+                  </button>
+                </>
+              ) : (
+                `${suggestedCategory} — suggested from the Course Code and Subject Type. Click to change.`
+              )}
             </p>
           </div>
 
