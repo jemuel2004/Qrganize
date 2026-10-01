@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
+import { useRefreshOnNewNotification } from '@/hooks/useRefreshOnNewNotification';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import BackButton from '@/components/ui/BackButton';
@@ -292,6 +293,8 @@ export default function ScheduleClient() {
   useEffect(() => { load(); }, [load]);
 
   useVisibilityAwareInterval(() => load(true), 30_000);
+  // New notification (e.g. a subject assigned or scheduled) → refresh right away
+  useRefreshOnNewNotification(() => load(true));
 
   const showSkeleton = useMinLoading(loading && schedules.length === 0 && !error, PAGE_SKELETON_MIN_MS);
 

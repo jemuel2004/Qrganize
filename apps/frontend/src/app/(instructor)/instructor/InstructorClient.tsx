@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useInstructorProfile } from '@/context/InstructorProfileContext';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
+import { useRefreshOnNewNotification } from '@/hooks/useRefreshOnNewNotification';
 import { useToast } from '@/context/ToastContext';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
@@ -257,6 +258,8 @@ export default function InstructorDashboard() {
 
   useEffect(() => { load(); }, [load]);
   useVisibilityAwareInterval(() => load(true), POLL_MS);
+  // New notification (e.g. a subject assigned) → refresh right away
+  useRefreshOnNewNotification(() => load(true));
 
   const showSkeleton = useMinLoading(loading && !data, PAGE_SKELETON_MIN_MS);
 
@@ -322,20 +325,23 @@ export default function InstructorDashboard() {
             )}
           </div>
 
-          {/* Right — clock + refresh */}
-          <div className="flex items-center gap-4">
-            <div className="text-right">
+          {/* Right — clock + refresh (one aligned row on phones) */}
+          <div className="flex items-center justify-between sm:justify-end gap-4 w-full sm:w-auto">
+            <div className="sm:text-right">
               <LiveClock />
-              <p className="text-xs font-semibold mt-1 uppercase tracking-wider" style={{ color: '#C7D6EA' }}>
+              <p className="text-xs font-semibold mt-1 uppercase tracking-wider flex items-center gap-1.5 sm:justify-end" style={{ color: '#C7D6EA' }}>
+                <span aria-hidden className="w-2 h-2 rounded-full bg-emerald-400" />
                 Live
               </p>
             </div>
             <button
+              type="button"
               onClick={() => load()} disabled={loading}
-              className="p-2 rounded-xl hover:bg-white/15 transition-colors"
+              className="w-11 h-11 flex-shrink-0 rounded-xl bg-white/10 hover:bg-white/20 active:bg-white/25 flex items-center justify-center transition-colors"
               title="Refresh dashboard"
+              aria-label="Refresh dashboard"
             >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} style={{ color: '#DCE7F5' }} />
+              <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} style={{ color: '#FFFFFF' }} />
             </button>
           </div>
         </div>

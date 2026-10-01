@@ -343,7 +343,7 @@ function ScanResultDialog({
     >
       <div
         aria-hidden="true"
-        className="absolute inset-0 bg-black/50"
+        className="qr-backdrop-in absolute inset-0 bg-black/50 backdrop-blur-[2px]"
         onClick={() => onAction(p.action)}
       />
       <div
@@ -351,12 +351,25 @@ function ScanResultDialog({
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descId}
-        className="relative w-full max-w-sm max-h-[90vh] overflow-y-auto rounded-2xl bg-white border border-[#E2E8F0] shadow-xl px-5 py-6 text-center"
+        className="qr-modal-in relative w-full max-w-sm max-h-[90vh] overflow-y-auto rounded-2xl bg-white border border-[#E2E8F0] shadow-xl px-5 py-6 text-center"
         onClick={e => e.stopPropagation()}
       >
-        <div className={`mx-auto w-14 h-14 rounded-full flex items-center justify-center ${iconWrap}`}>
-          <Icon className="w-7 h-7" aria-hidden="true" />
-        </div>
+        {p.tone === 'success' ? (
+          /* Animated check — the circle draws, then the tick */
+          <svg className="mx-auto" width="72" height="72" viewBox="0 0 52 52" aria-hidden="true">
+            <circle className="save-success-circle" cx="26" cy="26" r="24" fill="none" stroke="#059669" strokeWidth="3" />
+            <path
+              className="save-success-check"
+              fill="none" stroke="#059669" strokeWidth="3.5"
+              strokeLinecap="round" strokeLinejoin="round"
+              d="M14.5 27 22 34.5 38 17"
+            />
+          </svg>
+        ) : (
+          <div className={`mx-auto w-14 h-14 rounded-full flex items-center justify-center ${iconWrap}`}>
+            <Icon className="w-7 h-7" aria-hidden="true" />
+          </div>
+        )}
 
         <h2 id={titleId} className="mt-4 text-xl font-bold text-[#0B2A5B]">
           {p.title}
@@ -582,7 +595,15 @@ export default function ScanClient() {
       scannerRef.current = scanner;
       await scanner.start(
         { facingMode: 'environment' },
-        { fps: 8, qrbox: { width: 240, height: 240 } },
+        {
+          fps: 8,
+          // Scan square fits the actual video (70% of its shorter side), so the mask
+          // and corner brackets line up on any phone
+          qrbox: (w: number, h: number) => {
+            const size = Math.max(160, Math.floor(Math.min(w, h) * 0.7));
+            return { width: size, height: size };
+          },
+        },
         async (decodedText: string) => {
           let code = decodedText;
           try { code = (JSON.parse(decodedText) as { code?: string }).code ?? decodedText; }
@@ -645,7 +666,9 @@ export default function ScanClient() {
               <div className="relative">
                 <div
                   id={scannerContainerId}
-                  className="rounded-xl overflow-hidden bg-[#F1F5F9] min-h-[240px] flex items-center justify-center border border-[#E2E8F0]"
+                  className={`qr-scan-box rounded-xl overflow-hidden bg-[#F1F5F9] border border-[#E2E8F0] ${
+                    cameraOn ? 'block bg-black' : 'min-h-[240px] flex items-center justify-center'
+                  }`}
                 >
                   {!cameraOn && (
                     <div className="text-center py-12 px-4">

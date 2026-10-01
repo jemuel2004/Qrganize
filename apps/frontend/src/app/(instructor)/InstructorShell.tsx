@@ -89,10 +89,10 @@ export default function InstructorShell({ children }: { children: React.ReactNod
                   </div>
                 </div>
 
-                {mobileOpen && (
-                  <InstructorMobileNav onNavigate={() => setMobileOpen(false)} />
-                )}
               </header>
+
+              {/* Phones / tablets: slide-in sidebar */}
+              <InstructorMobileNav open={mobileOpen} onClose={() => setMobileOpen(false)} />
 
               <main
                 className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden dashboard-main-scroll flex flex-col bg-[var(--background)]"

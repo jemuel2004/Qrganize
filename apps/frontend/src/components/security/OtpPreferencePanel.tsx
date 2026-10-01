@@ -302,7 +302,8 @@ export default function OtpPreferencePanel({
   return (
     <div className={shell}>
       <div className="p-5 sm:p-6 space-y-4">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        {/* Switch stays on the right, also on phones */}
+        <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1 space-y-1.5">
             <div className="flex items-center gap-2">
               <ShieldCheck className={`w-4 h-4 flex-shrink-0 ${enabled ? 'text-emerald-500' : mutedCls}`} />
@@ -327,12 +328,13 @@ export default function OtpPreferencePanel({
             aria-label="Two-Step Verification"
             disabled={busy || disabling || (!enabled && status?.can_enable === false)}
             onClick={onToggleClick}
-            className={`relative inline-flex h-7 w-12 flex-shrink-0 items-center rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-              enabled ? 'bg-emerald-500' : dark ? 'bg-white/15' : 'bg-[#CBD5E1]'
+            // The off track is always a visible grey — the "dark" variant's white/15 vanished on the light theme
+            className={`relative inline-flex h-7 w-12 flex-shrink-0 items-center rounded-full transition-colors duration-300 disabled:opacity-50 disabled:cursor-not-allowed ${
+              enabled ? 'bg-emerald-500' : 'bg-[#CBD5E1]'
             }`}
           >
             <span
-              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${
+              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.25)] transition duration-300 ${
                 enabled ? 'translate-x-6' : 'translate-x-1'
               }`}
             />

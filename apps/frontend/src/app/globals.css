@@ -264,6 +264,8 @@ html:not(.light) .save-success-overlay { background-color: rgba(10, 20, 38, 0.88
   to   { opacity: 1; transform: translateY(0); }
 }
 .qr-backdrop-in { animation: qr-backdrop-in 0.2s ease-out both; }
+/* Room QR scanner: the camera video fills the box, so the scan mask lines up */
+.qr-scan-box video { display: block; width: 100% !important; height: auto !important; }
 .qr-modal-in { animation: qr-modal-in 0.22s ease-out both; }
 
 @keyframes qr-content-fade-in {

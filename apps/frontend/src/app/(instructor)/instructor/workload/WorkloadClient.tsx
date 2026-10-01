@@ -3,6 +3,7 @@
 import { motion, useReducedMotion } from 'framer-motion';
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
+import { useRefreshOnNewNotification } from '@/hooks/useRefreshOnNewNotification';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import { RefreshButton } from '@/app/(dashboard)/room-utilization/shared';
@@ -383,6 +384,8 @@ export default function InstructorWorkloadClient() {
   useEffect(() => { fetchWorkload(); }, [fetchWorkload]);
 
   useVisibilityAwareInterval(() => fetchWorkload(true), 30_000);
+  // New notification (e.g. a subject assigned) → refresh right away
+  useRefreshOnNewNotification(() => fetchWorkload(true));
 
   /* ── Derived values (mirrors admin WorkloadClient modal logic) ─────────── */
   const workload = data;

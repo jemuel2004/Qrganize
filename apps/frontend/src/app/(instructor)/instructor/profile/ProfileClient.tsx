@@ -109,31 +109,35 @@ function AccordionCard({
       {mounted && createPortal(
         <AnimatePresence>
           {open && (
-            <motion.div key={`setting-${id}`} className="fixed inset-0 z-40 flex items-center justify-center p-3 sm:p-6"
+            /* Phones: a bottom sheet that slides up; larger screens: a centred window */
+            <motion.div key={`setting-${id}`} className="fixed inset-0 z-40 flex items-end sm:items-center justify-center sm:p-6"
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: reduceMotion ? 0 : 0.25 }}>
               <div className="absolute inset-0 bg-[#0B2A5B]/45 backdrop-blur-sm" onClick={onToggle} aria-hidden />
               <motion.div role="dialog" aria-modal="true" aria-label={title}
-                initial={reduceMotion ? false : { opacity: 0, scale: 0.94, y: 18 }}
-                animate={{ opacity: 1, scale: 1, y: 0, transition: { type: 'spring', stiffness: 320, damping: 28 } }}
-                exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: 10, transition: { duration: 0.2, ease: EASE_P } }}
-                className="relative w-full max-w-2xl max-h-[90vh] flex flex-col rounded-3xl overflow-hidden bg-white shadow-[0_30px_70px_-25px_rgba(11,42,91,0.6)]">
-                <header className="relative overflow-hidden flex-shrink-0 px-6 py-5" style={{ background: `linear-gradient(120deg, ${tone} 0%, #0B2A5B 115%)` }}>
+                initial={reduceMotion ? false : { opacity: 0, y: 48 }}
+                animate={{ opacity: 1, y: 0, transition: { type: 'spring', stiffness: 320, damping: 32 } }}
+                exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 32, transition: { duration: 0.2, ease: EASE_P } }}
+                className="relative w-full sm:max-w-2xl max-h-[92dvh] sm:max-h-[90vh] flex flex-col rounded-t-3xl sm:rounded-3xl overflow-hidden bg-white shadow-[0_30px_70px_-25px_rgba(11,42,91,0.6)]">
+                <header className="relative overflow-hidden flex-shrink-0 px-4 py-4 sm:px-6 sm:py-5" style={{ background: `linear-gradient(120deg, ${tone} 0%, #0B2A5B 115%)` }}>
                   <span aria-hidden className="absolute -right-14 -top-20 w-56 h-56 rounded-full bg-white/10" />
-                  <div className="relative flex items-center gap-4">
-                    <span className="w-12 h-12 rounded-2xl bg-white/15 ring-1 ring-white/25 flex items-center justify-center flex-shrink-0">
-                      <Icon className="w-6 h-6" style={WHITE} />
+                  {/* Grab handle — reads as a sheet on phones */}
+                  <span aria-hidden className="sm:hidden absolute top-1.5 left-1/2 -translate-x-1/2 w-10 h-1 rounded-full bg-white/40" />
+                  <div className="relative flex items-center gap-3 sm:gap-4">
+                    <span className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl bg-white/15 ring-1 ring-white/25 flex items-center justify-center flex-shrink-0">
+                      <Icon className="w-5 h-5 sm:w-6 sm:h-6" style={WHITE} />
                     </span>
                     <div className="min-w-0 flex-1">
-                      <h2 className="text-xl font-bold leading-tight" style={WHITE}>{title}</h2>
-                      <p className="text-sm mt-0.5" style={{ color: 'rgba(255,255,255,0.8)' }}>{subtitle}</p>
+                      <h2 className="text-lg sm:text-xl font-bold leading-tight truncate" style={WHITE}>{title}</h2>
+                      <p className="text-[13px] sm:text-sm mt-0.5 truncate" style={{ color: 'rgba(255,255,255,0.8)' }}>{subtitle}</p>
                     </div>
                     <button type="button" onClick={onToggle} aria-label="Close"
-                      className="inline-flex items-center gap-1.5 h-10 px-3.5 rounded-full bg-white/15 hover:bg-white/25 text-[15px] font-semibold transition-colors flex-shrink-0" style={WHITE}>
-                      <X className="w-5 h-5" /> Close
+                      className="inline-flex items-center justify-center gap-1.5 h-10 min-w-10 sm:px-3.5 rounded-full bg-white/15 hover:bg-white/25 text-[15px] font-semibold transition-colors flex-shrink-0" style={WHITE}>
+                      <X className="w-5 h-5" /> <span className="hidden sm:inline">Close</span>
                     </button>
                   </div>
                 </header>
-                <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">{children}</div>
+                {/* Safe-area padding keeps the last item above the iPhone home bar */}
+                <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)]">{children}</div>
               </motion.div>
             </motion.div>
           )}
