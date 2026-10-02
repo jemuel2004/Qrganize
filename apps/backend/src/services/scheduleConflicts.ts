@@ -27,7 +27,8 @@ export const LUNCH_END_MIN = 13 * 60;
 /** Statuses whose sessions occupy time. */
 const ACTIVE_STATUSES = ['Assigned', 'Scheduled', 'Completed'];
 
-export type ConflictType = 'instructor' | 'room' | 'block';
+/** 'duplicate' — two sessions of the same save overlap each other */
+export type ConflictType = 'instructor' | 'room' | 'block' | 'duplicate';
 
 export interface ConflictSessionInput {
   day: string;
@@ -84,6 +85,41 @@ export function validateSessions(sessions: ConflictSessionInput[]): string | nul
     }
   }
   return null;
+}
+
+const minutesToTime = (min: number) =>
+  `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+
+/**
+ * Sessions of the same save that overlap each other on the same day — e.g.
+ * Monday 8:00–10:00 entered twice. The form already flags these while
+ * editing; the save route refuses them too, so a request that skips the form
+ * can't store a subject meeting twice at once. One entry per later session.
+ * Run after validateSessions (valid days and times, nothing past 9:00 PM).
+ */
+export function findOverlappingSessions(sessions: ConflictSessionInput[]): ScheduleConflict[] {
+  const span = (s: ConflictSessionInput) => {
+    const start = timeToMinutes(String(s.start_time));
+    return { start, end: start + Math.round(parseFloat(String(s.hours)) * 60) };
+  };
+  const overlaps: ScheduleConflict[] = [];
+  for (let i = 1; i < sessions.length; i++) {
+    const a = span(sessions[i]);
+    for (let j = 0; j < i; j++) {
+      if (sessions[j].day !== sessions[i].day) continue;
+      const b = span(sessions[j]);
+      if (a.start < b.end && a.end > b.start) {
+        const st = minutesToTime(b.start);
+        const et = minutesToTime(b.end);
+        overlaps.push({
+          session_index: i, type: 'duplicate', day: sessions[i].day, existing_start: st, existing_end: et,
+          message: `Session ${i + 1} overlaps with Session ${j + 1} on ${sessions[i].day} (${fmt12(st)}–${fmt12(et)}).`,
+        });
+        break;
+      }
+    }
+  }
+  return overlaps;
 }
 
 /* Overlap of an existing session (ss) with [$start, $end) minutes, midnight-aware. */

@@ -44,7 +44,8 @@ async function POST_handler(req: NextRequest) {
       picture_url: `${storedPath}?t=${Date.now()}`,
       has_custom_profile_picture: true,
     });
-  } catch {
+  } catch (error) {
+    console.error('[POST /api/instructor/profile/picture]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
@@ -84,7 +85,8 @@ async function DELETE_handler(req: NextRequest) {
       picture_url: pictureUrl,
       has_custom_profile_picture: false,
     });
-  } catch {
+  } catch (error) {
+    console.error('[DELETE /api/instructor/profile/picture]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

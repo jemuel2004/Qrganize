@@ -7,11 +7,8 @@ import {
   getActiveAcademicPeriod,
   isActivePeriodConfigured,
 } from '@/services/activeAcademicPeriod';
-import {
-  CONTRACTUAL_REGULAR_HOURS_LIMIT,
-  computeRegularLoadStatus,
-  permanentRegularLoadLimit,
-} from '@shared/regularLoad';
+import { computeRegularLoadStatus, regularLoadLimit as termRegularLoadLimit } from '@shared/regularLoad';
+import { getWorkloadPolicy } from '@/services/workloadPolicy';
 
 /**
  * GET /api/instructor/workload
@@ -96,9 +93,7 @@ export async function GET(req: NextRequest) {
       [facultyId, semester, academicYear],
     );
     const totalDeduction   = parseFloat(deductionResult.rows[0].total_deduction) || 0;
-    const regularLoadLimit = faculty.employment_status === 'Permanent'
-      ? permanentRegularLoadLimit(totalDeduction)
-      : CONTRACTUAL_REGULAR_HOURS_LIMIT;
+    const regularLoadLimit = termRegularLoadLimit(faculty.employment_status === 'Permanent', totalDeduction, await getWorkloadPolicy());
 
     // Loads
     let loadsQuery = `

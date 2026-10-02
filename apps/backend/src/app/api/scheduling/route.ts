@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { query, transaction } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { getChairAssignedProgramId, isScopedChair } from '@/services/programScope';
-import { findScheduleConflicts, validateSessions, type ScheduleConflict } from '@/services/scheduleConflicts';
+import { findOverlappingSessions, findScheduleConflicts, validateSessions, type ScheduleConflict } from '@/services/scheduleConflicts';
 import { termDayCombinationError } from '@/services/dayCombinations';
 import { withAudit } from '@/services/audit';
 import { ensureSessionTypes } from '@/services/sessionTypeRepair';
@@ -131,6 +131,16 @@ async function POST_handler(req: NextRequest) {
     // match nothing and slip past every conflict check.
     const invalidSessions = validateSessions(sessions);
     if (invalidSessions) return NextResponse.json({ error: invalidSessions }, { status: 400 });
+
+    // The same subject can't meet twice at once (e.g. Monday 8–10 entered
+    // twice). The form flags this too; checked here for requests that skip it.
+    const selfOverlaps = findOverlappingSessions(sessions);
+    if (selfOverlaps.length > 0) {
+      return NextResponse.json({
+        error: `Schedule conflict: ${selfOverlaps[0].message}`,
+        conflicts: selfOverlaps,
+      }, { status: 409 });
+    }
 
     // Only the day combinations allowed for this block's semester (Settings → Day Combinations)
     const comboError = await termDayCombinationError(

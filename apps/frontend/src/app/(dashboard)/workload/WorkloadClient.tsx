@@ -28,9 +28,10 @@ import { designationFooterLines, designationRowText, isResearchExtensionType, pr
 import { openWorkloadPrintableVersion } from '@/lib/openPrintHtmlDocument';
 import { coerceSubjectCategory } from '@shared/subjectCategory';
 import {
-  OVERLOAD_MAX_UNITS, REGULAR_LOAD_MAX_UNITS, LOAD_GRACE_UNITS,
+  LOAD_GRACE_UNITS, overloadUnitsCap, regularUnitsCap,
   formatLoadCap, shownUnitsCap, shownUnitsLeft, shownUnitsOver, isRegularLoadComplete,
 } from '@shared/regularLoad';
+import { useWorkloadPolicy } from '@/hooks/useWorkloadPolicy';
 import { blockCurriculumVersion, curriculumVersionLabel } from '@shared/curriculumVersion';
 import { ListSkeleton, Skeleton, TableSkeleton } from '@/components/ui/skeletons';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
@@ -433,6 +434,11 @@ export default function WorkloadPage({
   /** Faculty list: everyone, only those with a subject this term, or those still needing one */
   const [assignFilter, setAssignFilter] = useState<'all' | 'assigned' | 'unassigned'>('all');
   const reduceMotion = useReducedMotion();
+  /* Settings → Workload Limits, as exact caps (published + the 0.25 grace).
+     Deloading can take at most the whole Regular cap. */
+  const workloadPolicy = useWorkloadPolicy();
+  const regularCap = regularUnitsCap(workloadPolicy);
+  const overloadCap = overloadUnitsCap(workloadPolicy);
 
   const [facultySummaries, setFacultySummaries] = useState<Record<number, FacultySummary>>({});
   /* Single global semester/year — drives the instructor list badges, workload
@@ -1605,8 +1611,8 @@ export default function WorkloadPage({
         deductions.push({ type: e.type, description: e.description.trim(), units: v });
       }
       const total = deductions.reduce((s, e) => s + e.units, 0);
-      if (total > REGULAR_LOAD_MAX_UNITS) {
-        setDesignationError(`Total deduction cannot exceed ${loadDisplay(REGULAR_LOAD_MAX_UNITS)} units.`); return;
+      if (total > regularCap) {
+        setDesignationError(`Total deduction cannot exceed ${loadDisplay(regularCap)} units.`); return;
       }
     }
 
@@ -1629,7 +1635,7 @@ export default function WorkloadPage({
       setFaculty(prev => prev.map(f => f.id === updated.id ? updated : f));
       setSelectedFaculty(updated);
       setDeductionMsg('Load deduction saved. Workload updated.');
-      const availableLoad = Math.max(0, REGULAR_LOAD_MAX_UNITS - (Number(data.total_deduction) || 0));
+      const availableLoad = Math.max(0, regularCap - (Number(data.total_deduction) || 0));
       // Animated check inside the modal, then it closes on its own
       setDeloadSavedNote(`${loadDisplay(availableLoad)} units regular load available.`);
       setTimeout(() => { setDesignationPending(null); setDeloadSavedNote(null); }, 1500);
@@ -1681,7 +1687,7 @@ export default function WorkloadPage({
       : null;
 
   function getFacultyStatus(s: FacultySummary) {
-    /* Exceeded: teaching load (current_load) surpasses the available slot (regular_load_limit = REGULAR_LOAD_MAX_UNITS - deduction) */
+    /* Exceeded: teaching load (current_load) surpasses the available slot (regular_load_limit = Regular cap - deduction) */
     const exceeded = Math.max(0, s.current_load - s.regular_load_limit);
     if (exceeded > 0.001)          return { label: 'Exceeded',    dot: 'bg-red-500',    text: 'text-red-400'    } as const;
     if (s.has_overload)            return { label: 'Has Overload', dot: 'bg-orange-500', text: 'text-orange-500' } as const;
@@ -3960,15 +3966,15 @@ export default function WorkloadPage({
                   >
                     {strip(LOAD_TONE.overload)}
                     <div className={labelCls}>Overload</div>
-                    <div className={valueCls} style={{ color: isP && modalOlVal >= OVERLOAD_MAX_UNITS - 0.001 ? '#B91C1C' : LOAD_INK.overload }}>
-                      {modalOlVal.toFixed(2)}{isP && <> / {loadDisplay(OVERLOAD_MAX_UNITS)}</>}
+                    <div className={valueCls} style={{ color: isP && modalOlVal >= overloadCap - 0.001 ? '#B91C1C' : LOAD_INK.overload }}>
+                      {modalOlVal.toFixed(2)}{isP && <> / {loadDisplay(overloadCap)}</>}
                       <span className={mutedCls}>{unitLabel}</span>
                     </div>
                     {isP && (
-                      <div className={`mt-1.5 text-sm font-semibold ${modalOlVal >= OVERLOAD_MAX_UNITS - 0.001 ? 'text-red-700' : 'text-slate-500'}`}>
-                        {shownUnitsLeft(OVERLOAD_MAX_UNITS - modalOlVal) <= 0.001
+                      <div className={`mt-1.5 text-sm font-semibold ${modalOlVal >= overloadCap - 0.001 ? 'text-red-700' : 'text-slate-500'}`}>
+                        {shownUnitsLeft(overloadCap - modalOlVal) <= 0.001
                           ? 'Overload limit reached'
-                          : `${shownUnitsLeft(OVERLOAD_MAX_UNITS - modalOlVal).toFixed(2)} units left`}
+                          : `${shownUnitsLeft(overloadCap - modalOlVal).toFixed(2)} units left`}
                       </div>
                     )}
                   </motion.button>
@@ -4592,7 +4598,7 @@ export default function WorkloadPage({
         {deloadSavedNote !== null && <AssignSuccess title="Deloading saved!" note={deloadSavedNote} />}
         {designationPending && (() => {
           const totalDeduction = deductionEntries.reduce((s, e) => s + (parseFloat(e.units) || 0), 0);
-          const availableLoad  = Math.max(0, REGULAR_LOAD_MAX_UNITS - totalDeduction);
+          const availableLoad  = Math.max(0, regularCap - totalDeduction);
           return (
             <div className="space-y-5">
               {/* Instructor info */}
@@ -4602,7 +4608,7 @@ export default function WorkloadPage({
                   <div className="text-xs text-slate-400">{designationPending.position} · Permanent</div>
                 </div>
                 <div className="text-right text-xs text-slate-500">
-                  Base load: <span className="font-semibold text-slate-300">{loadDisplay(REGULAR_LOAD_MAX_UNITS)} units</span>
+                  Base load: <span className="font-semibold text-slate-300">{loadDisplay(regularCap)} units</span>
                 </div>
               </div>
 
@@ -4742,7 +4748,7 @@ export default function WorkloadPage({
                               <input
                                 type="number"
                                 min={0.5}
-                                max={REGULAR_LOAD_MAX_UNITS}
+                                max={regularCap}
                                 step={0.5}
                                 placeholder="e.g. 3"
                                 value={entry.units}
@@ -4774,7 +4780,7 @@ export default function WorkloadPage({
               <div className={`rounded-xl border p-4 space-y-2 ${
                 deductionNone || deductionEntries.length === 0
                   ? 'bg-emerald-500/10 border-emerald-500/20'
-                  : totalDeduction > REGULAR_LOAD_MAX_UNITS
+                  : totalDeduction > regularCap
                     ? 'bg-red-500/10 border-red-500/30'
                     : 'bg-[#0d1424] border-white/10'
               }`}>
@@ -4782,7 +4788,7 @@ export default function WorkloadPage({
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-slate-400">Regular Load</span>
                     <span className="font-bold text-emerald-300 text-base">
-                      {loadDisplay(REGULAR_LOAD_MAX_UNITS)} <span className="text-xs font-normal text-emerald-600">units</span>
+                      {loadDisplay(regularCap)} <span className="text-xs font-normal text-emerald-600">units</span>
                     </span>
                   </div>
                 ) : (
@@ -4803,15 +4809,15 @@ export default function WorkloadPage({
                     <div className="border-t border-white/10 pt-2 space-y-1">
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-slate-500">Total Deduction</span>
-                        <span className={`font-bold tabular-nums ${totalDeduction > REGULAR_LOAD_MAX_UNITS ? 'text-red-400' : 'text-amber-400'}`}>
+                        <span className={`font-bold tabular-nums ${totalDeduction > regularCap ? 'text-red-400' : 'text-amber-400'}`}>
                           −{totalDeduction.toFixed(2)} units
                         </span>
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-sm font-semibold text-slate-300">Available Regular Load</span>
-                        <span className={`font-bold text-base tabular-nums ${totalDeduction > REGULAR_LOAD_MAX_UNITS ? 'text-red-400' : 'text-emerald-300'}`}>
+                        <span className={`font-bold text-base tabular-nums ${totalDeduction > regularCap ? 'text-red-400' : 'text-emerald-300'}`}>
                           {loadDisplay(availableLoad)}
-                          <span className={`text-xs font-normal ml-1 ${totalDeduction > REGULAR_LOAD_MAX_UNITS ? 'text-red-600' : 'text-emerald-600'}`}>units</span>
+                          <span className={`text-xs font-normal ml-1 ${totalDeduction > regularCap ? 'text-red-600' : 'text-emerald-600'}`}>units</span>
                         </span>
                       </div>
                     </div>

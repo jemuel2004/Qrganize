@@ -13,12 +13,8 @@ import {
   resolveRequiredProgramId,
 } from '@/services/facultyValidation';
 import { ensureFacultyProfileColumns } from '@/database/schema-guard';
-import {
-  CONTRACTUAL_REGULAR_HOURS_LIMIT,
-  REGULAR_LOAD_MAX_UNITS,
-  formatLoadCap,
-  shownUnitsCap,
-} from '@shared/regularLoad';
+import { formatLoadCap, maxDeductionUnits, regularUnitsCap, shownUnitsCap } from '@shared/regularLoad';
+import { getWorkloadPolicy, sqlNumber } from '@/services/workloadPolicy';
 import {
   assertEmailAvailable,
   ensureEmailRegistry,
@@ -47,6 +43,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       }
     }
 
+    const policy = await getWorkloadPolicy();
     const result = await query(`
       SELECT
         f.id, f.first_name, f.last_name, f.middle_name, f.name, f.employee_id,
@@ -57,8 +54,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
         ia.username, ia.email,
         ia.google_verified, ia.google_verified_at,
         CASE WHEN f.employment_status = 'Permanent'
-          THEN ${REGULAR_LOAD_MAX_UNITS} - f.designation_units
-          ELSE ${CONTRACTUAL_REGULAR_HOURS_LIMIT}
+          THEN GREATEST(0, ${sqlNumber(regularUnitsCap(policy))} - COALESCE(f.designation_units, 0))
+          ELSE ${sqlNumber(policy.contractualHours)}
         END AS regular_load_limit,
         COALESCE((
           SELECT SUM(CASE WHEN f.employment_status = 'Permanent' THEN c.units ELSE c.total_hours END)
@@ -301,8 +298,9 @@ async function PATCH_handler(req: NextRequest, { params }: { params: Promise<{ i
     if (desType !== 'No Designation' && isNaN(desUnits)) {
       return NextResponse.json({ error: 'Designation units must be a number.' }, { status: 400 });
     }
-    if (desUnits > REGULAR_LOAD_MAX_UNITS) {
-      return NextResponse.json({ error: `Total deduction cannot exceed ${formatLoadCap(shownUnitsCap(REGULAR_LOAD_MAX_UNITS))} units.` }, { status: 400 });
+    const maxDeduction = maxDeductionUnits(await getWorkloadPolicy());
+    if (desUnits > maxDeduction) {
+      return NextResponse.json({ error: `Total deduction cannot exceed ${formatLoadCap(shownUnitsCap(maxDeduction))} units.` }, { status: 400 });
     }
 
     const result = await query(`

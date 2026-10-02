@@ -1381,7 +1381,7 @@ export default function SchedulingClient() {
   /** Bumped by live updates when no faculty is open (nothing else would refetch the summaries). */
   const [liveTick, setLiveTick] = useState(0);
 
-  /* `/api/faculty` only returns each instructor's load LIMIT (30 hrs, or
+  /* `/api/faculty` only returns each instructor's load LIMIT (Contractual hours, or
      18.25 − designation units), not what's left after assignments. Pull the
      real per-term remaining load from the same endpoint the Workload page
      uses, so "complete" means the same thing on both pages. Refetched when

@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
-import { REGULAR_LOAD_MAX_UNITS, formatLoadCap, shownUnitsCap } from '@shared/regularLoad';
+import { formatLoadCap, maxDeductionUnits, shownUnitsCap } from '@shared/regularLoad';
+import { getWorkloadPolicy } from '@/services/workloadPolicy';
 import { canAccessProgram, isScopedChair } from '@/services/programScope';
 import { withAudit } from '@/services/audit';
 
@@ -122,9 +123,11 @@ async function POST_handler(
       (s, e) => s + (parseFloat(String(e.units)) || 0),
       0,
     );
-    if (totalDeduction > REGULAR_LOAD_MAX_UNITS) {
+    // Deloading can take at most the whole Regular Load (Settings → Workload Limits)
+    const maxDeduction = maxDeductionUnits(await getWorkloadPolicy());
+    if (totalDeduction > maxDeduction) {
       return NextResponse.json(
-        { error: `Total deduction cannot exceed ${formatLoadCap(shownUnitsCap(REGULAR_LOAD_MAX_UNITS))} units.` },
+        { error: `Total deduction cannot exceed ${formatLoadCap(shownUnitsCap(maxDeduction))} units.` },
         { status: 400 },
       );
     }

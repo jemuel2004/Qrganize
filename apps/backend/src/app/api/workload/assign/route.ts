@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
-import {
-  CONTRACTUAL_REGULAR_HOURS_LIMIT,
-  permanentRegularLoadLimit,
-} from '@shared/regularLoad';
+import { regularLoadLimit as termRegularLoadLimit } from '@shared/regularLoad';
+import { getWorkloadPolicy } from '@/services/workloadPolicy';
 import { syncWorkloadMonitoringNotifications } from '@/services/workloadMonitoring';
 import { canAccessMasterSchedule, canAccessProgram } from '@/services/programScope';
 import { withAudit } from '@/services/audit';
@@ -112,9 +110,19 @@ async function POST_handler(req: NextRequest) {
     const subjectValue = isPermanent ? lec + (lab * 0.75) : parseFloat(sched.total_hours);
     const unit = isPermanent ? 'units' : 'hours';
 
-    const regularLoadLimit = isPermanent
-      ? permanentRegularLoadLimit(parseFloat(faculty.designation_units))
-      : CONTRACTUAL_REGULAR_HOURS_LIMIT;
+    // Same limit the Workload page shows for this term: the term's deloading
+    // (Faculty Deloading), not the designation last saved on the faculty record.
+    let termDeduction = 0;
+    if (isPermanent) {
+      const deduction = await query(
+        `SELECT COALESCE(SUM(deducted_units), 0) AS total
+           FROM instructor_load_deductions
+          WHERE faculty_id = $1 AND semester = $2 AND school_year = $3`,
+        [faculty_id, sched.semester, sched.academic_year],
+      );
+      termDeduction = parseFloat(deduction.rows[0]?.total) || 0;
+    }
+    const regularLoadLimit = termRegularLoadLimit(isPermanent, termDeduction, await getWorkloadPolicy());
     const remainingRegular = parseFloat((regularLoadLimit - currentRegular).toFixed(10));
 
     // ── No category provided yet: determine which confirmation is needed ─────

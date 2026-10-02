@@ -11,6 +11,7 @@ export async function GET(req: NextRequest) {
     const result = await query('SELECT * FROM programs WHERE is_active = true ORDER BY code');
     return NextResponse.json({ programs: result.rows });
   } catch (error) {
+    console.error('[GET /api/programs]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
@@ -32,6 +33,7 @@ async function POST_handler(req: NextRequest) {
     return NextResponse.json({ program: result.rows[0] }, { status: 201 });
   } catch (error) {
     if (String(error).includes('unique')) return NextResponse.json({ error: 'Program code already exists' }, { status: 409 });
+    console.error('[POST /api/programs]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

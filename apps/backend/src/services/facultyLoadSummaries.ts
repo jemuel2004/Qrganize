@@ -1,9 +1,7 @@
 import { query } from '@/database/db';
 import { ensurePraiseSplitColumn } from '@/services/praiseSplit';
-import {
-  CONTRACTUAL_REGULAR_HOURS_LIMIT,
-  REGULAR_LOAD_MAX_UNITS,
-} from '@shared/regularLoad';
+import { regularUnitsCap } from '@shared/regularLoad';
+import { getWorkloadPolicy, sqlNumber } from '@/services/workloadPolicy';
 
 export interface FacultyLoadSummary {
   current_load: number;
@@ -44,8 +42,9 @@ async function ensureDeductionsTable() {
 
 /**
  * Same regular-load math as Faculty Workload summaries.
- * Permanent: lecture + 0.75*lab units vs (18.25 - deductions).
- * Contractual: regular contact hours vs 30.
+ * Permanent: lecture + 0.75*lab units vs (Regular cap − the term's deloading).
+ * Contractual: regular contact hours vs the Contractual hours limit.
+ * Limits come from Settings → Workload Limits (18.25 / 30 by default).
  */
 export async function loadFacultyLoadSummaries(options: {
   semester: string;
@@ -54,6 +53,7 @@ export async function loadFacultyLoadSummaries(options: {
 }): Promise<Record<number, FacultyLoadSummary>> {
   await ensureDeductionsTable();
   await ensurePraiseSplitColumn();
+  const policy = await getWorkloadPolicy();
 
   const semester = options.semester || '';
   const academicYear = options.academicYear || '';
@@ -100,8 +100,8 @@ export async function loadFacultyLoadSummaries(options: {
         f.employment_status,
 
         CASE WHEN f.employment_status = 'Permanent'
-          THEN ${REGULAR_LOAD_MAX_UNITS} - COALESCE(da.total_deducted, 0)
-          ELSE ${CONTRACTUAL_REGULAR_HOURS_LIMIT}
+          THEN GREATEST(0, ${sqlNumber(regularUnitsCap(policy))} - COALESCE(da.total_deducted, 0))
+          ELSE ${sqlNumber(policy.contractualHours)}
         END                                                       AS regular_load_limit,
 
         CASE WHEN f.employment_status = 'Permanent'

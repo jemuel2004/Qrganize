@@ -26,7 +26,8 @@ export async function GET(req: NextRequest) {
 
     const theme = result.rows[0]?.theme ?? 'light';
     return NextResponse.json({ theme });
-  } catch {
+  } catch (error) {
+    console.error('[GET /api/instructor/profile/theme]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
@@ -52,7 +53,8 @@ async function POST_handler(req: NextRequest) {
     );
 
     return NextResponse.json({ theme });
-  } catch {
+  } catch (error) {
+    console.error('[POST /api/instructor/profile/theme]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

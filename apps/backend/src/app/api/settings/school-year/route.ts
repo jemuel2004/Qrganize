@@ -40,7 +40,8 @@ async function POST_handler(req: NextRequest) {
     );
 
     return NextResponse.json({ success: true, semester });
-  } catch {
+  } catch (error) {
+    console.error('[POST /api/settings/school-year]', error);
     return NextResponse.json({ error: 'Failed to save semester.' }, { status: 500 });
   }
 }

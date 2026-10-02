@@ -27,6 +27,7 @@ export const REALTIME_TOPICS = [
   'room-requests',
   'notifications', // the reader's own inbox (stored per recipient)
   'audit',         // audit trail
+  'errors',        // error log
 ] as const;
 
 export type RealtimeTopic = (typeof REALTIME_TOPICS)[number];
@@ -58,11 +59,16 @@ const WRITE_RULES: readonly WriteRule[] = [
   { re: /^\/api\/instructor\/profile\/(password|password-otp|theme)(\/|$)/, topics: [] },
   // Personal inbox — those routes bump the reader's own notifications topic
   { re: /^\/api\/notifications(\/|$)/, topics: [] },
+  // Page crash reports — the error log bumps 'errors' itself once they are stored
+  { re: /^\/api\/error-logs\/report(\/|$)/, topics: [] },
+  { re: /^\/api\/error-logs(\/|$)/, topics: ['errors'] },
 
   // System
   { re: /^\/api\/(settings\/reset|setup)(\/|$)/, topics: EVERYTHING_SHARED },
   { re: /^\/api\/(settings\/school-year|school-years)(\/|$)/, topics: ['term'] },
   { re: /^\/api\/settings\/(logo|day-combinations)(\/|$)/, topics: ['settings'] },
+  // New limits change every remaining load, status and alert
+  { re: /^\/api\/settings\/workload-policy(\/|$)/, topics: ['settings', 'workload', 'faculty'] },
 
   // Accounts and faculty (deactivating or deleting a faculty releases their classes)
   { re: /^\/api\/(instructor\/profile\/picture|instructor-accounts\/[^/]+\/picture)(\/|$)/, topics: ['accounts', 'faculty'] },
@@ -107,8 +113,8 @@ export function topicsForRole(role: string | null | undefined): RealtimeTopic[] 
     case 'admin':
     case 'program_chair':
       return [...REALTIME_TOPICS];
-    case 'department_chair': // no account management or audit trail
-      return REALTIME_TOPICS.filter(t => t !== 'accounts' && t !== 'audit');
+    case 'department_chair': // no account management, audit trail or error log
+      return REALTIME_TOPICS.filter(t => t !== 'accounts' && t !== 'audit' && t !== 'errors');
     case 'instructor':
       return [...FACULTY_TOPICS];
     default:

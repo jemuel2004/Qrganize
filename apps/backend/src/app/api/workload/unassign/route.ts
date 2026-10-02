@@ -47,6 +47,7 @@ async function POST_handler(req: NextRequest) {
     void syncWorkloadMonitoringNotifications(true);
     return NextResponse.json({ success: true });
   } catch (error) {
+    console.error('[POST /api/workload/unassign]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

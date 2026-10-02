@@ -17,9 +17,10 @@ import {
   CheckCircle, ImagePlus, Trash2, Upload, AlertTriangle, X,
   Palette, Sun, Moon,
   CalendarDays, CalendarRange, CalendarPlus, ShieldAlert, Eye, EyeOff, RotateCcw, Plus, Archive,
-  KeyRound, ShieldCheck, Smartphone, Lock, ChevronRight, User,
+  KeyRound, ShieldCheck, Smartphone, Lock, ChevronRight, User, Scale,
 } from 'lucide-react';
 import DayCombinationsSection from './DayCombinationsSection';
+import WorkloadLimitsSection from './WorkloadLimitsSection';
 import { roleLabel } from '@/lib/roleAccess';
 import { ProfilePictureUpload } from '@/components/ui/ProfilePictureUpload';
 import TrustedDevicesPanel from '@/components/security/TrustedDevicesPanel';
@@ -1385,7 +1386,7 @@ function SystemResetSection() {
    opened automatically). Clicking a tile pops that setting up in a centred,
    balanced-width window with a gradient banner; Close / Esc / backdrop
    returns to the tiles. */
-type SettingsSectionId = 'profile' | 'security' | 'school-year' | 'day-combinations' | 'branding' | 'appearance' | 'reset';
+type SettingsSectionId = 'profile' | 'security' | 'school-year' | 'day-combinations' | 'workload-limits' | 'branding' | 'appearance' | 'reset';
 
 interface SectionDef {
   id: SettingsSectionId;
@@ -1409,6 +1410,7 @@ const SECTION_GROUPS: { label: string; items: SectionDef[] }[] = [
     items: [
       { id: 'school-year', icon: CalendarDays, label: 'School Year', description: 'Set the active school year and semester', tone: '#0284C7' },
       { id: 'day-combinations', icon: CalendarRange, label: 'Day Combinations', description: 'Allowed class days (MWF, TTh…) for this semester', tone: '#1D5BD6' },
+      { id: 'workload-limits', icon: Scale, label: 'Workload Limits', description: 'Regular load, overload limit and contractual hours', tone: '#0B4FA8' },
       { id: 'branding', icon: ImagePlus, label: 'System Logo', description: 'Upload the logo shown across the system', tone: '#12408F' },
       { id: 'appearance', icon: Palette, label: 'Appearance', description: 'Light or dark display', tone: '#7C3AED' },
     ],
@@ -1442,6 +1444,7 @@ function SectionBody({ id }: { id: SettingsSectionId }) {
     case 'security': return <PasswordAndSecuritySection />;
     case 'school-year': return <SchoolYearSection />;
     case 'day-combinations': return <DayCombinationsSection />;
+    case 'workload-limits': return <WorkloadLimitsSection />;
     case 'branding': return <LogoUploadContent />;
     case 'appearance': return <AppearanceSection />;
     case 'reset': return <SystemResetSection />;

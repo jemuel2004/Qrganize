@@ -40,6 +40,13 @@ test('checks, sign-in and personal settings change nothing shared', () => {
   assert.deepEqual(topicsForWrite('POST', '/api/auth/verify-email-google'), ['accounts']);
 });
 
+test('new workload limits refresh loads; error-log writes are scoped', () => {
+  assert.deepEqual(topicsForWrite('PUT', '/api/settings/workload-policy').sort(), ['faculty', 'settings', 'workload']);
+  assert.deepEqual(topicsForWrite('PATCH', '/api/error-logs/12'), ['errors']);
+  assert.deepEqual(topicsForWrite('PATCH', '/api/error-logs'), ['errors']);
+  assert.deepEqual(topicsForWrite('POST', '/api/error-logs/report'), []);
+});
+
 test('a system reset refreshes every shared topic', () => {
   const t = topicsForWrite('POST', '/api/settings/reset');
   assert.equal(t.length, REALTIME_TOPICS.length - 1);
@@ -50,9 +57,9 @@ test('roles only receive the topics their pages use', () => {
   assert.deepEqual(topicsForRole('admin'), [...REALTIME_TOPICS]);
   assert.deepEqual(topicsForRole('program_chair'), [...REALTIME_TOPICS]);
   const dept = topicsForRole('department_chair');
-  assert.ok(!dept.includes('accounts') && !dept.includes('audit') && dept.includes('schedule'));
+  assert.ok(!dept.includes('accounts') && !dept.includes('audit') && !dept.includes('errors') && dept.includes('schedule'));
   const faculty = topicsForRole('instructor');
-  for (const hidden of ['accounts', 'audit', 'blocks', 'curriculum', 'programs'] as const) assert.ok(!faculty.includes(hidden), hidden);
+  for (const hidden of ['accounts', 'audit', 'errors', 'blocks', 'curriculum', 'programs'] as const) assert.ok(!faculty.includes(hidden), hidden);
   for (const shown of ['schedule', 'workload', 'occupancy', 'room-requests', 'notifications'] as const) assert.ok(faculty.includes(shown), shown);
   assert.deepEqual(topicsForRole('guest'), []);
   assert.deepEqual(topicsForRole(undefined), []);

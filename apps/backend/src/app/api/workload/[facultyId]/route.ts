@@ -1,11 +1,8 @@
 ﻿import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
-import {
-  CONTRACTUAL_REGULAR_HOURS_LIMIT,
-  computeRegularLoadStatus,
-  permanentRegularLoadLimit,
-} from '@shared/regularLoad';
+import { computeRegularLoadStatus, regularLoadLimit as termRegularLoadLimit } from '@shared/regularLoad';
+import { getWorkloadPolicy } from '@/services/workloadPolicy';
 import { canAccessProgram } from '@/services/programScope';
 import { ensurePraiseSplitColumn } from '@/services/praiseSplit';
 import { ensureSessionTypes } from '@/services/sessionTypeRepair';
@@ -68,9 +65,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ facu
       [facultyId, semester || '', academicYear || ''],
     );
     const totalDeduction  = parseFloat(deductionResult.rows[0].total_deduction) || 0;
-    const regularLoadLimit = faculty.employment_status === 'Permanent'
-      ? permanentRegularLoadLimit(totalDeduction)
-      : CONTRACTUAL_REGULAR_HOURS_LIMIT;
+    const regularLoadLimit = termRegularLoadLimit(faculty.employment_status === 'Permanent', totalDeduction, await getWorkloadPolicy());
 
     let loadsQuery = `
       SELECT DISTINCT ON (il.id)
@@ -284,6 +279,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ facu
       }
     });
   } catch (error) {
+    console.error('[GET /api/workload/[facultyId]]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

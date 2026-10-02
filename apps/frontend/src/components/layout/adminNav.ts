@@ -78,6 +78,7 @@ export const ALL_NAV_SECTIONS: NavSection[] = [
       { href: '/analytics', label: 'Analytics' },
       { href: '/reports', label: 'Reports' },
       { href: '/audit-logs', label: 'Audit Logs' },
+      { href: '/error-logs', label: 'Error Logs' },
       { href: '/settings', label: 'Settings' },
     ],
   },
@@ -101,6 +102,7 @@ const DEPARTMENT_CHAIR_HIDDEN = new Set([
   '/dept-chair-accounts',
   '/settings',
   '/audit-logs',
+  '/error-logs',
 ]);
 
 const PROGRAM_CHAIR_ACCOUNT_SECTION: NavSection = {

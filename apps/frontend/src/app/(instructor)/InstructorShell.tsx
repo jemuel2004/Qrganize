@@ -12,6 +12,7 @@ import { ToastProvider } from '@/context/ToastContext';
 import NotificationBell from '@/components/ui/NotificationBell';
 import UserProfileDropdown from '@/components/ui/UserProfileDropdown';
 import SystemLogo from '@/components/ui/SystemLogo';
+import ErrorBoundary from '@/components/ui/ErrorBoundary';
 import InstructorSidebar, { InstructorMobileNav } from '@/components/layout/InstructorSidebar';
 import { useScrollLock } from '@/hooks/useScrollLock';
 
@@ -100,7 +101,8 @@ export default function InstructorShell({ children }: { children: React.ReactNod
                   className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden dashboard-main-scroll flex flex-col bg-[var(--background)]"
                   data-app-scroll
                 >
-                  {children}
+                  {/* A crashed page shows a reload screen and is reported to Error Logs */}
+                  <ErrorBoundary>{children}</ErrorBoundary>
                 </main>
               </div>
             </ToastProvider>

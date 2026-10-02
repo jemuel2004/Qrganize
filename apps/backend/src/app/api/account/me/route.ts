@@ -31,7 +31,8 @@ export async function GET(req: NextRequest) {
     if (result.rows.length === 0) return NextResponse.json({ error: 'User not found.' }, { status: 404 });
 
     return NextResponse.json({ user: result.rows[0] });
-  } catch {
+  } catch (error) {
+    console.error('[GET /api/account/me]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
@@ -135,6 +136,7 @@ async function PATCH_handler(req: NextRequest) {
     if (pg?.code === '23505') {
       return NextResponse.json({ error: EMAIL_ALREADY_REGISTERED, field: 'email' }, { status: 409 });
     }
+    console.error('[PATCH /api/account/me]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

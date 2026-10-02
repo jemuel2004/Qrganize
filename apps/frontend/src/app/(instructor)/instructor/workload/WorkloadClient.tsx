@@ -15,7 +15,8 @@ import { buildOfficialGroups, loadDayPatterns, matchOfficialSlot, formatOfficial
 import { useDayCombinations } from '@/lib/dayCombinations';
 import { designationFooterLines, designationRowText, isResearchExtensionType, printRegularLoadDocument } from '@/lib/instructorWorkloadPrintDocument';
 import { openWorkloadPrintableVersion } from '@/lib/openPrintHtmlDocument';
-import { REGULAR_LOAD_MAX_UNITS, formatLoadCap, shownUnitsCap, shownUnitsOver } from '@shared/regularLoad';
+import { formatLoadCap, regularUnitsCap, shownUnitsCap, shownUnitsOver } from '@shared/regularLoad';
+import { useWorkloadPolicy } from '@/hooks/useWorkloadPolicy';
 import { LOAD_TONE } from '@/lib/loadTone';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { CardSkeleton, PageBodySkeleton } from '@/components/ui/skeletons';
@@ -317,6 +318,7 @@ function TotalBreakdown({ unit, rows, total, subjects, onOpen }: {
 }
 
 export default function InstructorWorkloadClient() {
+  const workloadPolicy = useWorkloadPolicy();
   const [semester,     setSemester]     = useState('');
   const [academicYear, setAcademicYear] = useState('');
   // Form groups follow the term's day combinations (Settings → Day Combinations)
@@ -905,12 +907,14 @@ export default function InstructorWorkloadClient() {
       {!showSkeleton && !error && !noPeriod && workload && (() => {
         const modalRegVal  = isP ? totalRegularWU : totalRegularHoursDisplay;
         const modalTotal   = modalRegVal + olVal + praiseTotal;
-        const modalExceeded = Math.max(0, modalRegVal - (s?.regular_load_limit || REGULAR_LOAD_MAX_UNITS));
+        // The term's limit from the server (deloading applied); the policy is only a fallback.
+        // `??`, not `||` — a limit of 0 (deloading ≥ the whole load) is a real limit.
+        const regLimit = Number(s?.regular_load_limit ?? (isP ? regularUnitsCap(workloadPolicy) : workloadPolicy.contractualHours));
+        const modalExceeded = Math.max(0, modalRegVal - regLimit);
         const modalIsExceeded = modalExceeded > 0.001;
         // Shown as 18 (not 18.25) — the grace stays in the maths
-        const regLimit = Number(s?.regular_load_limit ?? 0);
         const regLimitShown = isP ? formatLoadCap(shownUnitsCap(regLimit)) : formatLoadCap(regLimit);
-        const regOverShown = isP ? shownUnitsOver(modalRegVal, s?.regular_load_limit || REGULAR_LOAD_MAX_UNITS) : modalExceeded;
+        const regOverShown = isP ? shownUnitsOver(modalRegVal, regLimit) : modalExceeded;
         const overloadCount = overloadPrintLoads.length + splitPrintLoads.length;
         const praiseCount = (workload.praise ?? []).length + praiseSubjectLoads.length + praiseSplitLoads.length;
 

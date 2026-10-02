@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { jwtVerify } from 'jose';
 import { evaluateSession } from '@/auth/trustedDevices';
 import { getRequiredJwtSecretBytes } from '@/auth/authSecret';
+import { ACTOR_HEADER, ROUTE_HEADER, encodeActor } from '@/auth/requestHeaders';
 
 /**
  * Backend API gate: every /api request needs a valid, still-live session,
@@ -46,9 +47,21 @@ function clearAuth(res: NextResponse) {
   return res;
 }
 
+/**
+ * Let the request through, stamped with the route and (when verified) the
+ * signed-in user for the error log. Values a browser sent are always replaced.
+ */
+function forward(req: NextRequest, payload?: Record<string, unknown>) {
+  const headers = new Headers(req.headers);
+  headers.set(ROUTE_HEADER, `${req.method} ${req.nextUrl.pathname}`);
+  if (payload) headers.set(ACTOR_HEADER, encodeActor(payload));
+  else headers.delete(ACTOR_HEADER);
+  return NextResponse.next({ request: { headers } });
+}
+
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
-  if (PUBLIC_API.has(`${req.method}:${pathname}`)) return NextResponse.next();
+  if (PUBLIC_API.has(`${req.method}:${pathname}`)) return forward(req);
 
   const token = req.cookies.get('auth_token')?.value;
   if (!token) return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
@@ -60,7 +73,7 @@ export async function proxy(req: NextRequest) {
     return clearAuth(NextResponse.json({ error: 'Session expired' }, { status: 401 }));
   }
 
-  if (TOKEN_ONLY_API.has(`${req.method}:${pathname}`)) return NextResponse.next();
+  if (TOKEN_ONLY_API.has(`${req.method}:${pathname}`)) return forward(req, payload);
 
   try {
     if (!(await evaluateSession(payload)).live) {
@@ -70,7 +83,7 @@ export async function proxy(req: NextRequest) {
     // Database briefly unavailable — allow a still-valid JWT through.
   }
 
-  return NextResponse.next();
+  return forward(req, payload);
 }
 
 export const config = {

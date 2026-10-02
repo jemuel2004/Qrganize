@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 import { ensureCurriculumVersion, ensureBlockCurriculumVersion } from './migrateCurriculum';
 import { ensureAuditTable } from './auditSchema';
 import { ensureRealtimeTable } from './realtimeSchema';
+import { ensureErrorLogTable } from './errorLogSchema';
 import { canonicalSubjectCode, subjectKey } from '@shared/subjectCode';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -881,6 +882,11 @@ async function v48_realtimeVersions() {
   await ensureRealtimeTable();
 }
 
+/** Error log for System → Error Logs (services/errorLog.ts). */
+async function v49_errorLogs() {
+  await ensureErrorLogTable();
+}
+
 /** One-time: each faculty is assigned the blocks they already teach, so the new
  *  block filter on Faculty Workload doesn't hide their current classes. */
 async function v45_seedFacultyBlocks() {
@@ -987,6 +993,7 @@ const MIGRATIONS: Array<{ version: number; name: string; fn: () => Promise<void>
   { version: 46, name: 'semester_day_combinations table',         fn: v46_semesterDayCombinations },
   { version: 47, name: 'curriculum manual subject_category',      fn: v47_curriculumCategoryManual },
   { version: 48, name: 'realtime_versions table',                 fn: v48_realtimeVersions },
+  { version: 49, name: 'error_logs table',                        fn: v49_errorLogs },
 ];
 
 // ─── public entry point ───────────────────────────────────────────────────────

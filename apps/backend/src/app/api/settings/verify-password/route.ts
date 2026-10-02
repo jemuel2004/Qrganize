@@ -23,7 +23,8 @@ async function POST_handler(req: NextRequest) {
 
     const valid = await bcrypt.compare(password, result.rows[0].password_hash);
     return NextResponse.json({ valid });
-  } catch {
+  } catch (error) {
+    console.error('[POST /api/settings/verify-password]', error);
     return NextResponse.json({ valid: false, error: 'Verification failed.' }, { status: 500 });
   }
 }

@@ -55,6 +55,7 @@ async function POST_handler(req: NextRequest, { params }: { params: Promise<{ id
 
     return NextResponse.json({ success: true, added, total: subjects.rows.length });
   } catch (error) {
+    console.error('[POST /api/blocks/[id]/reload]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

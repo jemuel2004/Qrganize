@@ -53,6 +53,7 @@ async function PATCH_handler(
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    console.error('[PATCH /api/notifications/[id]]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

@@ -1,8 +1,14 @@
+import type { Instrumentation } from 'next';
+
 // Runs once when the Next.js server process starts (Node.js runtime only).
 // This ensures database migrations are always applied before any API route
 // handles a request — no manual POST /api/setup call needed.
 export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
+    // Error log first, so problems during start-up are recorded too
+    const { installConsoleCapture } = await import('./services/errorLog');
+    installConsoleCapture();
+
     const { runMigrations } = await import('./database/migrate');
     try {
       await runMigrations();
@@ -46,3 +52,14 @@ export async function register() {
     }
   }
 }
+
+/** Errors no route caught → System → Error Logs (route, method and user included). */
+export const onRequestError: Instrumentation.onRequestError = async (err, request, context) => {
+  if (process.env.NEXT_RUNTIME !== 'nodejs') return;
+  try {
+    const { recordRequestError } = await import('./services/errorLog');
+    recordRequestError(err, request, context);
+  } catch {
+    // Never let error reporting raise an error of its own
+  }
+};

@@ -86,7 +86,7 @@ const POSITION_GROUPS: { label: string; items: string[] }[] = [
 
 const POSITIONS = POSITION_GROUPS.flatMap(group => group.items);
 
-/** Only Contractual is hour-based (30 hrs); every other position, incl. Temporary Permanent, is unit-based. */
+/** Only Contractual is hour-based (hours limit in Settings → Workload Limits); every other position, incl. Temporary Permanent, is unit-based. */
 const HOUR_BASED_POSITIONS = new Set(['Contractual']);
 
 const FACULTY_PAGE_SIZE = 10;
@@ -1239,7 +1239,7 @@ export default function FacultyPage() {
                   <span className="font-bold" style={{ color: employmentColors(empStatus).fg }}>
                     {isPermanent
                       ? `${formatLoadCap(shownUnitsCap(parseFloat(String(f.remaining_regular_load))))} units`
-                      : '30 hrs'}
+                      : `${formatLoadCap(parseFloat(String(f.remaining_regular_load)) || 0)} hrs`}
                   </span>
                 </div>
               </div>
@@ -1318,7 +1318,7 @@ export default function FacultyPage() {
                     <td className="px-5 py-4 text-center font-bold" style={{ color: employmentColors(empStatus).fg }}>
                       {isPermanent
                         ? `${formatLoadCap(shownUnitsCap(parseFloat(String(f.remaining_regular_load))))} units`
-                        : '30 hrs'
+                        : `${formatLoadCap(parseFloat(String(f.remaining_regular_load)) || 0)} hrs`
                       }
                     </td>
                     <td className="px-5 py-4">

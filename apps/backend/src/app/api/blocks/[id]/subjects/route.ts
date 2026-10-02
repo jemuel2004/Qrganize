@@ -60,6 +60,7 @@ async function POST_handler(req: NextRequest, { params }: { params: Promise<{ id
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    console.error('[POST /api/blocks/[id]/subjects]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
@@ -91,6 +92,7 @@ async function DELETE_handler(req: NextRequest, { params }: { params: Promise<{ 
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    console.error('[DELETE /api/blocks/[id]/subjects]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

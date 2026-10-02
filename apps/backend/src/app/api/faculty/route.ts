@@ -4,10 +4,8 @@ import { getAuthUser } from '@/auth/auth';
 import bcrypt from 'bcryptjs';
 import { classifyFacultyPgError, parsePosition, resolveRequiredProgramId } from '@/services/facultyValidation';
 import { ensureFacultyProfileColumns, resetFacultyProfileColumns } from '@/database/schema-guard';
-import {
-  CONTRACTUAL_REGULAR_HOURS_LIMIT,
-  REGULAR_LOAD_MAX_UNITS,
-} from '@shared/regularLoad';
+import { regularUnitsCap } from '@shared/regularLoad';
+import { getWorkloadPolicy, sqlNumber } from '@/services/workloadPolicy';
 import {
   assertEmailAvailable,
   ensureEmailRegistry,
@@ -34,6 +32,7 @@ export async function GET(req: NextRequest) {
     if (!scope.ok) return scope.response;
     const programId         = scope.programId != null ? String(scope.programId) : null;
     const employmentStatus = searchParams.get('employment_status');
+    const policy = await getWorkloadPolicy();
 
     let sql = `
       SELECT
@@ -46,8 +45,8 @@ export async function GET(req: NextRequest) {
         p.code AS program_code,
         p.name AS program_name,
         CASE WHEN f.employment_status = 'Permanent'
-          THEN ${REGULAR_LOAD_MAX_UNITS} - f.designation_units
-          ELSE ${CONTRACTUAL_REGULAR_HOURS_LIMIT}
+          THEN GREATEST(0, ${sqlNumber(regularUnitsCap(policy))} - COALESCE(f.designation_units, 0))
+          ELSE ${sqlNumber(policy.contractualHours)}
         END AS remaining_regular_load,
         ${PRIORITY_SUBJECTS_SUBQUERY} AS priority_subjects,
         ${ASSIGNED_BLOCK_IDS_SUBQUERY} AS assigned_block_ids

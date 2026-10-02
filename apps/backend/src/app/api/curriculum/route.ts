@@ -72,7 +72,8 @@ export async function GET(req: NextRequest) {
           : categoryFromHours(r.lecture_hours, r.laboratory_hours, r.subject_code),
       })),
     });
-  } catch {
+  } catch (error) {
+    console.error('[GET /api/curriculum]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
@@ -163,6 +164,7 @@ async function POST_handler(req: NextRequest) {
     const msg = error instanceof Error ? error.message : '';
     if (msg === 'DUPLICATE_ACTIVE_SUBJECT' || msg.includes('unique') || msg.includes('duplicate'))
       return NextResponse.json({ error: 'Subject code already exists for this program, year level, semester, and curriculum version.' }, { status: 409 });
+    console.error('[POST /api/curriculum]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
@@ -194,7 +196,8 @@ async function DELETE_handler(req: NextRequest) {
       [ids, programId],
     );
     return NextResponse.json({ success: true, deleted: result.rowCount ?? 0 });
-  } catch {
+  } catch (error) {
+    console.error('[DELETE /api/curriculum]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

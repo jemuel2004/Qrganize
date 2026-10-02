@@ -34,6 +34,7 @@ const SKIP: RegExp[] = [
   /^\/api\/auth\/login-otp\/resend/,
   /^\/api\/instructor\/profile\/theme/,
   /^\/api\/rooms\/occupancy/,
+  /^\/api\/error-logs\/report/,
 ];
 
 const RULES: Rule[] = [
@@ -79,6 +80,8 @@ const RULES: Rule[] = [
   { re: /^\/api\/instructor\/room-requests/, category: 'Rooms', noun: 'room request', verbs: { POST: 'Submitted room request', DELETE: 'Cancelled room request' } },
 
   { re: /^\/api\/settings\/school-year/, category: 'System', noun: 'active term', verbs: { POST: 'Changed active term', PUT: 'Changed active term', PATCH: 'Changed active term' } },
+  { re: /^\/api\/settings\/workload-policy/, category: 'System', noun: 'workload limits', verbs: { PUT: 'Changed workload limits' } },
+  { re: /^\/api\/error-logs/, category: 'System', noun: 'error log', verbs: { PATCH: 'Updated error log' } },
   { re: /^\/api\/school-years/, category: 'System', noun: 'school year' },
   { re: /^\/api\/settings\/logo/, category: 'System', noun: 'system logo', verbs: { POST: 'Changed system logo', PUT: 'Changed system logo', DELETE: 'Removed system logo' } },
   { re: /^\/api\/settings\/reset/, category: 'System', noun: 'system data', verbs: { POST: 'Reset system data' } },

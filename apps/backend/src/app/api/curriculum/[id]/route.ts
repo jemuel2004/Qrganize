@@ -63,6 +63,7 @@ async function PUT_handler(req: NextRequest, { params }: { params: Promise<{ id:
     const msg = error instanceof Error ? error.message : '';
     if (msg.includes('unique') || msg.includes('duplicate'))
       return NextResponse.json({ error: 'Subject code already exists for this program, year level, semester, and curriculum version.' }, { status: 409 });
+    console.error('[PUT /api/curriculum/[id]]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
@@ -86,6 +87,7 @@ async function DELETE_handler(req: NextRequest, { params }: { params: Promise<{ 
     await query('UPDATE curriculums SET is_active=false, updated_at=NOW() WHERE id=$1', [id]);
     return NextResponse.json({ success: true });
   } catch (error) {
+    console.error('[DELETE /api/curriculum/[id]]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
