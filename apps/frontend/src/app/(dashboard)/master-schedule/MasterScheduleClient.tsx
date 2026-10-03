@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useSchoolYear } from '@/context/SchoolYearContext';
@@ -8,12 +8,15 @@ import { useRealtime } from '@/context/RealtimeContext';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import { CalendarDays } from 'lucide-react';
-import { SearchInput, FilterSelect, FilterBar } from '@/components/ui/SearchFilter';
+import { SearchInput, FilterBar } from '@/components/ui/SearchFilter';
+import FriendlySelect from '@/components/ui/FriendlySelect';
+import CountFilterTabs, { type CountFilterOption } from '@/components/ui/CountFilterTabs';
 import { Skeleton, TableSkeleton } from '@/components/ui/skeletons';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { LOADING_DELAY, PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
 import Link from 'next/link';
 import { isScopedChairRole } from '@/lib/roleAccess';
+import SubjectFacultyPreview from '@/components/SubjectFacultyPreview';
 
 const BLOCK_PAGE_EASE = [0.16, 1, 0.3, 1] as const;
 
@@ -46,11 +49,12 @@ const SEM_ORDER   = ['1st Semester', '2nd Semester', 'Summer'];
 const YEAR_LEVELS = YEAR_ORDER;
 const STATUSES    = ['Unassigned', 'Assigned', 'Scheduled', 'Completed'];
 
-/* Solid, clearly outlined filter controls — the shared FilterSelect has no
-   border and goes white once filled, which vanished on the white card. */
-const MS_FIELD = 'qr-ms-field';
+type StatusTab = 'all' | 'Unassigned' | 'Assigned' | 'Scheduled' | 'Completed';
+
+/* Field label + read-only box — same height as the dropdowns beside them */
+const MS_LABEL = 'text-xs font-semibold uppercase tracking-wide text-[#475569] mb-1.5';
 const MS_READONLY =
-  'flex items-center gap-2 h-[42px] bg-[#F4F7FC] border border-[#D6E0EF] rounded-xl px-3 select-none';
+  'flex items-center gap-2 min-h-[48px] bg-[#F4F7FC] border border-[#D6E0EF] rounded-xl px-3.5 select-none';
 const COL_HEADERS = [
   'Course Code', 'Subject Name', 'Hrs', 'Units',
   'Faculty', 'Day / Time', 'Room', 'Status', 'Actions',
@@ -77,6 +81,12 @@ function StatusPill({ status, delay = 0 }: { status: string; delay?: number }) {
       {status}
     </span>
   );
+}
+
+/** A subject with no faculty is Unassigned whatever status it was left with
+ *  (same rule the server used for the Unassigned filter). */
+function statusOf(s: Schedule): string {
+  return s.faculty_id ? s.status : 'Unassigned';
 }
 
 /* ── Data grouping ───────────────────────────────────────────────── */
@@ -106,7 +116,7 @@ function buildGroups(data: Schedule[]) {
 
 /* ── Block subject table (shared between paged and all-years views) ─ */
 
-function BlockTable({ block }: { block: BlockPage }) {
+function BlockTable({ block, onOpenSubject }: { block: BlockPage; onOpenSubject: (s: Schedule) => void }) {
   return (
     <>
       {/* Year + Block header */}
@@ -143,18 +153,29 @@ function BlockTable({ block }: { block: BlockPage }) {
               {block.subjects.map((s, i) => {
                 // Stagger the attention animations so rows take turns
                 const delay = (i % 8) * 0.45;
+                const status = statusOf(s);
                 return (
+                // The whole row opens the subject's faculty pop-up
                 <tr
                   key={s.id}
-                  className="transition-colors hover:bg-[#F8FAFC] bg-white"
+                  onClick={() => onOpenSubject(s)}
+                  className="group cursor-pointer bg-white transition-colors duration-150 hover:bg-[#F5F9FF] active:bg-[#EAF1FC]"
                 >
                   <td className="px-4 py-3.5 font-mono font-bold text-[#0B2A5B] whitespace-nowrap">
                     {s.subject_code}
                   </td>
                   <td className="px-4 py-3.5 max-w-[200px]">
-                    <span className="line-clamp-2 leading-snug text-[#334155]">
-                      {s.subject_name}
-                    </span>
+                    {/* Keyboard way in — Enter / Space opens the same pop-up */}
+                    <button
+                      type="button"
+                      onClick={e => { e.stopPropagation(); onOpenSubject(s); }}
+                      title="See the faculty handling this subject"
+                      className="text-left rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D5BD6]/40"
+                    >
+                      <span className="line-clamp-2 leading-snug font-medium text-[#334155] group-hover:text-[#1D5BD6] transition-colors duration-150">
+                        {s.subject_name}
+                      </span>
+                    </button>
                   </td>
                   <td className="px-4 py-3.5 text-center text-[#64748B] font-medium whitespace-nowrap">
                     {parseFloat(String(s.total_hours)).toFixed(1)}
@@ -184,25 +205,27 @@ function BlockTable({ block }: { block: BlockPage }) {
                       : <span className="text-[#94A3B8] italic text-xs">No room</span>}
                   </td>
                   <td className="px-4 py-3.5 whitespace-nowrap">
-                    <StatusPill status={s.status} delay={delay} />
+                    <StatusPill status={status} delay={delay} />
                   </td>
                   <td className="px-4 py-3.5 whitespace-nowrap">
                     <div className="flex gap-1.5">
-                      {s.status === 'Unassigned' && (
+                      {status === 'Unassigned' && (
                         <Link
                           href={`/workload?assign=${s.id}&block=${s.block_id}`}
+                          onClick={e => e.stopPropagation()}
                           className="qr-assign-btn px-3 py-1.5 text-xs rounded-lg font-semibold"
                           style={{ animationDelay: `${delay}s, ${delay}s` }}
                         >
                           Assign
                         </Link>
                       )}
-                      {s.status === 'Assigned' && (
+                      {status === 'Assigned' && (
                         <Link
                           // Instructor is already known — skip Position/Faculty and open this class.
                           href={s.faculty_id
                             ? `/scheduling?step=schedule&faculty=${s.faculty_id}&ms=${s.id}`
                             : `/scheduling?ms=${s.id}`}
+                          onClick={e => e.stopPropagation()}
                           className="px-3 py-1.5 text-xs bg-[#DCFCE7] text-[#16A34A] border border-[#BBF7D0] rounded-lg hover:bg-[#BBF7D0] font-semibold transition-colors"
                         >
                           Schedule
@@ -240,6 +263,9 @@ export default function MasterSchedulePage() {
   const [blockPageIndex, setBlockPageIndex] = useState(0);
   const [pageDirection, setPageDirection] = useState(0);
   const reduceMotion = useReducedMotion();
+  /* Subject clicked in a block table — its faculty pop-up (SubjectFacultyPreview) */
+  const [subjectPreview, setSubjectPreview] = useState<Schedule | null>(null);
+  const closeSubjectPreview = useCallback(() => setSubjectPreview(null), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -288,7 +314,9 @@ export default function MasterSchedulePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- read initial query params once on mount only
   }, []);
 
-  /** Query of the list on screen — a late answer for older filters is dropped. */
+  /** Query of the list on screen — a late answer for older filters is dropped.
+   *  Every status is loaded; the Status filter is applied on the page, so the
+   *  Unassigned / Assigned counts always cover the whole list. */
   const listQuery = useRef('');
   useEffect(() => {
     if (!filters.program_id) { listQuery.current = ''; setSchedules([]); return; }
@@ -297,14 +325,13 @@ export default function MasterSchedulePage() {
     if (filters.year_level) params.set('year_level',    filters.year_level);
     if (globalSemester)     params.set('semester',      globalSemester);
     if (globalYear)         params.set('academic_year', globalYear);
-    if (filters.status)     params.set('status',        filters.status);
     const query = params.toString();
     listQuery.current = query;
     fetch('/api/master-schedule?' + query)
       .then(r => r.json())
       .then(d => { if (listQuery.current !== query) return; setSchedules(d.schedules || []); setLoading(false); })
       .catch(() => { if (listQuery.current === query) setLoading(false); });
-  }, [filters.program_id, filters.year_level, filters.status, globalSemester, globalYear]);
+  }, [filters.program_id, filters.year_level, globalSemester, globalYear]);
 
   // Live updates: assignments, schedules, blocks or rooms changed elsewhere —
   // the list reloads quietly; filters, search and the block page stay.
@@ -336,19 +363,25 @@ export default function MasterSchedulePage() {
     ? programs.find(p => p.id === chairProgramId) ?? null
     : null;
 
-  const filtered = schedules.filter(s =>
+  const searched = schedules.filter(s =>
     !filters.search ||
     s.subject_code.toLowerCase().includes(filters.search.toLowerCase()) ||
     s.subject_name.toLowerCase().includes(filters.search.toLowerCase()) ||
     (s.faculty_name || '').toLowerCase().includes(filters.search.toLowerCase()) ||
     s.block_name.toLowerCase().includes(filters.search.toLowerCase())
   );
+  /* Status narrows only the list below — the count tiles keep counting every
+     status, so choosing Unassigned never turns Assigned into 0 (and back). */
+  const filtered = filters.status
+    ? searched.filter(s => statusOf(s) === filters.status)
+    : searched;
 
   const stats = {
-    total:      filtered.length,
-    unassigned: filtered.filter(s => s.status === 'Unassigned').length,
-    assigned:   filtered.filter(s => s.status === 'Assigned').length,
-    scheduled:  filtered.filter(s => s.status === 'Scheduled').length,
+    total:      searched.length,
+    unassigned: searched.filter(s => statusOf(s) === 'Unassigned').length,
+    assigned:   searched.filter(s => statusOf(s) === 'Assigned').length,
+    scheduled:  searched.filter(s => statusOf(s) === 'Scheduled').length,
+    completed:  searched.filter(s => statusOf(s) === 'Completed').length,
   };
 
   const groups          = buildGroups(filtered);
@@ -414,23 +447,18 @@ export default function MasterSchedulePage() {
     setBlockPageIndex(i => Math.min(totalBlockPages - 1, i + 1));
   }
 
-  const STAT_CARDS = [
-    {
-      label: 'Unassigned', value: stats.unassigned,
-      tone: {
-        value: 'text-red-600',
-        idle: 'bg-red-50 border-red-200 hover:border-red-300',
-        active: 'bg-red-100 border-red-400 ring-2 ring-red-200',
-      },
-    },
-    {
-      label: 'Assigned', value: stats.assigned,
-      tone: {
-        value: 'text-[#1D5BD6]',
-        idle: 'bg-[#EFF6FF] border-[#BFDBFE] hover:border-[#93C5FD]',
-        active: 'bg-[#DBEAFE] border-[#1D5BD6] ring-2 ring-[#1D5BD6]/25',
-      },
-    },
+  /* Status buttons — same colours as the status pills in the table:
+     red = still needs a faculty member, blue = assigned (to schedule), green = scheduled */
+  const statusTab = (filters.status || 'all') as StatusTab;
+  const statusTabs: CountFilterOption<StatusTab>[] = [
+    { key: 'all',        label: 'All',        count: stats.total,      color: '#0B2A5B' },
+    { key: 'Unassigned', label: 'Unassigned', count: stats.unassigned, color: '#B91C1C', dot: '#DC2626' },
+    { key: 'Assigned',   label: 'Assigned',   count: stats.assigned,   color: '#1D5BD6', dot: '#1D5BD6' },
+    { key: 'Scheduled',  label: 'Scheduled',  count: stats.scheduled,  color: '#15803D', dot: '#16A34A' },
+    // Only shown once something is marked Completed
+    ...(stats.completed > 0 || filters.status === 'Completed'
+      ? [{ key: 'Completed' as const, label: 'Completed', count: stats.completed, color: '#0B2A5B', dot: '#8B5CF6' }]
+      : []),
   ];
 
   const pageSkeleton = (
@@ -447,13 +475,17 @@ export default function MasterSchedulePage() {
         </div>
       </div>
 
-      {/* Filter card: 5 controls + search */}
-      <div className="bg-white rounded-2xl border border-[#E2E8F0] shadow-sm px-4 sm:px-5 py-4 space-y-3">
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-[42px] w-full rounded-xl" />)}
+      {/* Filter card: Program · Year Level · Term */}
+      <div className="bg-white rounded-2xl border border-[#E2E8F0] shadow-sm px-4 sm:px-5 py-4">
+        <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)] gap-4">
+          {Array.from({ length: 3 }, (_, i) => (
+            <div key={i} className="space-y-2">
+              <Skeleton className="h-3 w-20 rounded" />
+              <Skeleton className="h-12 w-full rounded-xl" />
+            </div>
+          ))}
         </div>
       </div>
-      <Skeleton className="h-[42px] w-full rounded-full" />
 
       {/* Content area */}
       <div className="bg-white rounded-2xl border border-[#E2E8F0] shadow-sm p-4 sm:p-6 space-y-4">
@@ -474,118 +506,93 @@ export default function MasterSchedulePage() {
         </div>
       </div>
 
-      {/* ── Filter panel ─────────────────────────────────────────── */}
-      <FilterBar>
+      {/* ── Filter panel ─────────────────────────────────────────────
+          Row 1: Program · Year Level · Term (from Settings)
+          Row 2: status buttons with live counts · search (once a program is chosen) */}
+      <FilterBar className="!px-4 sm:!px-5 !py-4">
         {chairNoProgram && (
-          <div className="mb-3 rounded-xl border border-[#E2E8F0] bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          <div className="mb-4 rounded-xl border border-[#E2E8F0] bg-slate-50 px-4 py-3 text-sm text-slate-600">
             No program is assigned to your Department Chair account. Please contact the administrator.
           </div>
         )}
-        {/* Row 1: Program · Year Level · Semester
-            Row 2: School Year · Status · Unassigned / Assigned counts */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)] gap-4">
 
           {/* Program — locked for Department Chair */}
-          {isChair ? (
-            <div className={MS_READONLY}>
-              <span className="text-sm text-slate-600 font-medium truncate">
-                {lockedProgram
-                  ? `${lockedProgram.code} — ${lockedProgram.name}`
-                  : chairNoProgram ? 'No program assigned' : '—'}
-              </span>
-            </div>
-          ) : (
-            <FilterSelect
-              value={filters.program_id}
-              onChange={v => setFilter('program_id', v)}
-              label="Program"
-              className={MS_FIELD}
-            >
-              <option value="">— Select Program —</option>
-              {programs.map(p => (
-                <option key={p.id} value={p.id}>{p.code} — {p.name}</option>
-              ))}
-            </FilterSelect>
-          )}
+          <div className="min-w-0">
+            <p className={MS_LABEL}>Program</p>
+            {isChair ? (
+              <div className={MS_READONLY}>
+                <span className="text-[15px] text-[#0B2A5B] font-semibold truncate">
+                  {lockedProgram
+                    ? `${lockedProgram.code} — ${lockedProgram.name}`
+                    : chairNoProgram ? 'No program assigned' : '—'}
+                </span>
+              </div>
+            ) : (
+              <FriendlySelect
+                value={filters.program_id}
+                onChange={v => setFilter('program_id', v)}
+                label="Program"
+                placeholder="Select a program"
+                guide={!filters.program_id}
+                showHintInTrigger
+                minPanelWidth={380}
+                options={programs.map(p => ({ value: String(p.id), label: p.code, hint: p.name }))}
+              />
+            )}
+          </div>
 
           {/* Year Level */}
-          <FilterSelect
-            value={filters.year_level}
-            onChange={v => setFilter('year_level', v)}
-            disabled={!programSelected}
-            label="Year Level"
-            className={MS_FIELD}
-          >
-            <option value="">All Year Levels</option>
-            {YEAR_LEVELS.map(y => <option key={y} value={y}>{y}</option>)}
-          </FilterSelect>
-
-          {/* Semester — read-only */}
-          <div className={MS_READONLY}>
-            <CalendarDays className="w-4 h-4 text-[#1D5BD6] flex-shrink-0" />
-            <span className="text-sm text-[#0B2A5B] font-semibold truncate">{globalSemester || '—'}</span>
+          <div className="min-w-0">
+            <p className={MS_LABEL}>Year Level</p>
+            <FriendlySelect
+              value={filters.year_level}
+              onChange={v => setFilter('year_level', v)}
+              disabled={!programSelected}
+              disabledText="Select a program first"
+              label="Year Level"
+              minPanelWidth={220}
+              options={[{ value: '', label: 'All Year Levels' }, ...YEAR_LEVELS.map(y => ({ value: y, label: y }))]}
+            />
           </div>
 
-          {/* School Year — read-only */}
-          <div className={MS_READONLY}>
-            <CalendarDays className="w-4 h-4 text-[#1D5BD6] flex-shrink-0" />
-            <span className="text-sm text-[#0B2A5B] font-semibold truncate">{globalYear || '—'}</span>
-          </div>
-
-          {/* Status */}
-          <FilterSelect
-            value={filters.status}
-            onChange={v => setFilter('status', v)}
-            disabled={!programSelected}
-            label="Status"
-            className={MS_FIELD}
-          >
-            <option value="">All Statuses</option>
-            {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-          </FilterSelect>
-
-          {/* Count tiles — click to filter by that status (click again to clear).
-              Colour = meaning: red = unassigned (needs a faculty member), blue = assigned. */}
-          <div className="grid grid-cols-2 gap-2">
-            {STAT_CARDS.map(({ label, value, tone }) => {
-              const active = filters.status === label;
-              return (
-                <button
-                  key={label}
-                  type="button"
-                  disabled={!programSelected}
-                  onClick={() => setFilter('status', active ? '' : label)}
-                  aria-pressed={active}
-                  title={active ? 'Show all statuses' : `Show ${label} only`}
-                  className={`flex items-center justify-center gap-1.5 h-[42px] rounded-xl border px-2 transition-all duration-150 active:scale-[0.97] disabled:opacity-60 disabled:cursor-not-allowed ${
-                    active ? tone.active : tone.idle
-                  } ${label === 'Unassigned' && programSelected && value > 0 && !active ? 'qr-attn-tile' : ''}`}
-                >
-                  <span className={`text-base font-bold leading-none tabular-nums ${tone.value}`}>{programSelected ? value : '–'}</span>
-                  <span className="text-xs font-semibold text-[#475569]">{label}</span>
-                </button>
-              );
-            })}
+          {/* Term — set in Settings, read-only here */}
+          <div className="min-w-0">
+            <p className={MS_LABEL}>Term</p>
+            <div className={MS_READONLY}>
+              <CalendarDays className="w-4 h-4 text-[#1D5BD6] flex-shrink-0" />
+              <span className="text-[15px] text-[#0B2A5B] font-semibold truncate">
+                {[globalSemester, globalYear].filter(Boolean).join(' · ') || '—'}
+              </span>
+            </div>
           </div>
         </div>
-      </FilterBar>
 
-      {/* Search — compact pill, right-aligned under the filter card
-          (full width on phones) */}
-      <div className="flex justify-end mb-5">
-        <SearchInput
-          value={filters.search}
-          onChange={v => setFilter('search', v)}
-          placeholder="Search subject, faculty, or block…"
-          disabled={!programSelected}
-          className="w-full sm:w-[22rem] lg:w-[26rem] !bg-white border border-[#D6E0EF] shadow-[0_1px_3px_rgba(11,42,91,0.06)] hover:border-[#9DB8E8] focus-within:border-[#1D5BD6]"
-        />
-      </div>
+        {programSelected && (
+          <div className="mt-4 pt-4 border-t border-[#EEF2F7] flex flex-col lg:flex-row lg:items-center gap-3">
+            {/* Click a status to show only those subjects; the counts always cover the whole list */}
+            <CountFilterTabs
+              label="Status"
+              layoutId="master-schedule-status"
+              value={statusTab}
+              onChange={key => setFilter('status', key === 'all' ? '' : key)}
+              options={statusTabs}
+              className="flex-1 min-w-0"
+            />
+            <SearchInput
+              value={filters.search}
+              onChange={v => setFilter('search', v)}
+              placeholder="Search subject, faculty, or block…"
+              className="w-full lg:w-80 flex-shrink-0 !bg-white border border-[#D6E0EF] hover:border-[#9DB8E8] focus-within:border-[#1D5BD6]"
+            />
+          </div>
+        )}
+      </FilterBar>
 
       {/* ── Empty state ───────────────────────────────────────────── */}
       {!programSelected && (
         <div className="bg-white rounded-2xl border border-[#E2E8F0] shadow-sm py-14 text-center">
-          <p className="text-sm text-[#64748B]">No schedule records found.</p>
+          <p className="text-sm text-[#64748B]">Select a program to see its master schedule.</p>
         </div>
       )}
 
@@ -615,7 +622,7 @@ export default function MasterSchedulePage() {
                   viewport={{ once: true, amount: 0.15, margin: '0px 0px -60px 0px' }}
                   transition={{ duration: 0.65, ease: BLOCK_PAGE_EASE }}
                 >
-                  <BlockTable block={block} />
+                  <BlockTable block={block} onOpenSubject={setSubjectPreview} />
                 </motion.div>
               ))}
             </div>
@@ -644,7 +651,7 @@ export default function MasterSchedulePage() {
                     transition={blockPageTransition}
                     className="min-w-0"
                   >
-                    <BlockTable block={currentBlock} />
+                    <BlockTable block={currentBlock} onOpenSubject={setSubjectPreview} />
                   </motion.div>
                 </AnimatePresence>
               </div>
@@ -714,6 +721,16 @@ export default function MasterSchedulePage() {
       )}
 
       </PageLoadTransition>
+
+      {/* Every faculty member handling the clicked subject this term — same
+          pop-up as the eye on Scheduling; this block's class is marked */}
+      <SubjectFacultyPreview
+        subject={subjectPreview ? { code: subjectPreview.subject_code, name: subjectPreview.subject_name } : null}
+        semester={globalSemester}
+        academicYear={globalYear}
+        currentMsId={subjectPreview?.id ?? null}
+        onClose={closeSubjectPreview}
+      />
     </div>
   );
 }

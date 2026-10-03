@@ -2,6 +2,7 @@
 import { getAuthUser } from '@/auth/auth';
 import { query } from '@/database/db';
 import { ensureRoomOccupancy, expireStaleOccupancy } from '@/services/ensureRoomOccupancy';
+import { getActiveAcademicPeriod } from '@/services/activeAcademicPeriod';
 
 /**
  * GET /api/instructor/available-rooms?day=Monday&start_time=08:00&end_time=09:00&room_type=all
@@ -26,6 +27,29 @@ export async function GET(req: NextRequest) {
     const roomType  = searchParams.get('room_type') ?? 'all';
     // Room request form: ignore the class being moved (its own current room isn't a clash)
     const excludeMs = Number(searchParams.get('exclude_ms')) || 0;
+
+    // Classes only clash within one school year + semester: the term of the
+    // class being moved, otherwise the active term (same rule as the server's
+    // room-request check and the scheduling conflict rules).
+    let termYear = '';
+    let termSemester = '';
+    const ownTerm = excludeMs
+      ? (await query(`
+          SELECT b.academic_year, b.semester
+          FROM   master_schedule ms
+          JOIN   block_subjects bs ON bs.id = ms.block_subject_id
+          JOIN   blocks b ON b.id = bs.block_id
+          WHERE  ms.id = $1
+        `, [excludeMs])).rows[0]
+      : undefined;
+    if (ownTerm) {
+      termYear = String(ownTerm.academic_year ?? '');
+      termSemester = String(ownTerm.semester ?? '');
+    } else {
+      const period = await getActiveAcademicPeriod();
+      termYear = period.schoolYear ?? '';
+      termSemester = period.semester ?? '';
+    }
 
     // Fetch all active rooms
     let roomsQuery = `SELECT id, room_name, room_type, capacity, building FROM rooms WHERE status = 'Active'`;
@@ -72,8 +96,10 @@ export async function GET(req: NextRequest) {
             AND ss.start_time  < $3::time
             AND ss.end_time    > $4::time
             AND ms.id <> $5
+            AND ($6 = '' OR b.academic_year = $6)
+            AND ($7 = '' OR b.semester      = $7)
           LIMIT 1
-        `, [room.id, day, endTime, startTime, excludeMs]);
+        `, [room.id, day, endTime, startTime, excludeMs, termYear, termSemester]);
         scheduleConflict = conflictRes.rows[0] ?? null;
       }
 

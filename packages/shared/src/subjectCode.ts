@@ -70,6 +70,11 @@ function similarity(a: string, b: string): number {
  */
 const SAME_TITLE_THRESHOLD = 0.75;
 
+/** 0–1 likeness of two descriptive titles (brackets, punctuation and filler words ignored) */
+export function subjectTitleSimilarity(a: string | null | undefined, b: string | null | undefined): number {
+  return similarity(titleKey(a), titleKey(b));
+}
+
 /**
  * Same subject across programs: same course code and the same (or nearly the
  * same) descriptive title, whether it sits in BSCpE, BSIT or BSCS.

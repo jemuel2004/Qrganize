@@ -74,6 +74,8 @@ const WRITE_RULES: readonly WriteRule[] = [
   { re: /^\/api\/(instructor\/profile\/picture|instructor-accounts\/[^/]+\/picture)(\/|$)/, topics: ['accounts', 'faculty'] },
   { re: /^\/api\/(account\/me|instructor\/verify-google|dept-chair\/verify-google|department-chair-accounts|dept-chair-accounts)(\/|$)/, topics: ['accounts'] },
   { re: /^\/api\/faculty\/[^/]+\/deductions(\/|$)/, topics: ['workload', 'faculty'] },
+  // Non-teaching time only changes when a faculty is free for classes
+  { re: /^\/api\/faculty\/[^/]+\/activities(\/|$)/, topics: ['schedule', 'faculty'] },
   { re: /^\/api\/(faculty|instructor-accounts)(\/|$)/, topics: ['faculty', 'accounts', ...CLASSES] },
 
   // Setup and scheduling

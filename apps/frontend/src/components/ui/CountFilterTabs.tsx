@@ -1,22 +1,27 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 
 /*
  * Row of large filter buttons with counts (e.g. All · Assigned · Unassigned).
  * One highlight slides between the buttons and takes each one's colour; the
- * count badge pops when its number changes. Used on Faculty Workload and on
- * Scheduling's faculty list.
+ * count badge pops when its number changes. Used on Faculty Workload,
+ * Scheduling, Master Schedule, Faculty Schedule and Room Utilization (also
+ * without counts, as a plain switch such as Daily · Weekly · Monthly).
  */
 
 export interface CountFilterOption<K extends string> {
   key: K;
   label: string;
-  count: number;
+  /** Number badge — leave out for a plain option (e.g. Daily / Weekly) */
+  count?: number;
   /** Fill of the highlight when this option is selected */
   color: string;
   /** Small status dot shown before the label (omit for none) */
   dot?: string;
+  /** Small icon before the label — takes the text colour (white when selected) */
+  icon?: ReactNode;
 }
 
 export default function CountFilterTabs<K extends string>({
@@ -70,17 +75,20 @@ export default function CountFilterTabs<K extends string>({
             {opt.dot && (
               <span className="w-2.5 h-2.5 rounded-full transition-colors duration-200" style={{ backgroundColor: active ? '#FFFFFF' : opt.dot }} />
             )}
+            {opt.icon && <span className="inline-flex flex-shrink-0" aria-hidden="true">{opt.icon}</span>}
             {opt.label}
-            <motion.span
-              key={opt.count}
-              initial={reduceMotion ? false : { scale: 0.7, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ type: 'spring', stiffness: 500, damping: 26 }}
-              className={`min-w-[26px] px-1.5 py-0.5 rounded-full text-[13px] tabular-nums text-center ${active ? 'bg-white/25' : 'bg-[#F1F5F9]'}`}
-              style={active ? { color: '#FFFFFF' } : { color: '#334155' }}
-            >
-              {opt.count}
-            </motion.span>
+            {opt.count !== undefined && (
+              <motion.span
+                key={opt.count}
+                initial={reduceMotion ? false : { scale: 0.7, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ type: 'spring', stiffness: 500, damping: 26 }}
+                className={`min-w-[26px] px-1.5 py-0.5 rounded-full text-[13px] tabular-nums text-center ${active ? 'bg-white/25' : 'bg-[#F1F5F9]'}`}
+                style={active ? { color: '#FFFFFF' } : { color: '#334155' }}
+              >
+                {opt.count}
+              </motion.span>
+            )}
           </motion.button>
         );
       })}

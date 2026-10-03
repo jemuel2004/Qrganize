@@ -2,17 +2,21 @@
 
 /**
  * Room Utilization — "Are the rooms actually being used as scheduled?"
+ * Two parts, switched at the top:
  *
- *  • Filters: Date (centred calendar), View (Daily / Weekly / Monthly),
- *    Room, Room Type, Refresh
+ * Room Usage (date-based)
+ *  • Filters: Date (centred calendar) · Room · Refresh, then View
+ *    (Daily / Weekly / Monthly) and Room Type buttons
  *  • Status cards: Occupied · Available · Pending / No Scan · Overall
  *    Utilization — the first three filter the Room Activity list
  *  • Room Activity: scheduled vs. actual (QR check-in) per class; Expand
  *    gives it the full width; View opens a room's own usage-history page
  *  • Utilization Summary: hours used per room — foldable
+ *
+ * Classroom Planning (term-based — the filters above don't apply)
  *  • Classroom Construction Recommendation: classrooms the schedule needs
  *    (peak simultaneous classes) vs. usable lecture rooms — schedule-based,
- *    not QR; fetched on its own, not polled
+ *    not QR; fetched when opened, not polled
  */
 
 import React, { useMemo, useState } from 'react';
@@ -21,13 +25,14 @@ import { useReducedMotion } from 'framer-motion';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import CalendarModal from '@/components/ui/CalendarModal';
-import { FilterSelect } from '@/components/ui/SearchFilter';
+import FriendlySelect from '@/components/ui/FriendlySelect';
+import CountFilterTabs from '@/components/ui/CountFilterTabs';
 import { ListSkeleton } from '@/components/ui/skeletons';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
 import {
-  ChevronDown, ChevronLeft, ChevronRight, DoorClosed, DoorOpen, Eye, Hourglass,
-  Maximize2, Minimize2, PieChart,
+  BookOpen, Building2, Check, ChevronDown, ChevronLeft, ChevronRight, DoorClosed, DoorOpen, Eye, Hourglass,
+  Maximize2, Minimize2, Monitor, PieChart, X,
 } from 'lucide-react';
 import {
   AnimatePresence, AutoHeight, DateButton, EASE, fmt12, fmtDate, hrs, motion, rangeLabel, RefreshButton, RoomIcon,
@@ -37,6 +42,13 @@ import {
 import ClassroomDemandSection from './ClassroomDemand';
 
 type CardFilter = 'Occupied' | 'Available' | 'PendingNoScan' | null;
+/** The page's two parts: day-to-day room use, and term-based classroom planning */
+type Section = 'usage' | 'planning';
+type TypeTab = 'all' | 'Lecture' | 'Laboratory';
+
+/** Small label above each filter */
+const RU_LABEL = 'text-xs font-semibold uppercase tracking-wide text-[#475569] mb-1.5';
+const isLab = (type: string) => type === 'Laboratory' || type === 'Computer Lab';
 
 /* ─── Status card ───────────────────────────────────────────────────────── */
 
@@ -51,6 +63,7 @@ function StatCard({ icon, label, value, total, pct, tone, active, onClick }: {
       type={onClick ? 'button' : undefined}
       onClick={onClick}
       aria-pressed={onClick ? active : undefined}
+      title={onClick ? (active ? 'Show every room again' : `Show only ${label.toLowerCase()} in Room Activity`) : undefined}
       whileHover={onClick && !reduceMotion ? { y: -2 } : undefined}
       whileTap={onClick && !reduceMotion ? { scale: 0.98 } : undefined}
       className={`qr-stat-tint relative overflow-hidden text-left rounded-2xl border p-4 w-full min-w-0 transition-[border-color,box-shadow] duration-300 ${
@@ -64,6 +77,21 @@ function StatCard({ icon, label, value, total, pct, tone, active, onClick }: {
       }}
     >
       <span className="absolute inset-x-0 top-0 h-[3px]" style={{ backgroundColor: tone.bar }} aria-hidden="true" />
+      {/* Chosen as the Room Activity filter */}
+      <AnimatePresence>
+        {active && (
+          <motion.span
+            key="on"
+            initial={reduceMotion ? false : { opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1, transition: { duration: 0.25, ease: EASE } }}
+            exit={{ opacity: 0, scale: 0.8, transition: { duration: 0.15 } }}
+            className="absolute top-3 right-3 inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full"
+            style={{ backgroundColor: tone.bar, color: '#FFFFFF' }}
+          >
+            <Check className="w-3 h-3" style={{ color: '#FFFFFF' }} /> Showing
+          </motion.span>
+        )}
+      </AnimatePresence>
       <div className="flex items-start gap-3">
         <span className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 bg-white shadow-[0_2px_6px_-2px_rgba(11,42,91,0.15)]" style={{ color: tone.bar }}>
           {icon}
@@ -103,7 +131,7 @@ export default function RoomUtilizationClient() {
   const [expanded, setExpanded] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(true);
   const [page, setPage] = useState(0);
-  const [demandKey, setDemandKey] = useState(0);
+  const [section, setSection] = useState<Section>('usage');
 
   const { data, loading, error, reload } = useUtilization(date, view);
   const [applying, startApplying, applied] = useApplyingDate(loading, () => setCalOpen(false));
@@ -115,6 +143,17 @@ export default function RoomUtilizationClient() {
     .filter(r => !roomFilter || String(r.id) === roomFilter)
     .filter(r => !typeFilter || r.room_type === typeFilter || (typeFilter === 'Laboratory' && r.room_type === 'Computer Lab')),
   [data, roomFilter, typeFilter]);
+
+  /* Room Type buttons — every active room, whichever type is chosen */
+  const typeCounts = useMemo(() => {
+    const all = data?.rooms ?? [];
+    return {
+      all: all.length,
+      Lecture: all.filter(r => r.room_type === 'Lecture').length,
+      Laboratory: all.filter(r => isLab(r.room_type)).length,
+    };
+  }, [data]);
+  const typeTab = (typeFilter || 'all') as TypeTab;
 
   const statusOf = useMemo(() => {
     const m = new Map<number, RoomStatus>();
@@ -196,35 +235,82 @@ export default function RoomUtilizationClient() {
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="bg-white rounded-2xl border border-[#E3E9F3] shadow-[0_1px_3px_rgba(11,42,91,0.06)] p-4 sm:p-5">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto] gap-4 items-end">
-          <div>
-            <DateButton label={data ? rangeLabel(view, data.date, data.range) : '…'} onClick={() => setCalOpen(true)} />
+      {/* Two parts of the page: rooms in use (date-based) · classroom planning (term-based) */}
+      <CountFilterTabs
+        label="Room Utilization section"
+        layoutId="room-utilization-section"
+        value={section}
+        onChange={setSection}
+        options={[
+          { key: 'usage', label: 'Room Usage', color: '#0B2A5B', icon: <DoorOpen className="w-4 h-4" /> },
+          { key: 'planning', label: 'Classroom Planning', color: '#0B2A5B', icon: <Building2 className="w-4 h-4" /> },
+        ]}
+      />
+
+      <AnimatePresence mode="wait" initial={false}>
+      {section === 'usage' ? (
+      <motion.div
+        key="usage"
+        initial={reduceMotion ? false : { opacity: 0, x: -16 }}
+        animate={{ opacity: 1, x: 0, transition: { duration: 0.35, ease: EASE } }}
+        exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -16, transition: { duration: 0.2, ease: EASE } }}
+        className="space-y-5 min-w-0"
+      >
+      {/* Filters — when (date, view) · which rooms (room, type) */}
+      <div className="bg-white rounded-2xl border border-[#E3E9F3] shadow-[0_1px_3px_rgba(11,42,91,0.06)] p-4 sm:p-5 space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto] gap-4 items-end">
+          <div className="min-w-0">
+            <p className={RU_LABEL}>Date</p>
+            <DateButton className="!h-12 text-[15px]" label={data ? rangeLabel(view, data.date, data.range) : '…'} onClick={() => setCalOpen(true)} />
           </div>
-          <div>
-            <FilterSelect value={view} onChange={v => { setView(v as View); resetPage(); }} label="View" className="qr-ms-field">
-              <option value="daily">Daily</option>
-              <option value="weekly">Weekly</option>
-              <option value="monthly">Monthly</option>
-            </FilterSelect>
+          <div className="min-w-0">
+            <p className={RU_LABEL}>Room</p>
+            <FriendlySelect
+              value={roomFilter}
+              onChange={v => { setRoomFilter(v); resetPage(); }}
+              label="Room"
+              searchable
+              searchPlaceholder="Type a room…"
+              minPanelWidth={300}
+              options={[
+                { value: '', label: 'All Rooms' },
+                ...(data?.rooms ?? []).map(r => ({ value: String(r.id), label: r.room_name, hint: r.room_type })),
+              ]}
+            />
           </div>
-          <div>
-            <FilterSelect value={roomFilter} onChange={v => { setRoomFilter(v); resetPage(); }} label="Room" className="qr-ms-field">
-              <option value="">All Rooms</option>
-              {(data?.rooms ?? []).map(r => <option key={r.id} value={r.id}>{r.room_name}</option>)}
-            </FilterSelect>
-          </div>
-          <div>
-            <FilterSelect value={typeFilter} onChange={v => { setTypeFilter(v); resetPage(); }} label="Room Type" className="qr-ms-field">
-              <option value="">All</option>
-              <option value="Lecture">Lecture</option>
-              <option value="Laboratory">Laboratory</option>
-            </FilterSelect>
-          </div>
-          <RefreshButton onRefresh={() => { reload(); setDemandKey(k => k + 1); }} loading={loading} />
+          <RefreshButton className="!h-12" onRefresh={reload} loading={loading} />
         </div>
-        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+        <div className="flex flex-col lg:flex-row lg:items-end gap-4 lg:gap-8 pt-4 border-t border-[#EEF2F7]">
+          <div className="min-w-0">
+            <p className={RU_LABEL}>View</p>
+            <CountFilterTabs<View>
+              label="View"
+              layoutId="room-utilization-view"
+              value={view}
+              onChange={v => { setView(v); resetPage(); }}
+              options={[
+                { key: 'daily', label: 'Daily', color: '#0B2A5B' },
+                { key: 'weekly', label: 'Weekly', color: '#0B2A5B' },
+                { key: 'monthly', label: 'Monthly', color: '#0B2A5B' },
+              ]}
+            />
+          </div>
+          <div className="min-w-0">
+            <p className={RU_LABEL}>Room Type</p>
+            <CountFilterTabs<TypeTab>
+              label="Room type"
+              layoutId="room-utilization-type"
+              value={typeTab}
+              onChange={k => { setTypeFilter(k === 'all' ? '' : k); resetPage(); }}
+              options={[
+                { key: 'all', label: 'All', count: typeCounts.all, color: '#0B2A5B' },
+                { key: 'Lecture', label: 'Lecture', count: typeCounts.Lecture, color: '#1D5BD6', icon: <BookOpen className="w-4 h-4" /> },
+                { key: 'Laboratory', label: 'Laboratory', count: typeCounts.Laboratory, color: '#B45309', icon: <Monitor className="w-4 h-4" /> },
+              ]}
+            />
+          </div>
+        </div>
+        {error && <p className="text-sm text-red-600">{error}</p>}
       </div>
 
       <PageLoadTransition showSkeleton={showSkeleton} skeleton={<ListSkeleton rows={8} />}>
@@ -251,11 +337,30 @@ export default function RoomUtilizationClient() {
             <motion.div layout="position" className="flex items-center gap-3 px-5 py-4 border-b border-[#EEF2F8]">
               <div className="min-w-0 flex-1">
                 <h2 className="text-[15px] font-bold text-[#0B2A5B]">Room Activity</h2>
-                {card && (
-                  <button type="button" onClick={() => toggleCard(card)} className="mt-0.5 text-xs font-semibold text-[#1D5BD6] hover:underline">
-                    {card === 'PendingNoScan' ? 'Pending / No Scan' : card} only ✕
-                  </button>
-                )}
+                {/* The status card being used as a filter — click to show every room again */}
+                <AnimatePresence initial={false}>
+                  {card && (() => {
+                    const tone = ROOM_TONE[card === 'PendingNoScan' ? 'Pending' : card];
+                    return (
+                      <motion.button
+                        key={card}
+                        type="button"
+                        onClick={() => toggleCard(card)}
+                        initial={reduceMotion ? false : { opacity: 0, y: -4 }}
+                        animate={{ opacity: 1, y: 0, transition: { duration: 0.25, ease: EASE } }}
+                        exit={{ opacity: 0, transition: { duration: 0.15 } }}
+                        whileTap={reduceMotion ? undefined : { scale: 0.96 }}
+                        title="Show every room again"
+                        className="mt-1.5 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] font-semibold"
+                        style={{ backgroundColor: tone.soft, color: tone.text, borderColor: `${tone.bar}55` }}
+                      >
+                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: tone.bar }} />
+                        {card === 'PendingNoScan' ? 'Pending / No Scan' : card} only
+                        <X className="w-3.5 h-3.5" />
+                      </motion.button>
+                    );
+                  })()}
+                </AnimatePresence>
               </div>
               <motion.button
                 type="button"
@@ -454,11 +559,23 @@ export default function RoomUtilizationClient() {
                       exit={reduceMotion ? { opacity: 0 } : { height: 0, opacity: 0, transition: { duration: 0.35, ease: EASE } }}
                       className="overflow-hidden"
                     >
-                      <ul className="px-5 py-3 space-y-3.5 max-h-[460px] overflow-y-auto">
+                      {/* Colour key first, so the bars below read at a glance */}
+                      <div className="px-5 pt-3 pb-2 flex flex-wrap gap-x-4 gap-y-1.5 text-[12px] font-medium text-[#475569]">
+                        {(['Occupied', 'Available', 'Pending', 'No Scan'] as RoomStatus[]).map(s => (
+                          <span key={s} className="inline-flex items-center gap-1.5">
+                            <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: ROOM_TONE[s].bar }} /> {s}
+                          </span>
+                        ))}
+                      </div>
+                      <ul className="px-5 pt-2 pb-4 space-y-3.5 max-h-[460px] overflow-y-auto">
                         {summary.map(s => (
                           <li key={s.room.id}>
-                            <div className="flex items-baseline justify-between gap-2">
-                              <Link href={viewQs(s.room.id)} className="text-sm font-semibold text-[#0B2A5B] hover:text-[#1D5BD6] truncate">{s.room.room_name}</Link>
+                            <div className="flex items-center justify-between gap-2">
+                              <Link href={viewQs(s.room.id)} title="Open this room's usage history"
+                                className="inline-flex items-center gap-2 min-w-0 text-sm font-semibold text-[#0B2A5B] hover:text-[#1D5BD6] transition-colors">
+                                <RoomIcon type={s.room.room_type} className={`w-4 h-4 flex-shrink-0 ${isLab(s.room.room_type) ? 'text-amber-600' : 'text-[#1D5BD6]'}`} />
+                                <span className="truncate">{s.room.room_name}</span>
+                              </Link>
                               <span className="text-xs font-semibold text-[#0B2A5B] tabular-nums whitespace-nowrap">
                                 {hrs(s.used)} <span className="text-[#94A3B8] font-medium">({s.pct}%)</span>
                               </span>
@@ -476,15 +593,6 @@ export default function RoomUtilizationClient() {
                         ))}
                         {summary.length === 0 && <li className="text-sm text-[#94A3B8] py-6 text-center">No rooms.</li>}
                       </ul>
-                      <div className="px-5 pb-4">
-                        <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-[11px] text-[#64748B] pt-3 border-t border-[#F1F5F9]">
-                          {(['Occupied', 'Available', 'Pending', 'No Scan'] as RoomStatus[]).map(s => (
-                            <span key={s} className="inline-flex items-center gap-1.5">
-                              <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: ROOM_TONE[s].bar }} /> {s}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
                     </motion.div>
                   )}
                 </AnimatePresence>
@@ -493,11 +601,21 @@ export default function RoomUtilizationClient() {
           </AnimatePresence>
         </div>
 
-        {/* ── Classroom Construction Recommendation (term schedule — not affected by the date / room filters) ── */}
-        <div className="mt-5">
-          <ClassroomDemandSection refreshKey={demandKey} />
-        </div>
       </PageLoadTransition>
+      </motion.div>
+      ) : (
+      /* ── Classroom Planning: the term's schedule — the date / room filters don't apply ── */
+      <motion.div
+        key="planning"
+        initial={reduceMotion ? false : { opacity: 0, x: 16 }}
+        animate={{ opacity: 1, x: 0, transition: { duration: 0.35, ease: EASE } }}
+        exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: 16, transition: { duration: 0.2, ease: EASE } }}
+        className="min-w-0"
+      >
+        <ClassroomDemandSection />
+      </motion.div>
+      )}
+      </AnimatePresence>
 
 
       <CalendarModal

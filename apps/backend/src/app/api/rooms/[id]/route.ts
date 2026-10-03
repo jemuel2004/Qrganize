@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { query } from '@/database/db';
+import { query, transaction } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { canManageRooms, roomNameTaken, ROOM_STATUSES, validateRoom } from '@/services/rooms';
 import { withAudit } from '@/services/audit';
@@ -100,11 +100,13 @@ async function DELETE_handler(req: NextRequest, { params }: { params: Promise<{ 
     if (!id) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
     // Clear room assignment from all schedule sessions and master schedules
-    // that reference this room — schedules themselves are preserved.
-    await query('UPDATE schedule_sessions SET room_id = NULL WHERE room_id = $1', [id]);
-    await query('UPDATE master_schedule   SET room_id = NULL WHERE room_id = $1', [id]);
-
-    const result = await query('DELETE FROM rooms WHERE id=$1 RETURNING id', [id]);
+    // that reference this room — schedules themselves are preserved. All or
+    // nothing, so a failed delete never leaves classes without their room.
+    const result = await transaction(async (client) => {
+      await client.query('UPDATE schedule_sessions SET room_id = NULL WHERE room_id = $1', [id]);
+      await client.query('UPDATE master_schedule   SET room_id = NULL WHERE room_id = $1', [id]);
+      return client.query('DELETE FROM rooms WHERE id=$1 RETURNING id', [id]);
+    });
     if (result.rows.length === 0) return NextResponse.json({ error: 'Not found' }, { status: 404 });
     return NextResponse.json({ success: true });
   } catch (error) {

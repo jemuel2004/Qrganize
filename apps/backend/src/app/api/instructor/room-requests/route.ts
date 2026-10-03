@@ -156,8 +156,11 @@ async function POST_handler(req: NextRequest) {
         r.room_name                            AS current_room_name,
         c.subject_code,
         c.subject_name,
+        COALESCE(c.lecture_hours, 0)           AS lecture_hours,
         COALESCE(c.laboratory_hours, 0)        AS laboratory_hours,
         b.block_name,
+        b.academic_year,
+        b.semester,
         COUNT(ss.id) FILTER (
           WHERE ss.day_of_week IS NOT NULL
             AND ss.start_time  IS NOT NULL
@@ -180,7 +183,8 @@ async function POST_handler(req: NextRequest) {
           )
         )
       GROUP BY ms.id, ms.faculty_id, ms.room_id, r.room_name,
-               c.subject_code, c.subject_name, c.laboratory_hours, b.block_name
+               c.subject_code, c.subject_name, c.lecture_hours, c.laboratory_hours,
+               b.block_name, b.academic_year, b.semester
     `, [master_schedule_id, facultyId]);
 
     if (schedRes.rows.length === 0) {
@@ -217,6 +221,14 @@ async function POST_handler(req: NextRequest) {
     if (isLabRoom && !(Number(sched.laboratory_hours) > 0)) {
       return NextResponse.json(
         { error: `${sched.subject_code} is a lecture subject, so it can only use a lecture room. Please choose a lecture room.` },
+        { status: 400 },
+      );
+    }
+    /* 5c. Laboratory sessions never move into a lecture room (Scheduling rule), so a
+          laboratory-only subject has nothing that could use one */
+    if (!isLabRoom && !(Number(sched.lecture_hours) > 0)) {
+      return NextResponse.json(
+        { error: `${sched.subject_code} is a laboratory subject, so it can only use a laboratory room. Please choose a laboratory room.` },
         { status: 400 },
       );
     }
@@ -259,14 +271,19 @@ async function POST_handler(req: NextRequest) {
       );
     }
 
-    /* 8. Session conflict: requested room must have no scheduled class at same time */
+    /* 8. Session conflict: requested room must have no scheduled class at same time
+          (in the same school year + semester — other terms never clash) */
     const sessionConflictRes = await query(`
       SELECT ss2.id
       FROM   schedule_sessions ss2
       JOIN   master_schedule   ms2 ON ss2.master_schedule_id = ms2.id
+      JOIN   block_subjects    bs2 ON ms2.block_subject_id   = bs2.id
+      JOIN   blocks            b2  ON bs2.block_id           = b2.id
       WHERE  ss2.room_id = $1
         AND  ms2.status IN ('Assigned', 'Scheduled')
         AND  ms2.id != $2
+        AND  b2.academic_year = $3
+        AND  b2.semester      = $4
         AND  EXISTS (
                SELECT 1
                FROM   schedule_sessions ss_mine
@@ -279,7 +296,7 @@ async function POST_handler(req: NextRequest) {
                  AND  ss_mine.end_time    > ss2.start_time
              )
       LIMIT  1
-    `, [requested_room_id, master_schedule_id]);
+    `, [requested_room_id, master_schedule_id, sched.academic_year, sched.semester]);
 
     if (sessionConflictRes.rows.length > 0) {
       return NextResponse.json(
@@ -293,9 +310,14 @@ async function POST_handler(req: NextRequest) {
       SELECT rcr.id
       FROM   room_change_requests rcr
       JOIN   schedule_sessions    ss_rcr ON ss_rcr.master_schedule_id = rcr.master_schedule_id
+      JOIN   master_schedule      ms_rcr ON ms_rcr.id = rcr.master_schedule_id
+      JOIN   block_subjects       bs_rcr ON bs_rcr.id = ms_rcr.block_subject_id
+      JOIN   blocks               b_rcr  ON b_rcr.id  = bs_rcr.block_id
       WHERE  rcr.requested_room_id = $1
         AND  rcr.status            = 'Pending Confirmation'
         AND  rcr.faculty_id       != $2
+        AND  b_rcr.academic_year   = $4
+        AND  b_rcr.semester        = $5
         AND  ss_rcr.day_of_week   IS NOT NULL
         AND  EXISTS (
                SELECT 1
@@ -309,7 +331,7 @@ async function POST_handler(req: NextRequest) {
                  AND  ss_mine.end_time    > ss_rcr.start_time
              )
       LIMIT  1
-    `, [requested_room_id, facultyId, master_schedule_id]);
+    `, [requested_room_id, facultyId, master_schedule_id, sched.academic_year, sched.semester]);
 
     if (pendConflictRes.rows.length > 0) {
       return NextResponse.json(

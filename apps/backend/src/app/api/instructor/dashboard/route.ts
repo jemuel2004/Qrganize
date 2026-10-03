@@ -3,6 +3,8 @@ import { getAuthUser } from '@/auth/auth';
 import { query } from '@/database/db';
 import { ensureRoomOccupancy, expireStaleOccupancy } from '@/services/ensureRoomOccupancy';
 import { bumpTopics } from '@/services/realtime';
+import { manilaClock } from '@/services/appTimezone';
+import { getActiveAcademicPeriod } from '@/services/activeAcademicPeriod';
 
 export async function GET(req: NextRequest) {
   try {
@@ -76,7 +78,9 @@ export async function GET(req: NextRequest) {
     `);
 
     /* ── 4. Today's schedule ────────────────────────────────────── */
-    const dayName = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+    // Today in Manila (the server itself may run in UTC), active term only
+    const dayName = manilaClock().dayOfWeek;
+    const period = await getActiveAcademicPeriod();
     const todayRes = await query(`
       SELECT
         ms.id,
@@ -98,8 +102,10 @@ export async function GET(req: NextRequest) {
       WHERE  ms.faculty_id = $1
         AND  ms.status IN ('Assigned', 'Scheduled')
         AND  ss.day_of_week = $2
+        AND  ($3 = '' OR b.academic_year = $3)
+        AND  ($4 = '' OR b.semester      = $4)
       ORDER  BY ss.start_time
-    `, [facultyId, dayName]);
+    `, [facultyId, dayName, period.schoolYear ?? '', period.semester ?? '']);
 
     /* ── 5. Personal stats this month ───────────────────────────── */
     const statsRes = await query(`

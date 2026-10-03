@@ -3,6 +3,7 @@ import { manilaCalendarDateString, manilaClock, manilaTodayAtSql } from '@/servi
 import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import {
+  applyRequestedRoom,
   ensureRoomOccupancy,
   expireStaleOccupancy,
   ensureRoomRequestsSchema,
@@ -10,6 +11,7 @@ import {
 } from '@/services/ensureRoomOccupancy';
 import { createNotification } from '@/services/notifications';
 import { withAudit } from '@/services/audit';
+import { getActiveAcademicPeriod } from '@/services/activeAcademicPeriod';
 
 /*
   QR Scan Logic — Thesis Hybrid Room Request System
@@ -158,6 +160,12 @@ async function POST_handler(req: NextRequest) {
     const now      = new Date();
     const { time: scanTime, dayOfWeek } = manilaClock(now); // HH:MM:SS, "Monday"
     const scanDate = manilaCalendarDateString(now);
+    // Only classes of the active school year + semester are running — the
+    // conflict rules keep each term separate, so another term's class at the
+    // same time must not count as the class in this room now.
+    const period = await getActiveAcademicPeriod();
+    const termYear = period.schoolYear ?? '';
+    const termSemester = period.semester ?? '';
 
     // ── STEP 2 · Expire stale occupancy for this room ─────────────────────────
     await expireStaleOccupancy(room.id);
@@ -243,9 +251,11 @@ async function POST_handler(req: NextRequest) {
           AND  $3::time BETWEEN (ss.start_time - INTERVAL '15 minutes')
                             AND (ss.end_time   + INTERVAL '15 minutes')
           AND  ms.status IN ('Assigned', 'Scheduled')
+          AND  ($4 = '' OR b.academic_year = $4)
+          AND  ($5 = '' OR b.semester      = $5)
         ORDER  BY ss.start_time ASC
         LIMIT  1
-      `, [faculty_id, dayOfWeek, scanTime]);
+      `, [faculty_id, dayOfWeek, scanTime, termYear, termSemester]);
 
       let scheduleInfo: {
         ms_id: number; start_time: string; end_time: string;
@@ -289,13 +299,11 @@ async function POST_handler(req: NextRequest) {
         roomRequestConfirmed = true;
         const rcr = rcrRes.rows[0];
         if (rcr.master_schedule_id) {
-          await query(`
-            UPDATE schedule_sessions SET room_id = $1
-            WHERE  master_schedule_id = $2
-          `, [room.id, rcr.master_schedule_id]).catch(() => {});
-          await query(`
-            UPDATE master_schedule SET room_id = $1 WHERE id = $2
-          `, [room.id, rcr.master_schedule_id]).catch(() => {});
+          await applyRequestedRoom({
+            id: Number(rcr.id),
+            master_schedule_id: Number(rcr.master_schedule_id),
+            requested_room_id: Number(room.id),
+          }).catch(err => console.error('[qr/scan] applying the requested room failed:', err));
         }
       }
 
@@ -388,9 +396,11 @@ async function POST_handler(req: NextRequest) {
         AND  $3::time BETWEEN (ss.start_time - INTERVAL '15 minutes')
                           AND (ss.end_time   + INTERVAL '30 minutes')
         AND  ms.status IN ('Assigned', 'Scheduled')
+        AND  ($4 = '' OR b.academic_year = $4)
+        AND  ($5 = '' OR b.semester      = $5)
       ORDER  BY ss.start_time ASC
       LIMIT  1
-    `, [room.id, dayOfWeek, scanTime]);
+    `, [room.id, dayOfWeek, scanTime, termYear, termSemester]);
 
     // ── 4b · Room has a scheduled class in the scan window ───────────────────
     if (schedNowRes.rows.length > 0) {

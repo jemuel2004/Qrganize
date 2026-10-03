@@ -6,6 +6,7 @@ import { normalizeYearLevel, normalizeSemester } from '@shared/normalizeCurricul
 import { resolveSubjectCategory } from '@shared/subjectCategory';
 import { canAccessProgram, isScopedChair } from '@/services/programScope';
 import { withAudit } from '@/services/audit';
+import { assignedSubjectCodes, assignedSubjectsMessage } from '@/services/curriculumUsage';
 
 async function PUT_handler(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -84,7 +85,16 @@ async function DELETE_handler(req: NextRequest, { params }: { params: Promise<{ 
       }
     }
 
-    await query('UPDATE curriculums SET is_active=false, updated_at=NOW() WHERE id=$1', [id]);
+    const curriculumId = Number(id);
+    if (!Number.isInteger(curriculumId) || curriculumId <= 0) {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    }
+    const inUse = await assignedSubjectCodes([curriculumId]);
+    if (inUse.length > 0) {
+      return NextResponse.json({ error: assignedSubjectsMessage(inUse) }, { status: 409 });
+    }
+
+    await query('UPDATE curriculums SET is_active=false, updated_at=NOW() WHERE id=$1', [curriculumId]);
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('[DELETE /api/curriculum/[id]]', error);

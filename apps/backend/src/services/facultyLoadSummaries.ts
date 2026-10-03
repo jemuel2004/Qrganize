@@ -11,10 +11,27 @@ export interface FacultyLoadSummary {
   total_deduction_units: number;
   total_overload_units: number;
   total_overload_hours: number;
+  total_praise_units: number;
+  total_praise_hours: number;
   total_instructor_units: number;
   /** Subjects assigned this term (Regular, Overload or Praise) — 0 = still needs one */
   assigned_count: number;
   employment_status: string;
+}
+
+/** One faculty row of the summary query (numerics arrive as strings) */
+interface SummaryRow {
+  faculty_id: number;
+  employment_status: string;
+  regular_load_limit: string;
+  total_deduction_units: string;
+  total_regular_units: string;
+  total_regular_hours: string;
+  total_overload_units: string;
+  total_overload_hours: string;
+  total_praise_units: string;
+  total_praise_hours: string;
+  assigned_count: string;
 }
 
 let deductionsTableReady = false;
@@ -50,9 +67,14 @@ export async function loadFacultyLoadSummaries(options: {
   semester: string;
   academicYear: string;
   programId?: string;
+  /** Read through an open transaction (its tables must already exist) */
+  q?: (text: string, params?: unknown[]) => Promise<{ rows: unknown[] }>;
 }): Promise<Record<number, FacultyLoadSummary>> {
-  await ensureDeductionsTable();
-  await ensurePraiseSplitColumn();
+  if (!options.q) {
+    await ensureDeductionsTable();
+    await ensurePraiseSplitColumn();
+  }
+  const run = options.q ?? query;
   const policy = await getWorkloadPolicy();
 
   const semester = options.semester || '';
@@ -171,10 +193,10 @@ export async function loadFacultyLoadSummaries(options: {
 
   sql += ' GROUP BY f.id, f.employment_status, da.total_deducted, oa.total_units, oa.total_hours, psa.total_units, psa.total_hours';
 
-  const result = await query(sql, params);
+  const result = await run(sql, params);
   const summaries: Record<number, FacultyLoadSummary> = {};
 
-  for (const row of result.rows) {
+  for (const row of result.rows as SummaryRow[]) {
     const isP = row.employment_status === 'Permanent';
     const limit = parseFloat(row.regular_load_limit) || 0;
     const current = isP
@@ -197,6 +219,8 @@ export async function loadFacultyLoadSummaries(options: {
       total_deduction_units: dedUnits,
       total_overload_units: olUnits,
       total_overload_hours: olHours,
+      total_praise_units: praiseUnits,
+      total_praise_hours: praiseHours,
       total_instructor_units: totalInstructor,
       assigned_count: Number(row.assigned_count) || 0,
       employment_status: row.employment_status,

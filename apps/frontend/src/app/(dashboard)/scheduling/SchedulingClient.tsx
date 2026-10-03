@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef, useMemo, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, useCallback, useRef, useMemo, type ReactNode } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useToast } from '@/context/ToastContext';
@@ -14,7 +14,7 @@ import {
   AlertTriangle, CheckCircle, Clock, Trash2, X,
   RefreshCw, Save, Search,
   ChevronLeft, XCircle, Loader2, AlertCircle,
-  CalendarDays, Eye, MapPin, ShieldCheck, FileClock, ArrowRight, ChevronDown, Maximize2, Minimize2,
+  CalendarDays, Eye, ShieldCheck, FileClock, ArrowRight, ChevronDown, Maximize2, Minimize2,
 } from 'lucide-react';
 import { ListSkeleton, TableSkeleton, Skeleton } from '@/components/ui/skeletons';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
@@ -23,13 +23,16 @@ import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
 import { useScrollLock } from '@/hooks/useScrollLock';
 import TimeSlotPicker from '@/components/ui/TimeSlotPicker';
 import CountFilterTabs from '@/components/ui/CountFilterTabs';
+import { SearchInput } from '@/components/ui/SearchFilter';
 import RoomPicker from '@/components/ui/RoomPicker';
 import DayPicker from '@/components/ui/DayPicker';
 import { TT_DAY_TONES, TT_TONE_MTH, TT_TONE_OVERLOAD, TT_TONE_SAT, TT_TONE_TF, TT_TONE_W, type DayTone } from '@/lib/dayTones';
 import { useDayCombinations } from '@/lib/dayCombinations';
 import { dayCombinationError, daysCode, daysLabel, matchCombination } from '@shared/dayCombination';
-import { blockCode } from '@shared/blockCode';
+import { blockCode, programBlockCode } from '@shared/blockCode';
 import { LOAD_GRACE_UNITS, formatLoadCap } from '@shared/regularLoad';
+import { asSessionList, fmt12, normTime, parseDays } from '@/lib/scheduleTime';
+import SubjectFacultyPreview from '@/components/SubjectFacultyPreview';
 
 /* ─── types ─────────────────────────────────────────────────── */
 interface Faculty {
@@ -175,15 +178,6 @@ function addMinutes(t: string, mins: number): string {
   const total = h * 60 + m + mins;
   return `${String(Math.floor(total / 60) % 24).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 }
-function fmt12(t: string): string {
-  if (!t) return '—';
-  const [hRaw, m] = t.split(':').map(Number);
-  if (isNaN(hRaw)) return '—';
-  /* Hour-mark midnight uses 24:00; treat as 12:00 AM. */
-  if (hRaw === 24) return `12:${String(m).padStart(2, '0')} AM`;
-  const h = hRaw;
-  return `${h === 0 ? 12 : h > 12 ? h - 12 : h}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
-}
 function fmtHrs(n: number): string {
   const h = Math.floor(n); const m = Math.round((n - h) * 60);
   if (h === 0) return `${m} min`;
@@ -191,25 +185,9 @@ function fmtHrs(n: number): string {
   return `${h} hr ${m} min`;
 }
 function uid(): string { return Math.random().toString(36).slice(2); }
-function parseDays(pattern: string | null): string[] {
-  if (!pattern) return [];
-  const map: Record<string, string> = {
-    M: 'Monday', T: 'Tuesday', W: 'Wednesday', TH: 'Thursday', F: 'Friday', S: 'Saturday', SU: 'Sunday',
-    Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday', Sun: 'Sunday',
-    Monday: 'Monday', Tuesday: 'Tuesday', Wednesday: 'Wednesday',
-    Thursday: 'Thursday', Friday: 'Friday', Saturday: 'Saturday', Sunday: 'Sunday',
-  };
-  return pattern.split('/').map(p => map[p.trim()] || '').filter(Boolean);
-}
 function timeToMinutes(t: string): number {
   const [h, m] = String(t).split(':').map(Number);
   return (h || 0) * 60 + (m || 0);
-}
-/** Normalize Postgres time text (HH:MM:SS) to HH:MM for display/positioning. */
-function normTime(t: string | null | undefined): string {
-  if (!t) return '00:00';
-  const parts = String(t).split(':');
-  return `${parts[0].padStart(2, '0')}:${(parts[1] || '00').padStart(2, '0')}`;
 }
 function toNum(v: unknown, fallback = 0): number {
   const n = Number(v);
@@ -374,81 +352,6 @@ function sessionEndMinutes(startTime: string, endTime: string): number {
   return end;
 }
 
-function asSessionList(raw: unknown): WorkloadSession[] {
-  if (Array.isArray(raw)) return raw as WorkloadSession[];
-  if (typeof raw === 'string') {
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      return Array.isArray(parsed) ? (parsed as WorkloadSession[]) : [];
-    } catch {
-      return [];
-    }
-  }
-  return [];
-}
-
-/** One scheduled meeting for a subject component — used by the row "eye" preview. */
-interface RowScheduleMeeting { day: string; time: string; room: string }
-/** One instructor handling the previewed subject (one row per assigned block) —
- *  from /api/scheduling/subject-instructors. */
-interface SubjectInstructor {
-  ms_id: number;
-  faculty_id: number;
-  faculty_name: string;
-  block_name: string;
-  year_level: string | null;
-  program_code: string | null;
-  day_pattern: string | null;
-  start_time: string | null;
-  end_time: string | null;
-  room_name: string | null;
-  sessions: WorkloadSession[] | string | null;
-}
-function getInstructorMeetings(si: SubjectInstructor, comp: 'lec' | 'lab'): RowScheduleMeeting[] {
-  const sessions = asSessionList(si.sessions)
-    .filter(s => (s.type === 'lab' ? 'lab' : 'lec') === comp && s.day && s.start_time && s.end_time);
-  if (sessions.length > 0) {
-    return sessions.map(s => ({
-      day: s.day,
-      time: `${fmt12(normTime(s.start_time))} – ${fmt12(normTime(s.end_time))}`,
-      room: s.room_name ?? si.room_name ?? 'No room assigned',
-    }));
-  }
-  // Legacy rows scheduled before schedule_sessions existed
-  if (asSessionList(si.sessions).length > 0 || !si.day_pattern || !si.start_time || !si.end_time) return [];
-  return parseDays(si.day_pattern).map(day => ({
-    day,
-    time: `${fmt12(normTime(si.start_time!))} – ${fmt12(normTime(si.end_time!))}`,
-    room: si.room_name ?? 'No room assigned',
-  }));
-}
-
-/** Animates its height to fit its content, so a panel glides instead of
- *  jumping when what's inside changes size. */
-function AutoHeight({ children, className, reduceMotion }: {
-  children: ReactNode; className?: string; reduceMotion: boolean;
-}) {
-  const innerRef = useRef<HTMLDivElement>(null);
-  const [height, setHeight] = useState<number | 'auto'>('auto');
-  useEffect(() => {
-    const el = innerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setHeight(el.offsetHeight));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  return (
-    <motion.div
-      className={className}
-      initial={false}
-      animate={{ height }}
-      transition={{ duration: reduceMotion ? 0 : 0.32, ease: [0.4, 0, 0.2, 1] }}
-    >
-      <div ref={innerRef}>{children}</div>
-    </motion.div>
-  );
-}
-
 function WeeklyTimetableGrid({
   blocks,
   layout,
@@ -603,7 +506,7 @@ function WeeklyTimetableGrid({
             const tooltip = [
               `${load.subject_code} — ${load.subject_name}${isOverload ? ' · OVERLOAD' : ''}`,
               `${fmt12(st)} – ${fmt12(et)}`,
-              `${typeLabel} · ${blockCode(load.year_level, load.block_name)} · ${roomLabel}`,
+              `${typeLabel} · ${programBlockCode(load.program_code, load.year_level, load.block_name)} · ${roomLabel}`,
             ].join('\n');
 
             return (
@@ -658,7 +561,7 @@ Click for details`}
                       </span>
                       {load.block_name && (
                         <span className="flex-shrink-0 text-[11px] font-bold px-1.5 rounded bg-[#1E4FB8] leading-[17px] whitespace-nowrap" style={{ color: '#FFFFFF' }}>
-                          {blockCode(load.year_level, load.block_name)}
+                          {programBlockCode(load.program_code, load.year_level, load.block_name)}
                         </span>
                       )}
                     </div>
@@ -687,7 +590,7 @@ Click for details`}
                         // White set inline — the light-mode rule repaints `text-white` as dark ink
                         style={{ color: '#FFFFFF' }}
                       >
-                        {blockCode(load.year_level, load.block_name)}
+                        {programBlockCode(load.program_code, load.year_level, load.block_name)}
                       </span>
                     )}
                   </div>
@@ -1057,9 +960,73 @@ function CollapsibleSection({ title, count, tone, open, onToggle, children, id, 
   );
 }
 
-/** Major subject: has both Lecture and Laboratory hours. */
-function isMajorSubject(load: WorkloadLoad): boolean {
-  return toNum(load.lecture_hours) > 0 && toNum(load.laboratory_hours) > 0;
+/** Section heading in the scheduling form (Meeting days · Sessions per week · Session schedule) */
+function StepLabel({ children, className = '' }: { children: ReactNode; className?: string }) {
+  return (
+    <div className={`mb-2 text-xs font-bold uppercase tracking-wider text-[#475569] ${className}`}>{children}</div>
+  );
+}
+
+/* ─── Assigned Subjects: one card per class ─────────────────── */
+
+interface ClassGroup { key: string; load: WorkloadLoad; rows: LoadRow[] }
+
+/** A section's rows as classes (subject + block), Lecture part before Laboratory,
+ *  sorted by subject code then block so a subject's blocks sit together. */
+function groupByClass(rows: LoadRow[]): ClassGroup[] {
+  const byLoad = new Map<number, ClassGroup>();
+  for (const r of rows) {
+    const g = byLoad.get(r.load.id) ?? { key: `class-${r.load.id}`, load: r.load, rows: [] };
+    g.rows.push(r);
+    byLoad.set(r.load.id, g);
+  }
+  const groups = [...byLoad.values()];
+  for (const g of groups) g.rows.sort((a, b) => (a.component === b.component ? 0 : a.component === 'lec' ? -1 : 1));
+  const opts = { numeric: true, sensitivity: 'base' } as const;
+  return groups.sort((a, b) =>
+    a.load.subject_code.localeCompare(b.load.subject_code, undefined, opts)
+    || blockCode(a.load.year_level, a.load.block_name).localeCompare(blockCode(b.load.year_level, b.load.block_name), undefined, opts)
+    || (a.load.program_code ?? '').localeCompare(b.load.program_code ?? '', undefined, opts));
+}
+
+/** One part of a class (Lecture / Laboratory) — selecting it opens it in the scheduling form */
+function PartButton({ row, active, onSelect }: { row: LoadRow; active: boolean; onSelect: (row: LoadRow) => void }) {
+  const reduceMotion = useReducedMotion();
+  const lec = row.component === 'lec';
+  const Icon = lec ? BookOpen : Monitor;
+  const white = active ? { color: '#FFFFFF' } : undefined;
+  return (
+    <motion.button
+      type="button"
+      onClick={e => { e.stopPropagation(); onSelect(row); }}
+      aria-pressed={active}
+      title={`Schedule the ${lec ? 'Lecture' : 'Laboratory'} part`}
+      whileHover={reduceMotion || active ? undefined : { y: -1 }}
+      whileTap={reduceMotion ? undefined : { scale: 0.96 }}
+      transition={{ duration: 0.15 }}
+      className={`inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border text-[12.5px] font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D5BD6]/40 ${
+        active
+          ? lec ? 'bg-[#1D5BD6] border-[#1D5BD6] shadow-[0_6px_14px_-8px_rgba(29,91,214,0.9)]' : 'bg-amber-500 border-amber-500 shadow-[0_6px_14px_-8px_rgba(217,119,6,0.9)]'
+          : lec ? 'bg-[#EFF6FF] text-[#1D5BD6] border-[#BFDBFE] hover:border-[#1D5BD6]' : 'bg-amber-50 text-amber-700 border-amber-200 hover:border-amber-500'
+      }`}
+      style={white}
+    >
+      <Icon className="w-3.5 h-3.5" style={white} />
+      {lec ? 'Lecture' : 'Laboratory'}
+      <span className={`font-semibold tabular-nums ${active ? '' : 'opacity-75'}`} style={white}>· {fmtHrs(row.displayHours)}</span>
+      {row.splitLabel && (
+        <span
+          className={`text-[10.5px] font-bold px-1.5 py-px rounded-full border ${
+            row.splitLabel === 'Overload' ? 'bg-orange-50 text-orange-700 border-orange-200'
+              : row.splitLabel === 'Praise' ? 'bg-yellow-50 text-yellow-800 border-yellow-300'
+              : 'bg-slate-50 text-slate-500 border-slate-200'
+          }`}
+        >
+          {row.splitLabel}
+        </span>
+      )}
+    </motion.button>
+  );
 }
 
 /* ─── LoadSection ───────────────────────────────────────────── */
@@ -1088,82 +1055,54 @@ function LoadSection({ title, tone, rows, selLoadKey, onSelect, onPreview, empty
         ) : (
         <>
         <div>
-        {rows.map((row, i) => {
-          const isActive     = selLoadKey === row.key;
-          const isLec        = row.component === 'lec';
-          const prevRow      = rows[i - 1];
-          const isNewSubject = !prevRow
-            || prevRow.load.id !== row.load.id
-            || prevRow.component !== row.component
-            || prevRow.isSplitPortion !== row.isSplitPortion;
+        {/* One card per class (subject + block); its Lecture / Laboratory parts are the
+            buttons inside — half the cards to scan, and Lec + Lab subjects read at a glance */}
+        {groupByClass(rows).map(g => {
+          const load = g.load;
+          const hasActive = g.rows.some(r => r.key === selLoadKey);
+          const single = g.rows.length === 1;
           return (
             <div
-              key={row.key}
-              role="button"
-              tabIndex={0}
-              onClick={() => onSelect(row)}
-              onKeyDown={e => {
-                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(row); }
-              }}
+              key={g.key}
+              onClick={single ? () => onSelect(g.rows[0]) : undefined}
               className={[
-                'w-full text-left px-3 py-2 border-b border-[#F1F5F9] last:border-0 transition-colors cursor-pointer',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D5BD6]/40 focus-visible:ring-inset',
-                isNewSubject && i > 0 ? 'border-t border-[#E2E8F0]' : '',
-                isActive
-                  ? `bg-[#EFF6FF] border-l-[3px] ${isLec ? 'border-l-[#1D5BD6]' : 'border-l-amber-500'}`
-                  : isMajorSubject(row.load)
-                    // Major (Lecture + Lab): indigo border around the card + indigo left bar —
-                    // a different hue from the blue selected card and Block badge
-                    ? 'bg-white border-l-[3px] border-l-[#6366F1] shadow-[inset_0_0_0_1.5px_#C7D2FE] hover:bg-[#F7F7FF]'
-                    : 'hover:bg-[#F8FAFC]',
+                'px-3 py-2.5 border-b border-[#EEF2F7] last:border-0 transition-colors',
+                single ? 'cursor-pointer' : '',
+                hasActive ? 'bg-[#F2F7FF] shadow-[inset_3px_0_0_#1D5BD6]' : 'hover:bg-[#F8FAFC]',
               ].join(' ')}
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-                    {isLec
-                      ? <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-full bg-[#EFF6FF] text-[#1D5BD6] border border-[#BFDBFE] flex-shrink-0 flex items-center gap-1">
-                          <BookOpen className="w-3 h-3" /> Lecture
-                        </span>
-                      : <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 flex-shrink-0 flex items-center gap-1">
-                          <Monitor className="w-3 h-3" /> Laboratory
-                        </span>
-                    }
-                    {row.splitLabel && (
-                      <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 border ${
-                        row.splitLabel === 'Overload'
-                          ? 'bg-orange-50 text-orange-700 border-orange-200'
-                          : row.splitLabel === 'Praise'
-                          ? 'bg-yellow-50 text-yellow-800 border-yellow-300'
-                          : 'bg-slate-50 text-slate-500 border-slate-200'
-                      }`}>{row.splitLabel}</span>
-                    )}
-                  </div>
                   <div className="flex items-center gap-1.5 min-w-0">
-                    <span className="text-[13px] font-bold text-[#0B2A5B] leading-tight truncate">{row.load.subject_code}</span>
-                    {row.load.block_name && (
+                    <span className="text-[14px] font-bold text-[#0B2A5B] leading-tight truncate">{load.subject_code}</span>
+                    {load.block_name && (
                       <span
                         className="flex-shrink-0 text-[11px] font-bold px-2 py-0.5 rounded-md bg-[#1E4FB8] leading-tight"
                         // White set inline — the light-mode rule repaints `text-white` as dark ink
                         style={{ color: '#FFFFFF' }}
-                        title={[row.load.program_code, row.load.year_level, `Block ${row.load.block_name}`].filter(Boolean).join(' · ')}
+                        title={[load.program_code, load.year_level, `Block ${load.block_name}`].filter(Boolean).join(' · ')}
                       >
-                        {blockCode(row.load.year_level, row.load.block_name)}
+                        {blockCode(load.year_level, load.block_name)}
                       </span>
                     )}
                   </div>
                   {/* Darker, larger title — the light grey was hard to read (older users) */}
-                  <div className={`mt-0.5 text-[13px] font-medium text-[#334155] leading-snug ${expanded ? 'break-words' : 'truncate'}`} title={row.load.subject_name}>{row.load.subject_name}</div>
+                  <div className={`mt-0.5 text-[13px] font-medium text-[#334155] leading-snug ${expanded ? 'break-words' : 'truncate'}`} title={load.subject_name}>{load.subject_name}</div>
                 </div>
                 <button
                   type="button"
                   title="View schedule details"
-                  aria-label="View schedule details"
-                  onClick={e => { e.stopPropagation(); onPreview(row); }}
+                  aria-label={`View schedule details for ${load.subject_code}`}
+                  onClick={e => { e.stopPropagation(); onPreview(g.rows.find(r => r.key === selLoadKey) ?? g.rows[0]); }}
                   className="flex-shrink-0 w-8 h-8 rounded-lg border border-[#BFD3F5] bg-[#EFF5FF] text-[#1D5BD6] hover:bg-[#DCE8FC] hover:border-[#93B4EA] hover:text-[#164BB5] shadow-[0_1px_2px_rgba(29,91,214,0.12)] flex items-center justify-center transition"
                 >
                   <Eye className="w-4 h-4" />
                 </button>
+              </div>
+
+              {/* Parts — pick one to schedule it */}
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {g.rows.map(row => <PartButton key={row.key} row={row} active={row.key === selLoadKey} onSelect={onSelect} />)}
               </div>
             </div>
           );
@@ -1238,6 +1177,8 @@ export default function SchedulingClient() {
      and the Lecture / Laboratory chips filter the rows in all sections. */
   const [openSections, setOpenSections]   = useState<Record<string, boolean>>({});
   const [typeFilter, setTypeFilter]       = useState<'all' | 'lec' | 'lab'>('all');
+  /** Assigned Subjects search — subject code, title or block */
+  const [subjectSearch, setSubjectSearch] = useState('');
   const [panelExpanded, setPanelExpanded] = useState(false);
   const reduceMotion = useReducedMotion();
   function focusSection(id: string) {
@@ -1252,25 +1193,14 @@ export default function SchedulingClient() {
   /* pending / done / overload chips: open that section (others close), glide to
      it and pulse it once so the eye lands there. */
   const [flashSection, setFlashSection] = useState<string | null>(null);
-  useEffect(() => { setOpenSections({}); setTypeFilter('all'); }, [selFacultyId]);
+  useEffect(() => { setOpenSections({}); setTypeFilter('all'); setSubjectSearch(''); }, [selFacultyId]);
+  /* Eye preview (SubjectFacultyPreview): everyone handling the row's subject */
   const [previewRow, setPreviewRow]       = useState<LoadRow | null>(null);
-  /* Eye preview: everyone handling the previewed subject, and the one whose
-     schedule is opened from its "View Schedule" button. */
-  const [subjectInstructors, setSubjectInstructors] = useState<SubjectInstructor[] | null>(null);
-  const [subjectInstructorsError, setSubjectInstructorsError] = useState('');
-  const [viewingInstructor, setViewingInstructor] = useState<SubjectInstructor | null>(null);
-  /** 1 = heading into a schedule, -1 = back to the list — drives the slide direction. */
-  const [previewNavDir, setPreviewNavDir] = useState(1);
-  const openInstructorSchedule = (si: SubjectInstructor) => { setPreviewNavDir(1); setViewingInstructor(si); };
-  const closeInstructorSchedule = () => { setPreviewNavDir(-1); setViewingInstructor(null); };
-  const previewSubjectCode = previewRow?.load.subject_code ?? null;
   /* Timetable click: open the preview straight on this instructor's schedule
-     for that subject (the back arrow still lists everyone teaching it). A ref,
-     so the fetch callback can switch views in the same render — no list flash. */
-  const openScheduleForMs = useRef<number | null>(null);
+     for that subject (the back arrow still lists everyone teaching it). */
+  const [previewOpenMs, setPreviewOpenMs] = useState<number | null>(null);
   function openTimetableBlock(load: WorkloadLoad, component: 'lec' | 'lab') {
-    openScheduleForMs.current = load.ms_id;
-    setPreviewNavDir(1);
+    setPreviewOpenMs(load.ms_id);
     setPreviewRow({
       key: `tt-${load.id}-${component}`, load, component,
       componentHours: 0, componentUnits: 0, displayHours: 0, displayUnits: 0,
@@ -1278,33 +1208,7 @@ export default function SchedulingClient() {
       isOverloadComponent: false, isScheduled: true, isSplitPortion: false,
     });
   }
-  useEffect(() => {
-    setViewingInstructor(null);
-    setSubjectInstructors(null);
-    setSubjectInstructorsError('');
-    if (!previewSubjectCode) return;
-    const controller = new AbortController();
-    const qs = new URLSearchParams({ subject_code: previewSubjectCode, semester, academic_year: schoolYear }).toString();
-    fetch(`/api/scheduling/subject-instructors?${qs}`, { signal: controller.signal })
-      .then(async res => {
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || 'Unable to load faculty.');
-        const list: SubjectInstructor[] = Array.isArray(data.instructors) ? data.instructors : [];
-        setSubjectInstructors(list);
-        if (openScheduleForMs.current != null) {
-          const hit = list.find(si => si.ms_id === openScheduleForMs.current);
-          if (hit) setViewingInstructor(hit);
-          openScheduleForMs.current = null;
-        }
-      })
-      .catch(err => {
-        if (controller.signal.aborted) return;
-        setSubjectInstructorsError(err instanceof Error ? err.message : 'Unable to load faculty.');
-        setSubjectInstructors([]);
-        openScheduleForMs.current = null;
-      });
-    return () => controller.abort();
-  }, [previewSubjectCode, semester, schoolYear]);
+  const closePreview = useCallback(() => { setPreviewRow(null); setPreviewOpenMs(null); }, []);
   const [panelSwitching, setPanelSwitching] = useState(false);
   const panelSwitchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [rooms, setRooms]                 = useState<Room[]>([]);
@@ -1460,7 +1364,7 @@ export default function SchedulingClient() {
   const prefillRef = useRef<{ key: string; sessions: WorkloadSession[] } | null>(null);
 
   function selectLoad(row: LoadRow) {
-    const saved = asSessionList(row.load.sessions)
+    const saved = asSessionList<WorkloadSession>(row.load.sessions)
       .filter(x => (x.type === 'lab' ? 'lab' : 'lec') === row.component && x.day && x.start_time)
       .sort((a, b) => WEEK_DAYS.indexOf(a.day) - WEEK_DAYS.indexOf(b.day)
         || normTime(a.start_time).localeCompare(normTime(b.start_time)));
@@ -1627,7 +1531,7 @@ export default function SchedulingClient() {
     if (!workload) return byDay;
     for (const l of workload.loads) {
       if (l.block_semester !== semester || l.block_academic_year !== schoolYear) continue;
-      for (const s of asSessionList(l.sessions)) {
+      for (const s of asSessionList<WorkloadSession>(l.sessions)) {
         if (!s.day || !s.start_time || !s.end_time) continue;
         const comp = s.type === 'lab' ? 'lab' : 'lec';
         if (selLoad && l.ms_id === selLoad.load.ms_id && comp === selLoad.component) continue;
@@ -2259,7 +2163,32 @@ export default function SchedulingClient() {
   const overloadRows  = allRows.filter(r =>  r.isOverloadComponent && !r.isScheduled);
   const praiseRows    = allRows.filter(r =>  r.isPraiseComponent && !r.isScheduled);
   const scheduledRows = allRows.filter(r => r.isScheduled);
-  const byType = (rows: LoadRow[]) => (typeFilter === 'all' ? rows : rows.filter(r => r.component === typeFilter));
+  /* Search ignores case, spaces and dashes: "ee1" finds EE 1, "2a" finds block 2A */
+  const searchKey = (s: string | null | undefined) => (s ?? '').toLowerCase().replace(/[\s\-_.]/g, '');
+  const subjectQuery = searchKey(subjectSearch);
+  const matchesQuery = (r: LoadRow, q: string) => {
+    const block = blockCode(r.load.year_level, r.load.block_name);
+    return [r.load.subject_code, r.load.subject_name, block, `${r.load.program_code ?? ''}${block}`]
+      .some(v => searchKey(v).includes(q));
+  };
+  const typeOk = (r: LoadRow) => typeFilter === 'all' || r.component === typeFilter;
+  /** Rows shown in a section: the Lecture / Laboratory switch, then the search */
+  const byType = (rows: LoadRow[]) => rows.filter(r => typeOk(r) && (!subjectQuery || matchesQuery(r, subjectQuery)));
+  /** Typing a search opens every section that has a match (sections start hidden) */
+  function onSubjectSearch(value: string) {
+    setSubjectSearch(value);
+    const q = searchKey(value);
+    if (!q) return;
+    const hit = (rows: LoadRow[]) => rows.some(r => typeOk(r) && matchesQuery(r, q));
+    setOpenSections(s => ({
+      ...s,
+      regular: !!s.regular || hit(pendingRows),
+      overload: !!s.overload || hit(overloadRows),
+      praise: !!s.praise || hit(praiseRows),
+      scheduled: !!s.scheduled || hit(scheduledRows),
+    }));
+  }
+  const noMatch = subjectQuery ? 'No subjects match your search.' : null;
 
   interface TimetableBlock {
     load: WorkloadLoad;
@@ -2276,7 +2205,7 @@ export default function SchedulingClient() {
   /** One timetable block per schedule_sessions row — never collapse same-day splits. */
   const timetableBlocks: TimetableBlock[] = [];
   for (const l of loads) {
-    const rawSessions = asSessionList(l.sessions);
+    const rawSessions = asSessionList<WorkloadSession>(l.sessions);
     if (rawSessions.length > 0) {
       for (const sess of rawSessions) {
         const st = normTime(sess.start_time);
@@ -2503,6 +2432,16 @@ export default function SchedulingClient() {
                 );
               })}
             </div>
+
+            {/* Row 3 — find a subject fast when the list is long (code, title or block) */}
+            {allRows.length > 0 && (
+              <SearchInput
+                value={subjectSearch}
+                onChange={onSubjectSearch}
+                placeholder="Find subject or block — e.g. CHEM 1, 2A"
+                className="w-full"
+              />
+            )}
           </div>
 
           <div className="flex-1 overflow-y-auto">
@@ -2526,7 +2465,7 @@ export default function SchedulingClient() {
                   selLoadKey={selLoad?.key}
                   onSelect={selectLoad}
                   onPreview={setPreviewRow}
-                  emptyMessage={typeFilter === 'all' ? 'No subjects waiting for a schedule.' : `No ${typeFilter === 'lec' ? 'Lecture' : 'Laboratory'} subjects here.`}
+                  emptyMessage={noMatch ?? (typeFilter === 'all' ? 'No subjects waiting for a schedule.' : `No ${typeFilter === 'lec' ? 'Lecture' : 'Laboratory'} subjects here.`)}
                   open={!!openSections.regular}
                   onToggle={() => toggleSection('regular')}
                 />
@@ -2544,7 +2483,7 @@ export default function SchedulingClient() {
                   selLoadKey={selLoad?.key}
                   onSelect={selectLoad}
                   onPreview={setPreviewRow}
-                  emptyMessage={`No ${typeFilter === 'lec' ? 'Lecture' : 'Laboratory'} overload subjects.`}
+                  emptyMessage={noMatch ?? `No ${typeFilter === 'lec' ? 'Lecture' : 'Laboratory'} overload subjects.`}
                   open={!!openSections.overload}
                   onToggle={() => toggleSection('overload')}
                 />
@@ -2561,7 +2500,7 @@ export default function SchedulingClient() {
                   selLoadKey={selLoad?.key}
                   onSelect={selectLoad}
                   onPreview={setPreviewRow}
-                  emptyMessage={`No ${typeFilter === 'lec' ? 'Lecture' : 'Laboratory'} Praise Load subjects.`}
+                  emptyMessage={noMatch ?? `No ${typeFilter === 'lec' ? 'Lecture' : 'Laboratory'} Praise Load subjects.`}
                   open={!!openSections.praise}
                   onToggle={() => toggleSection('praise')}
                 />
@@ -2601,7 +2540,7 @@ export default function SchedulingClient() {
                   selLoadKey={selLoad?.key}
                   onSelect={selectLoad}
                   onPreview={setPreviewRow}
-                  emptyMessage="Nothing scheduled yet."
+                  emptyMessage={noMatch ?? 'Nothing scheduled yet.'}
                   open={!!openSections.scheduled}
                   onToggle={() => toggleSection('scheduled')}
                 />
@@ -2727,45 +2666,69 @@ export default function SchedulingClient() {
             ) : (
               <div className="p-4 space-y-3 max-w-6xl">
 
-                {/* Subject header */}
-                <div className="bg-white rounded-xl border border-[#E2E8F0] overflow-hidden shadow-sm">
-                  <div className={`px-4 py-3 border-b border-[#E2E8F0] flex items-center justify-between gap-3 ${
-                    selLoad.component === 'lec' ? 'border-l-[3px] border-l-[#1D5BD6]' : 'border-l-[3px] border-l-amber-500'
-                  }`}>
-                    <div className="flex items-center gap-3">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-bold text-[#0B2A5B]">{selLoad.load.subject_code}</span>
-                          <span className={`text-[13px] font-bold px-2 py-0.5 rounded-full border ${
-                            selLoad.component === 'lec'
-                              ? 'bg-[#EFF6FF] text-[#1D5BD6] border-[#BFDBFE]'
-                              : 'bg-amber-50 text-amber-700 border-amber-200'
-                          }`}>
-                            {selLoad.label === 'Lec' ? 'Lecture' : 'Laboratory'}
+                {/* Subject — what is being scheduled, in one card: identity left, totals right */}
+                <div className={`bg-white rounded-xl border border-[#E2E8F0] shadow-sm overflow-hidden border-l-[4px] ${
+                  selLoad.component === 'lec' ? 'border-l-[#1D5BD6]' : 'border-l-amber-500'
+                }`}>
+                  <div className="px-4 sm:px-5 py-4 flex flex-col md:flex-row md:items-center gap-4">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-lg font-bold text-[#0B2A5B] leading-tight">{selLoad.load.subject_code}</span>
+                        {selLoad.load.block_name && (
+                          <span
+                            className="text-[12px] font-bold px-2 py-0.5 rounded-md bg-[#1E4FB8] leading-tight"
+                            // White set inline — the light-mode rule repaints `text-white` as dark ink
+                            style={{ color: '#FFFFFF' }}
+                            title={`Block ${selLoad.load.block_name}`}
+                          >
+                            {blockCode(selLoad.load.year_level, selLoad.load.block_name)}
                           </span>
-                        </div>
-                        <div className="text-[13px] text-[#64748B] mt-0.5 truncate max-w-[320px]">{selLoad.load.subject_name}</div>
+                        )}
+                        <span className={`inline-flex items-center gap-1 text-[12px] font-bold px-2 py-0.5 rounded-full border ${
+                          selLoad.component === 'lec'
+                            ? 'bg-[#EFF6FF] text-[#1D5BD6] border-[#BFDBFE]'
+                            : 'bg-amber-50 text-amber-700 border-amber-200'
+                        }`}>
+                          {selLoad.component === 'lec' ? <BookOpen className="w-3.5 h-3.5" /> : <Monitor className="w-3.5 h-3.5" />}
+                          {selLoad.label === 'Lec' ? 'Lecture' : 'Laboratory'}
+                        </span>
+                        {selLoad.splitLabel && (
+                          <span className={`text-[12px] font-bold px-2 py-0.5 rounded-full border ${
+                            selLoad.splitLabel === 'Overload' ? 'bg-orange-50 text-orange-700 border-orange-200'
+                              : selLoad.splitLabel === 'Praise' ? 'bg-yellow-50 text-yellow-800 border-yellow-300'
+                              : 'bg-slate-50 text-slate-500 border-slate-200'
+                          }`}>{selLoad.splitLabel}</span>
+                        )}
+                      </div>
+                      <div className="mt-1 text-[14px] text-[#475569] leading-snug truncate" title={selLoad.load.subject_name}>{selLoad.load.subject_name}</div>
+                      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-[#64748B]">
+                        {[selLoad.load.program_code, selLoad.load.year_level, selLoad.load.block_semester, `${toNum(selLoad.componentUnits).toFixed(2)} units`]
+                          .filter(Boolean)
+                          .map((t, i) => (
+                            <Fragment key={i}>
+                              {i > 0 && <span className="text-[#CBD5E1]" aria-hidden>•</span>}
+                              <span>{t}</span>
+                            </Fragment>
+                          ))}
                       </div>
                     </div>
-                  </div>
-                  <div className="grid grid-cols-3 divide-x divide-[#E2E8F0]">
-                    {[
-                      { label: 'Component Hrs', value: fmtHrs(toNum(selLoad.componentHours)) },
-                      { label: 'Sessions',      value: String(sessions.length || '—') },
-                      { label: 'Hrs / Session', value: sessions.length > 0 ? fmtHrs(toNum(sessions[0].hours)) : '—' },
-                    ].map(({ label, value }) => (
-                      <div key={label} className="px-4 py-2.5 text-center">
-                        <div className="text-[13px] text-[#64748B] mb-0.5">{label}</div>
-                        <div className="font-bold text-[#0B2A5B] text-base">{value}</div>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="px-4 py-2.5 bg-[#F8FAFC] border-t border-[#E2E8F0] flex items-center gap-4 text-sm text-[#64748B] flex-wrap">
-                    <span><span className="text-[#94A3B8]">Block:</span> <span className="font-semibold text-[#475569]">{blockCode(selLoad.load.year_level, selLoad.load.block_name)}</span></span>
-                    <span><span className="text-[#94A3B8]">Year:</span> <span className="font-semibold text-[#475569]">{selLoad.load.year_level}</span></span>
-                    <span><span className="text-[#94A3B8]">Sem:</span> <span className="font-semibold text-[#475569]">{selLoad.load.block_semester}</span></span>
-                    <span><span className="text-[#94A3B8]">Program:</span> <span className="font-semibold text-[#475569]">{selLoad.load.program_code}</span></span>
-                    <span><span className="text-[#94A3B8]">Units:</span> <span className="font-semibold text-[#475569]">{toNum(selLoad.componentUnits).toFixed(2)}</span></span>
+                    {/* Totals for this part */}
+                    <div className="grid grid-cols-3 gap-2 md:w-[330px] flex-shrink-0">
+                      {[
+                        { label: 'Total', value: fmtHrs(toNum(selLoad.componentHours)) },
+                        { label: 'Sessions', value: String(sessions.length || manualCount) },
+                        {
+                          label: 'Each',
+                          value: sessions.length === 0 ? '—'
+                            : sessions.every(s => Math.abs(toNum(s.hours) - toNum(sessions[0].hours)) < 0.001) ? fmtHrs(toNum(sessions[0].hours)) : 'Varies',
+                        },
+                      ].map(({ label, value }) => (
+                        <div key={label} className="rounded-lg bg-[#F8FAFC] border border-[#E8EEF6] px-2.5 py-2 text-center">
+                          <div className="text-[11px] font-semibold uppercase tracking-wide text-[#64748B]">{label}</div>
+                          <div className="text-[15px] font-bold text-[#0B2A5B] tabular-nums mt-0.5 whitespace-nowrap">{value}</div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
 
@@ -2780,11 +2743,13 @@ export default function SchedulingClient() {
                   </div>
                 )}
 
-                {/* Day combination (semester setting) + session count */}
-                <div className="bg-white rounded-xl border border-[#E2E8F0] p-3.5 shadow-sm space-y-3">
+                {/* Meeting days (the semester's day combinations) and sessions per week */}
+                <div className="bg-white rounded-xl border border-[#E2E8F0] p-4 shadow-sm space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-end gap-4 sm:gap-10">
                   {dayCombos.length > 0 && (
+                    <div className="min-w-0">
+                    <StepLabel>Meeting days</StepLabel>
                     <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Day combination">
-                      <span className="text-sm font-bold text-[#64748B] uppercase tracking-widest mr-1">Days</span>
                       {dayCombos.map(c => {
                         const on = currentCombo === c;
                         return (
@@ -2795,7 +2760,7 @@ export default function SchedulingClient() {
                             whileTap={reduceMotion ? undefined : { scale: 0.95 }}
                             aria-pressed={on}
                             title={daysLabel(c.days)}
-                            className={`relative h-9 px-3 rounded-lg border text-sm font-bold transition-colors ${
+                            className={`relative h-10 min-w-[56px] px-4 rounded-lg border text-sm font-bold transition-colors ${
                               on ? 'border-[#0B2A5B]' : 'bg-white border-[#D6E0EF] text-[#0B2A5B] hover:border-[#9DB8E8] hover:bg-[#F8FAFE]'
                             }`}
                             style={on ? { color: '#FFFFFF' } : undefined}
@@ -2809,16 +2774,25 @@ export default function SchedulingClient() {
                         );
                       })}
                     </div>
-                  )}
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm font-bold text-[#64748B] uppercase tracking-widest">Sessions</span>
-                    <div className="flex items-center gap-1.5">
-                      <button onClick={() => setManualCount(c => Math.max(1, c - 1))}
-                        className="w-9 h-9 rounded-lg bg-[#F1F5F9] border border-[#E2E8F0] flex items-center justify-center text-[#475569] hover:bg-[#E2E8F0] transition text-lg font-bold">−</button>
-                      <span className="w-10 text-center text-base font-bold text-[#0B2A5B]">{sessions.length > 0 ? sessions.length : manualCount}</span>
-                      <button onClick={() => setManualCount(c => c + 1)}
-                        className="w-9 h-9 rounded-lg bg-[#F1F5F9] border border-[#E2E8F0] flex items-center justify-center text-[#475569] hover:bg-[#E2E8F0] transition text-lg font-bold">+</button>
                     </div>
+                  )}
+                  <div>
+                    <StepLabel>Sessions per week</StepLabel>
+                    {/* One joined stepper: − count + */}
+                    <div className="inline-flex items-stretch h-10 rounded-lg border border-[#D6E0EF] bg-white overflow-hidden">
+                      <motion.button type="button" onClick={() => setManualCount(c => Math.max(1, c - 1))}
+                        whileTap={reduceMotion ? undefined : { scale: 0.92 }}
+                        aria-label="Fewer sessions" title="Fewer sessions"
+                        className="w-10 flex items-center justify-center text-[#475569] hover:bg-[#F1F5F9] transition-colors text-lg font-bold">−</motion.button>
+                      <span className="w-12 flex items-center justify-center text-base font-bold text-[#0B2A5B] border-x border-[#E2E8F0] tabular-nums" aria-live="polite">
+                        {sessions.length > 0 ? sessions.length : manualCount}
+                      </span>
+                      <motion.button type="button" onClick={() => setManualCount(c => c + 1)}
+                        whileTap={reduceMotion ? undefined : { scale: 0.92 }}
+                        aria-label="More sessions" title="More sessions"
+                        className="w-10 flex items-center justify-center text-[#475569] hover:bg-[#F1F5F9] transition-colors text-lg font-bold">+</motion.button>
+                    </div>
+                  </div>
                   </div>
                   {comboError && (
                     <p className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-[13px] text-red-700">
@@ -2830,20 +2804,22 @@ export default function SchedulingClient() {
                 {/* SESSION TABLE */}
                 {sessions.length > 0 && (
                   <div className="bg-white rounded-xl border border-[#E2E8F0] overflow-hidden shadow-sm">
-                    <div className="px-4 py-2.5 border-b border-[#E2E8F0] bg-[#F8FAFC]">
-                      <span className="text-xs font-bold text-[#64748B] uppercase tracking-widest">Session Schedule</span>
+                    <div className="px-4 py-3 border-b border-[#E2E8F0] flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+                      <StepLabel className="!mb-0">Session schedule</StepLabel>
+                      {sessions.length > 1 && (
+                        <span className="text-xs text-[#64748B]">Session 1&apos;s time and room fill the others — change any row on its own.</span>
+                      )}
                     </div>
 
                     <div className="overflow-x-auto">
                       <table className="w-full text-[13px]">
                         <thead>
-                          <tr className="bg-[#F8FAFC] text-[11px] font-semibold text-[#64748B] uppercase tracking-wider border-b border-[#E2E8F0]">
-                            <th className="px-3 py-2.5 text-left w-14">Ses.</th>
-                            <th className="px-3 py-2.5 text-left w-24">Hours</th>
+                          <tr className="bg-[#F8FAFC] text-[11px] font-bold text-[#64748B] uppercase tracking-wider border-b border-[#E2E8F0]">
+                            <th className="px-4 py-2.5 text-left w-32">Session</th>
                             <th className="px-3 py-2.5 text-left">Day</th>
                             <th className="px-3 py-2.5 text-left">Time</th>
                             <th className="px-3 py-2.5 text-left">Room</th>
-                            <th className="px-3 py-2.5 text-center w-12">Del</th>
+                            <th className="px-3 py-2.5 w-12"><span className="sr-only">Remove</span></th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-[#F1F5F9]">
@@ -2851,20 +2827,24 @@ export default function SchedulingClient() {
                             const rowConflicts = sessionConflicts.filter(c => c.sessionId === sess.id);
                             const hasRowConflict = rowConflicts.length > 0;
                             return (
-                            <tr key={sess.id} className={`transition ${hasRowConflict ? 'bg-red-50 border-l-[3px] border-l-red-500' : 'hover:bg-[#F8FAFC]'}`}>
-                              <td className="px-3 py-2.5">
-                                <div className="flex items-center gap-1.5">
-                                  <span className="font-bold text-[#475569]">{i + 1}</span>
-                                  {hasRowConflict && <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />}
+                            <tr key={sess.id} className={`transition-colors ${hasRowConflict ? 'bg-red-50 shadow-[inset_3px_0_0_#EF4444]' : 'hover:bg-[#F8FAFC]'}`}>
+                              {/* Session number and its length */}
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-2.5">
+                                  <span className={`w-7 h-7 rounded-full flex items-center justify-center text-[13px] font-bold flex-shrink-0 ${
+                                    hasRowConflict ? 'bg-red-100 text-red-700' : 'bg-[#EAF1FD] text-[#1D5BD6]'
+                                  }`}>{i + 1}</span>
+                                  <div className="leading-tight">
+                                    <div className="text-[13px] font-semibold text-[#334155] whitespace-nowrap tabular-nums">{fmtHrs(toNum(sess.hours))}</div>
+                                    {hasRowConflict && (
+                                      <div className="mt-0.5 inline-flex items-center gap-1 text-[11px] font-semibold text-red-600">
+                                        <AlertCircle className="w-3 h-3" /> Conflict
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
                               </td>
-                              <td className="px-3 py-2.5">
-                                <div className="flex flex-col gap-0.5">
-                                  <span className="font-semibold tabular-nums text-[#475569]">{parseFloat(String(sess.hours)).toFixed(2)} hr</span>
-                                  <span className="text-xs text-[#94A3B8]">{toNum(selLoad.componentHours)} hrs ÷ {sessions.length}</span>
-                                </div>
-                              </td>
-                              <td className="px-3 py-2.5">
+                              <td className="px-3 py-3">
                                 <DayPicker
                                   value={sess.day}
                                   onChange={d => updateSession(sess.id, 'day', d)}
@@ -2880,7 +2860,7 @@ export default function SchedulingClient() {
                                   })}
                                 />
                               </td>
-                              <td className="px-3 py-2.5">
+                              <td className="px-3 py-3">
                                 <div className="flex items-center gap-2">
                                   {/* Only times the instructor is free on this day can be picked;
                                       busy ones stay visible (struck through) so gaps make sense. */}
@@ -2899,7 +2879,7 @@ export default function SchedulingClient() {
                                   </span>
                                 </div>
                               </td>
-                              <td className="px-3 py-2.5">
+                              <td className="px-3 py-3">
                                 <RoomPicker
                                   value={sess.room_id}
                                   onChange={v => updateSession(sess.id, 'room_id', v)}
@@ -2910,11 +2890,13 @@ export default function SchedulingClient() {
                                   warnEmpty={selLoad.component === 'lab'}
                                 />
                               </td>
-                              <td className="px-3 py-2.5 text-center">
-                                <button onClick={() => removeSession(sess.id)}
-                                  className="w-8 h-8 rounded-lg border border-red-200 text-red-500 hover:bg-red-50 flex items-center justify-center transition mx-auto">
+                              <td className="px-3 py-3 text-center">
+                                <motion.button type="button" onClick={() => removeSession(sess.id)}
+                                  whileTap={reduceMotion ? undefined : { scale: 0.9 }}
+                                  aria-label={`Remove session ${i + 1}`} title={`Remove session ${i + 1}`}
+                                  className="w-9 h-9 rounded-lg border border-transparent text-[#94A3B8] hover:text-red-600 hover:bg-red-50 hover:border-red-200 flex items-center justify-center transition-colors mx-auto">
                                   <Trash2 className="w-4 h-4" />
-                                </button>
+                                </motion.button>
                               </td>
                             </tr>
                             );
@@ -2922,11 +2904,6 @@ export default function SchedulingClient() {
                         </tbody>
                       </table>
                     </div>
-                    {sessions.length > 1 && (
-                      <p className="px-4 py-2.5 text-xs text-[#64748B] border-t border-[#F1F5F9]">
-                        Session 1&apos;s time and room fill the other sessions — change any row to set it on its own.
-                      </p>
-                    )}
                   </div>
                 )}
 
@@ -2989,8 +2966,9 @@ export default function SchedulingClient() {
                   </div>
                 )}
 
-                {/* Actions */}
-                <div className="flex items-center gap-3 flex-wrap">
+                {/* Actions — checks on the left, the one main action (Save) on the right */}
+                <div className="bg-white rounded-xl border border-[#E2E8F0] shadow-sm p-3 flex flex-col sm:flex-row sm:items-center gap-3">
+                  <div className="flex items-center gap-2 flex-wrap">
                   <button onClick={runConflictCheck} disabled={sessions.length === 0 || checkingConflicts}
                     className={[
                       'flex items-center gap-2 px-4 py-2.5 rounded-xl border text-sm font-semibold transition',
@@ -3015,10 +2993,11 @@ export default function SchedulingClient() {
                     className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-[#E2E8F0] text-sm font-semibold text-[#475569] bg-white hover:bg-[#F8FAFC] disabled:opacity-40 disabled:cursor-not-allowed transition">
                     <RefreshCw className="w-4 h-4" /> Clear All
                   </button>
+                  </div>
 
                   <button onClick={handleSave} disabled={!canSave || checkingConflicts}
                     className={[
-                      'flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold text-white transition',
+                      'sm:ml-auto sm:min-w-[300px] flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-sm font-bold text-white transition',
                       !canSave || checkingConflicts ? 'bg-[#CBD5E1] cursor-not-allowed' : 'qr-btn-soft',
                     ].join(' ')}>
                     {saving
@@ -3212,242 +3191,19 @@ export default function SchedulingClient() {
         </div>
       )}
 
-      {/* ── Schedule Preview (Eye icon) ─────────────────
-          Balanced ease: backdrop fades while the card rises + scales in
-          (~0.45s); closing plays the reverse a little quicker (~0.3s). */}
-      <AnimatePresence>
-      {previewRow && (() => {
-        const comp = previewRow.component;
-        const typeLabel = comp === 'lec' ? 'Lecture' : 'Laboratory';
-        const instructorCount = subjectInstructors
-          ? new Set(subjectInstructors.map(si => si.faculty_id)).size
-          : 0;
-        const meetings = viewingInstructor ? getInstructorMeetings(viewingInstructor, comp) : [];
-        const ease = [0.4, 0, 0.2, 1] as const;
-        // List <-> schedule: slide in from the side you're heading to, out the other way
-        const previewSlide = {
-          enter: (dir: number) => (reduceMotion ? { opacity: 1 } : { opacity: 0, x: 28 * dir }),
-          center: { opacity: 1, x: 0, transition: { duration: reduceMotion ? 0 : 0.3, ease } },
-          exit: (dir: number) => (reduceMotion ? { opacity: 1 } : { opacity: 0, x: -28 * dir, transition: { duration: 0.2, ease } }),
-        };
-        // Cards settle in one after another
-        const cardIn = (i: number) => ({
-          initial: reduceMotion ? false : { opacity: 0, y: 10 },
-          animate: { opacity: 1, y: 0, transition: { duration: reduceMotion ? 0 : 0.3, ease, delay: reduceMotion ? 0 : 0.06 * i } },
-        }) as const;
-        return (
-          <motion.div
-            key="row-preview"
-            initial={reduceMotion ? false : { opacity: 0 }}
-            animate={{ opacity: 1, transition: { duration: reduceMotion ? 0 : 0.4, ease } }}
-            exit={{ opacity: 0, transition: { duration: reduceMotion ? 0 : 0.3, ease } }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-[rgba(15,23,42,0.35)]"
-            data-modal-root
-            onClick={() => setPreviewRow(null)}
-            role="presentation"
-          >
-            <motion.div
-              initial={reduceMotion ? false : { opacity: 0, y: 18, scale: 0.96 }}
-              animate={{ opacity: 1, y: 0, scale: 1, transition: { duration: reduceMotion ? 0 : 0.45, ease, delay: reduceMotion ? 0 : 0.05 } }}
-              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 12, scale: 0.97, transition: { duration: 0.3, ease } }}
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="row-preview-title"
-              onClick={e => e.stopPropagation()}
-              className="bg-white border border-[#E2E8F0] rounded-2xl shadow-xl w-full max-w-md max-h-[85vh] flex flex-col overflow-hidden"
-            >
-              {/* Header: icon + "CODE • Lecture", subject name below, divider inset from the edges.
-                  List view also shows how many faculty handle the subject;
-                  schedule view swaps the subject icon for a back arrow. */}
-              <div className="px-5 pt-5 flex-shrink-0">
-                <div className="flex items-start justify-between gap-3 pb-4 border-b border-[#E2E8F0]">
-                  <div className="flex items-start gap-3 min-w-0">
-                    <div className="w-7 h-7 -ml-1 flex items-center justify-center flex-shrink-0">
-                      <AnimatePresence mode="wait" initial={false}>
-                        {viewingInstructor ? (
-                          <motion.button
-                            key="back"
-                            type="button"
-                            onClick={closeInstructorSchedule}
-                            aria-label="Back to faculty"
-                            initial={reduceMotion ? false : { opacity: 0, x: 8, scale: 0.8 }}
-                            animate={{ opacity: 1, x: 0, scale: 1, transition: { duration: reduceMotion ? 0 : 0.25, ease } }}
-                            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: 8, scale: 0.8, transition: { duration: 0.18, ease } }}
-                            whileHover={reduceMotion ? undefined : { x: -2 }}
-                            whileTap={reduceMotion ? undefined : { scale: 0.9 }}
-                            className="p-1 rounded-lg text-[#1D5BD6] hover:bg-[#EAF1FC] transition-colors"
-                          >
-                            <ChevronLeft className="w-5 h-5" />
-                          </motion.button>
-                        ) : (
-                          <motion.span
-                            key="icon"
-                            initial={reduceMotion ? false : { opacity: 0, scale: 0.8 }}
-                            animate={{ opacity: 1, scale: 1, transition: { duration: reduceMotion ? 0 : 0.25, ease } }}
-                            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.8, transition: { duration: 0.18, ease } }}
-                            className="inline-flex"
-                          >
-                            {comp === 'lec'
-                              ? <BookOpen className="w-5 h-5 text-[#1D5BD6]" />
-                              : <Monitor className="w-5 h-5 text-amber-600" />}
-                          </motion.span>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h3 id="row-preview-title" className="text-base font-bold text-[#0B2A5B] leading-snug">
-                          {previewRow.load.subject_code} • {typeLabel}
-                        </h3>
-                        <AnimatePresence initial={false}>
-                          {!viewingInstructor && subjectInstructors && instructorCount > 0 && (
-                            <motion.span
-                              key="count-badge"
-                              initial={reduceMotion ? false : { opacity: 0, scale: 0.85 }}
-                              animate={{ opacity: 1, scale: 1, transition: { duration: reduceMotion ? 0 : 0.25, ease } }}
-                              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.85, transition: { duration: 0.18, ease } }}
-                              className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-[#EAF1FC] text-[#1D5BD6] border border-[#BFD3F5]"
-                            >
-                              {instructorCount} Assigned
-                            </motion.span>
-                          )}
-                        </AnimatePresence>
-                      </div>
-                      <p className="text-sm text-[#64748B] mt-0.5">
-                        {previewRow.load.subject_name}
-                        {!viewingInstructor && subjectInstructors && (
-                          <> • {instructorCount} Assigned Faculty</>
-                        )}
-                      </p>
-                    </div>
-                  </div>
-                  <motion.button
-                    type="button"
-                    onClick={() => setPreviewRow(null)}
-                    aria-label="Close"
-                    whileHover={reduceMotion ? undefined : { rotate: 90 }}
-                    whileTap={reduceMotion ? undefined : { scale: 0.9 }}
-                    transition={{ duration: 0.2, ease }}
-                    className="p-1.5 -mr-1.5 -mt-1 rounded-lg hover:bg-[#F1F5F9] text-[#64748B] hover:text-[#0B2A5B] transition-colors flex-shrink-0"
-                  >
-                    <X className="w-5 h-5" />
-                  </motion.button>
-                </div>
-              </div>
-
-              {/* Body height glides between the list and a schedule; the views
-                  slide sideways — forward to a schedule, back to the list. */}
-              <AutoHeight className="min-h-0 overflow-y-auto overflow-x-hidden" reduceMotion={!!reduceMotion}>
-                <AnimatePresence mode="wait" initial={false} custom={previewNavDir}>
-                  <motion.div
-                    key={viewingInstructor ? `sched-${viewingInstructor.ms_id}` : 'list'}
-                    custom={previewNavDir}
-                    variants={previewSlide}
-                    initial="enter"
-                    animate="center"
-                    exit="exit"
-                    className="px-5 py-4 space-y-3"
-                  >
-                {!viewingInstructor ? (
-                  /* ── List: every instructor handling this subject ── */
-                  subjectInstructors === null ? (
-                    <div className="flex items-center justify-center gap-2 py-8 text-sm text-[#64748B]">
-                      <Loader2 className="w-4 h-4 animate-spin text-[#1D5BD6]" /> Loading faculty…
-                    </div>
-                  ) : subjectInstructorsError ? (
-                    <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-2xl px-4 py-3.5">
-                      {subjectInstructorsError}
-                    </div>
-                  ) : subjectInstructors.length === 0 ? (
-                    <div className="text-sm text-[#94A3B8] italic bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl px-4 py-3.5">
-                      No faculty are assigned to this subject yet.
-                    </div>
-                  ) : (
-                    subjectInstructors.map((si, i) => {
-                      const isCurrent = si.faculty_id === selFaculty?.id;
-                      return (
-                        <motion.div
-                          key={si.ms_id}
-                          {...cardIn(i)}
-                          className={`flex items-center gap-3.5 border rounded-2xl px-4 py-3.5 transition-colors hover:border-[#BFD3F5] ${
-                            isCurrent ? 'bg-[#F5F9FF] border-[#BFD3F5]' : 'bg-[#F8FAFC] border-[#E2E8F0]'
-                          }`}
-                        >
-                          <div className="w-11 h-11 rounded-xl bg-[#EAF1FC] border border-[#D6E3F8] flex items-center justify-center flex-shrink-0">
-                            <BookOpen className="w-5 h-5 text-[#1D5BD6]" />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="text-xs text-[#64748B] flex items-center gap-1.5">
-                              Faculty
-                              {isCurrent && (
-                                <span className="text-[10px] font-semibold px-1.5 py-px rounded-full bg-[#DCE8FC] text-[#164BB5]">Current</span>
-                              )}
-                            </div>
-                            <div className="text-[15px] font-bold text-[#0B2A5B] truncate">{si.faculty_name}</div>
-                            <div className="text-xs text-[#64748B] truncate">
-                              {[si.program_code, blockCode(si.year_level, si.block_name)].filter(Boolean).join(' · ')}
-                            </div>
-                          </div>
-                          <motion.button
-                            type="button"
-                            onClick={() => openInstructorSchedule(si)}
-                            whileHover={reduceMotion ? undefined : { y: -1 }}
-                            whileTap={reduceMotion ? undefined : { scale: 0.95 }}
-                            transition={{ duration: 0.18, ease }}
-                            className="group flex-shrink-0 inline-flex items-center gap-1 pl-3.5 pr-2.5 py-2 rounded-full border border-[#1D5BD6] text-[#1D5BD6] text-[13px] font-semibold hover:bg-[#EAF1FC] hover:shadow-[0_6px_14px_-8px_rgba(29,91,214,0.6)] transition-[background-color,box-shadow]"
-                          >
-                            View Schedule
-                            <ChevronRight className="w-4 h-4 transition-transform duration-200 group-hover:translate-x-0.5" />
-                          </motion.button>
-                        </motion.div>
-                      );
-                    })
-                  )
-                ) : (
-                <>
-                {/* Instructor card */}
-                <motion.div {...cardIn(0)} className="flex items-center gap-3.5 bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl px-4 py-3.5">
-                  <div className="w-11 h-11 rounded-xl bg-[#EAF1FC] border border-[#D6E3F8] flex items-center justify-center flex-shrink-0">
-                    <Users className="w-5 h-5 text-[#1D5BD6]" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-xs text-[#64748B]">Faculty</div>
-                    <div className="text-[15px] font-bold text-[#0B2A5B] truncate">{viewingInstructor.faculty_name}</div>
-                    <div className="text-xs text-[#64748B] truncate">
-                      {[viewingInstructor.program_code, blockCode(viewingInstructor.year_level, viewingInstructor.block_name)].filter(Boolean).join(' · ')}
-                    </div>
-                  </div>
-                </motion.div>
-
-                {meetings.length === 0 ? (
-                  <motion.div {...cardIn(1)} className="text-sm text-[#94A3B8] italic bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl px-4 py-3.5">
-                    Not yet scheduled — no day, time, or room assigned.
-                  </motion.div>
-                ) : (
-                  meetings.map((m, i) => (
-                    <motion.div key={i} {...cardIn(i + 1)} className="flex items-center gap-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl px-4 py-3.5">
-                      <Clock className="w-4 h-4 text-[#64748B] flex-shrink-0" />
-                      <div className="min-w-0">
-                        <div className="text-[15px] font-bold text-[#0B2A5B] leading-tight">{m.day}</div>
-                        <div className="text-[13px] text-[#64748B] tabular-nums mt-0.5">{m.time}</div>
-                      </div>
-                      <span className={`ml-auto flex items-center gap-1.5 text-[13px] text-right min-w-0 ${m.room === 'No room assigned' ? 'text-[#64748B]' : 'font-semibold text-[#0B2A5B]'}`}>
-                        <MapPin className="w-4 h-4 text-[#64748B] flex-shrink-0" />
-                        <span className="truncate">{m.room}</span>
-                      </span>
-                    </motion.div>
-                  ))
-                )}
-                </>
-                )}
-                  </motion.div>
-                </AnimatePresence>
-              </AutoHeight>
-            </motion.div>
-          </motion.div>
-        );
-      })()}
-      </AnimatePresence>
+      {/* ── Schedule Preview (Eye icon / timetable class) — who handles this
+          subject, shared with the Master Schedule ── */}
+      <SubjectFacultyPreview
+        subject={previewRow
+          ? { code: previewRow.load.subject_code, name: previewRow.load.subject_name, component: previewRow.component }
+          : null}
+        semester={semester}
+        academicYear={schoolYear}
+        openMsId={previewOpenMs}
+        currentFacultyId={selFaculty?.id ?? null}
+        currentMsId={previewRow?.load.ms_id ?? null}
+        onClose={closePreview}
+      />
     </div>
   );
 }

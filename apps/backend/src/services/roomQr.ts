@@ -19,9 +19,14 @@ export async function ensureRoomQrColumn() {
 
 export const hasQr = (qrCodeData: unknown) => typeof qrCodeData === 'string' && qrCodeData.startsWith('data:image/');
 
-/** Issue a fresh QR for a room (new id → any old printed copy stops working). */
-export async function generateRoomQr(room: { id: number; room_name: string; room_type: string }) {
-  await ensureRoomQrColumn();
+type Queryable = (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>;
+
+/**
+ * Issue a fresh QR for a room (new id → any old printed copy stops working).
+ * Pass `q` to write through an open transaction (e.g. a room it just created).
+ */
+export async function generateRoomQr(room: { id: number; room_name: string; room_type: string }, q: Queryable = query) {
+  if (q === query) await ensureRoomQrColumn(); // a transaction caller has the column already
   const qrCodeId = `QR-${room.room_type.slice(0, 3).toUpperCase()}-${uuidv4().replace(/-/g, '').slice(0, 12).toUpperCase()}`;
   const qrDataUrl = await QRCode.toDataURL(JSON.stringify({ type: 'room', code: qrCodeId, room: room.room_name }), {
     width: 400,
@@ -29,7 +34,7 @@ export async function generateRoomQr(room: { id: number; room_name: string; room
     color: { dark: '#000000', light: '#ffffff' },
     errorCorrectionLevel: 'H',
   });
-  const res = await query(
+  const res = await q(
     `UPDATE rooms SET qr_code_id = $1, qr_code_data = $2, qr_generated_at = NOW() WHERE id = $3
      RETURNING qr_generated_at`,
     [qrCodeId, qrDataUrl, room.id],

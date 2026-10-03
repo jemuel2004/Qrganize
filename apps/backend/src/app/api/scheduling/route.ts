@@ -6,6 +6,7 @@ import { findOverlappingSessions, findScheduleConflicts, validateSessions, type 
 import { termDayCombinationError } from '@/services/dayCombinations';
 import { withAudit } from '@/services/audit';
 import { ensureSessionTypes } from '@/services/sessionTypeRepair';
+import { ensureFacultyActivitiesTable } from '@/database/facultyActivitiesSchema';
 
 /* Run once per cold start — avoids DDL + migration overhead on every POST */
 let schedSchemaReady   = false;
@@ -240,6 +241,7 @@ async function POST_handler(req: NextRequest) {
     // Ensure type column + legacy migration run once per cold start, not per request
     await ensureSchedSchema();
     await ensureSessionTypes();
+    await ensureFacultyActivitiesTable();
 
     // ── Atomic save (transaction) ───────────────────────────────────────────
     // DELETE + INSERT + UPDATE are all-or-nothing: a mid-save failure rolls

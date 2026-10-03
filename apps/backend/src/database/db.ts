@@ -1,4 +1,5 @@
 import { Pool, PoolClient } from 'pg';
+import { APP_TIMEZONE } from '@/services/appTimezone';
 
 const isProd = process.env.NODE_ENV === 'production';
 
@@ -30,12 +31,43 @@ const pool = new Pool({
   idleTimeoutMillis: isProd ? 30_000 : 10_000,
 });
 
+// Every connection works in Philippine time, whatever the database server's
+// default (hosted databases usually run in UTC). CURRENT_DATE / LOCALTIME and
+// naive TIMESTAMP columns written with NOW() (scan times, created_at) then
+// line up with the Manila dates and class times the rest of the app uses.
+// Set once per new connection and awaited before its first query (a query
+// sent while another is still running on the same client is deprecated in pg).
+const zoned = new WeakSet<PoolClient>();
+
+/** A pooled client in Philippine time — release() it when done */
+export async function connectClient(): Promise<PoolClient> {
+  const client = await pool.connect();
+  if (!zoned.has(client)) {
+    try {
+      await client.query(`SET TIME ZONE '${APP_TIMEZONE}'`);
+      zoned.add(client);
+    } catch (err) {
+      console.error('[db] Could not set the session time zone:', (err as Error).message);
+    }
+  }
+  return client;
+}
+
 export async function query(text: string, params?: unknown[]) {
-  return pool.query(text, params);
+  const client = await connectClient();
+  try {
+    const result = await client.query(text, params);
+    client.release();
+    return result;
+  } catch (err) {
+    // Like pool.query: a connection that failed a query is not reused
+    client.release(err as Error);
+    throw err;
+  }
 }
 
 export async function transaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
+  const client = await connectClient();
   try {
     await client.query('BEGIN');
     const result = await fn(client);

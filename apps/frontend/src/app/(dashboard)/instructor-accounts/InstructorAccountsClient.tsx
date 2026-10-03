@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '@/context/ToastContext';
 import { useRealtime } from '@/context/RealtimeContext';
 import Modal from '@/components/ui/Modal';
@@ -15,9 +15,10 @@ import {
   ShieldX, KeyRound, User, X, AlertTriangle, CheckCircle2,
   Upload, Camera, ChevronDown, MoreHorizontal,
 } from 'lucide-react';
-import { motion, useReducedMotion } from 'framer-motion';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import AnchoredPopover from '@/components/ui/AnchoredPopover';
 import { SearchInput, FilterSelect } from '@/components/ui/SearchFilter';
+import CountFilterTabs from '@/components/ui/CountFilterTabs';
 import SubjectMultiSelect, { type PrioritySubject } from '@/components/ui/SubjectMultiSelect';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -68,6 +69,10 @@ const emptyForm = {
   username: '', email: '', password: '', confirmPassword: '',
   priority_subjects: [] as PrioritySubject[],
 };
+
+type StatusTab = 'all' | 'active' | 'inactive';
+
+const EASE = [0.16, 1, 0.3, 1] as const;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -215,11 +220,13 @@ function FormField({ label, id, type = 'text', value, onChange, placeholder, err
 
 export default function InstructorAccountsClient() {
   const toast = useToast();
+  const reduceMotion = useReducedMotion();
   const [accounts, setAccounts] = useState<InstructorAccount[]>([]);
   const [programs, setPrograms] = useState<Program[]>([]);
   const [loading, setLoading]   = useState(true);
   const [search, setSearch]     = useState('');
-  const [filterStatus, setFilterStatus]     = useState('');
+  /** Status tab — applied on screen, so every tab keeps its count */
+  const [filterStatus, setFilterStatus]     = useState<StatusTab>('all');
   const [filterPosition, setFilterPosition] = useState('');
   const showSkeleton = useMinLoading(loading && accounts.length === 0, LOADING_DELAY);
   const [showSaveSkeleton, setShowSaveSkeleton] = useState(false);
@@ -273,14 +280,23 @@ export default function InstructorAccountsClient() {
     if (!silent) setLoading(true);
     const p = new URLSearchParams();
     if (search)         p.set('search', search);
-    if (filterStatus)   p.set('status', filterStatus);
     if (filterPosition) p.set('position', filterPosition);
     return fetch('/api/instructor-accounts?' + p.toString())
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d && seq === accountsSeq.current) setAccounts(d.accounts || []); })
       .catch(() => {})
       .finally(() => { if (!silent && seq === accountsSeq.current) setLoading(false); });
-  }, [search, filterStatus, filterPosition]);
+  }, [search, filterPosition]);
+
+  const statusCount = useMemo(() => {
+    const active = accounts.filter(a => a.is_active).length;
+    return { all: accounts.length, active, inactive: accounts.length - active };
+  }, [accounts]);
+  const shown = useMemo(
+    () => (filterStatus === 'all' ? accounts : accounts.filter(a => a.is_active === (filterStatus === 'active'))),
+    [accounts, filterStatus],
+  );
+  const filtersOn = !!search || filterStatus !== 'all' || !!filterPosition;
 
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
 
@@ -326,7 +342,7 @@ export default function InstructorAccountsClient() {
       last_name:      a.last_name  || '',
       middle_name:    a.middle_name || '',
       program_id:     a.program_id ? String(a.program_id) : '',
-      position:       a.position,
+      position:       a.position ?? '',
       username:       a.username,
       email:          a.email,
       password:       '',
@@ -578,7 +594,7 @@ export default function InstructorAccountsClient() {
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
-  const uniquePositions = [...new Set(accounts.map(a => a.position))].sort();
+  const uniquePositions = [...new Set(accounts.map(a => a.position).filter(Boolean))].sort();
 
   return (
     <div className="min-h-screen bg-[#0b0f1a] text-white">
@@ -593,20 +609,35 @@ export default function InstructorAccountsClient() {
             <WatermarkTitle>Faculty Accounts</WatermarkTitle>
           </div>
           <div className="flex justify-end">
-            <button
+            <motion.button
               onClick={openCreate}
+              whileHover={reduceMotion ? undefined : { y: -2 }}
+              whileTap={reduceMotion ? undefined : { scale: 0.97 }}
+              transition={{ duration: 0.18, ease: EASE }}
               className="flex items-center gap-2 bg-[#1D5BD6] hover:bg-[#164BB5] px-5 h-11 rounded-xl font-semibold text-[15px] transition-colors shadow-lg shadow-[#1D5BD6]/20"
               style={{ color: '#FFFFFF' }}
             >
-              <Plus className="w-4 h-4" />
+              <Plus className="w-4 h-4" style={{ color: '#FFFFFF' }} />
               Add Faculty Account
-            </button>
+            </motion.button>
           </div>
         </div>
 
-        {/* ── Filters ── */}
-        <div className="bg-white rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.06)] p-5">
-          <div className="flex flex-wrap gap-3">
+        {/* ── Filters: status tabs (with counts), then search · position · clear ── */}
+        <div className="bg-white rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.06)] p-5 space-y-4">
+          <CountFilterTabs<StatusTab>
+            label="Account status"
+            layoutId="faculty-accounts-status"
+            value={filterStatus}
+            onChange={setFilterStatus}
+            options={[
+              { key: 'all', label: 'All', count: statusCount.all, color: '#0B2A5B' },
+              { key: 'active', label: 'Active', count: statusCount.active, color: '#059669', dot: '#10B981' },
+              { key: 'inactive', label: 'Inactive', count: statusCount.inactive, color: '#64748B', dot: '#94A3B8' },
+            ]}
+          />
+
+          <div className="flex flex-wrap items-center gap-3">
             <SearchInput
               value={search}
               onChange={setSearch}
@@ -614,29 +645,30 @@ export default function InstructorAccountsClient() {
               className="flex-1 min-w-[220px]"
             />
 
-            <FilterSelect value={filterStatus} onChange={setFilterStatus} label="Status" className="min-w-[140px]">
-              <option value="">All Status</option>
-              <option value="active">Active</option>
-              <option value="inactive">Inactive</option>
-            </FilterSelect>
-
-            <FilterSelect value={filterPosition} onChange={setFilterPosition} label="Position" className="min-w-[160px]">
+            <FilterSelect value={filterPosition} onChange={setFilterPosition} label="Position" className="min-w-[180px]">
               <option value="">All Positions</option>
               {uniquePositions.map(p => <option key={p} value={p}>{p}</option>)}
             </FilterSelect>
 
-            {(search || filterStatus || filterPosition) && (
-              <button
-                onClick={() => { setSearch(''); setFilterStatus(''); setFilterPosition(''); }}
-                className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm text-slate-500 hover:text-slate-700 border border-slate-200 hover:border-slate-300 bg-white transition-all duration-150"
-              >
-                <X className="w-3.5 h-3.5" /> Clear
-              </button>
-            )}
+            <AnimatePresence initial={false}>
+              {filtersOn && (
+                <motion.button
+                  key="clear"
+                  initial={reduceMotion ? false : { opacity: 0, scale: 0.9, x: -6 }}
+                  animate={{ opacity: 1, scale: 1, x: 0, transition: { duration: 0.2, ease: EASE } }}
+                  exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.9, transition: { duration: 0.15 } }}
+                  whileTap={reduceMotion ? undefined : { scale: 0.95 }}
+                  onClick={() => { setSearch(''); setFilterStatus('all'); setFilterPosition(''); }}
+                  className="flex items-center gap-1.5 px-4 h-11 rounded-xl text-sm font-semibold text-slate-600 hover:text-[#0B2A5B] border border-slate-200 hover:border-[#9DB8E8] bg-white transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" /> Clear
+                </motion.button>
+              )}
+            </AnimatePresence>
           </div>
 
-          <p className="text-xs text-slate-400 mt-3">
-            {tableSkeletonVisible ? 'Loading…' : `${accounts.length} faculty account${accounts.length !== 1 ? 's' : ''} found`}
+          <p className="text-xs text-slate-400" aria-live="polite">
+            {tableSkeletonVisible ? 'Loading…' : `Showing ${shown.length} of ${accounts.length} faculty account${accounts.length !== 1 ? 's' : ''}`}
           </p>
         </div>
 
@@ -646,16 +678,20 @@ export default function InstructorAccountsClient() {
           skeleton={<TableSkeleton cols={7} rows={8} />}
         >
         <div className="bg-[#111827] border border-white/10 rounded-2xl overflow-hidden">
-          {accounts.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20 gap-3">
+          {shown.length === 0 ? (
+            <motion.div
+              initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0, transition: { duration: 0.3, ease: EASE } }}
+              className="flex flex-col items-center justify-center py-20 gap-3"
+            >
               <div className="w-14 h-14 rounded-2xl bg-white/5 flex items-center justify-center">
                 <UserCog className="w-7 h-7 text-slate-600" />
               </div>
               <p className="text-slate-400 font-medium">No faculty accounts found</p>
               <p className="text-slate-600 text-sm">
-                {search || filterStatus || filterPosition ? 'Try adjusting your search or filters.' : 'Click "Add Faculty Account" to create one.'}
+                {filtersOn ? 'Try adjusting your search or filters.' : 'Click "Add Faculty Account" to create one.'}
               </p>
-            </div>
+            </motion.div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -671,13 +707,32 @@ export default function InstructorAccountsClient() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/[0.05]">
-                  {accounts.map(a => (
-                    <tr key={a.faculty_id} className={`transition-colors hover:bg-white/[0.03] ${!a.is_active ? 'opacity-60' : ''}`}>
+                  <AnimatePresence initial={false}>
+                  {shown.map((a, i) => (
+                    <motion.tr
+                      key={a.faculty_id}
+                      // The whole row opens Edit (Enter too); the action buttons keep their own clicks
+                      onClick={() => openEdit(a)}
+                      onKeyDown={e => { if (e.key === 'Enter' && e.target === e.currentTarget) openEdit(a); }}
+                      tabIndex={0}
+                      aria-label={`Edit ${a.name}`}
+                      initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+                      animate={{
+                        opacity: a.is_active ? 1 : 0.6, y: 0,
+                        transition: { duration: 0.28, ease: EASE, delay: reduceMotion ? 0 : Math.min(i, 10) * 0.025 },
+                      }}
+                      exit={reduceMotion ? { opacity: 0 } : { opacity: 0, transition: { duration: 0.15 } }}
+                      // Hover tint follows the theme (globals.css maps hover:bg-white/[0.05] in light mode);
+                      // the royal-blue edge marks the row in both themes
+                      className="group cursor-pointer outline-none transition-[background-color,box-shadow] duration-200 hover:bg-white/[0.05] hover:shadow-[inset_4px_0_0_#1D5BD6] focus-visible:shadow-[inset_4px_0_0_#1D5BD6]"
+                    >
 
                       {/* Instructor */}
                       <td className="px-4 sm:px-5 py-4">
                         <div className="flex items-center gap-3">
-                          <Avatar account={a} size={10} />
+                          <span className="inline-flex rounded-full transition-transform duration-200 group-hover:scale-105">
+                            <Avatar account={a} size={10} />
+                          </span>
                           <div className="min-w-0">
                             <p className="font-semibold text-white leading-tight break-words">{a.name}</p>
                             {a.specialization && (
@@ -717,18 +772,21 @@ export default function InstructorAccountsClient() {
                         <p className="text-slate-600 text-xs mt-0.5">Updated {fmtDate(a.account_updated_at)}</p>
                       </td>
 
-                      {/* Actions */}
-                      <td className="px-3 sm:px-5 py-4">
+                      {/* Actions — clicks here (and in the More menu) don't open the row */}
+                      <td className="px-3 sm:px-5 py-4 cursor-default" onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1.5">
 
                           {/* Edit */}
-                          <button
+                          <motion.button
                             onClick={() => openEdit(a)}
+                            whileHover={reduceMotion ? undefined : { y: -1 }}
+                            whileTap={reduceMotion ? undefined : { scale: 0.95 }}
+                            transition={{ duration: 0.15, ease: EASE }}
                             className="flex items-center gap-1.5 px-3.5 h-9 rounded-lg text-sm font-semibold bg-[#EFF6FF] hover:bg-[#DBEAFE] text-[#1D5BD6] border border-[#BFDBFE] hover:border-[#93C5FD] transition-colors"
                             title="Edit account"
                           >
                             <Pencil className="w-3.5 h-3.5" /> Edit
-                          </button>
+                          </motion.button>
 
                           <RowMoreMenu
                             active={a.is_active}
@@ -740,8 +798,9 @@ export default function InstructorAccountsClient() {
 
                         </div>
                       </td>
-                    </tr>
+                    </motion.tr>
                   ))}
+                  </AnimatePresence>
                 </tbody>
               </table>
             </div>

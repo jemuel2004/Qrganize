@@ -9,7 +9,8 @@ import { useRealtime } from '@/context/RealtimeContext';
 
 /* ─── Types (mirror /api/rooms/utilization) ─────────────────────────────── */
 
-export type View = 'daily' | 'weekly' | 'monthly';
+/** upcoming = `date` and the 7 days after it (a room's schedule on Room Monitoring) */
+export type View = 'daily' | 'weekly' | 'monthly' | 'upcoming';
 export type RowStatus = 'Occupied' | 'Completed' | 'Pending' | 'Not Checked' | 'Upcoming' | 'Walk-in';
 /** A room's status for the selected day / period */
 export type RoomStatus = 'Occupied' | 'Available' | 'Pending' | 'No Scan';
@@ -152,14 +153,14 @@ export const ROOM_TONE: Record<RoomStatus, { bar: string; soft: string; text: st
 
 /* ─── Date button (opens the centred calendar) ──────────────────────────── */
 
-export function DateButton({ label, onClick }: { label: string; onClick: () => void }) {
+export function DateButton({ label, onClick, className = '' }: { label: string; onClick: () => void; className?: string }) {
   const reduceMotion = useReducedMotion();
   return (
     <motion.button
       type="button"
       onClick={onClick}
       whileTap={reduceMotion ? undefined : { scale: 0.98 }}
-      className="w-full h-[42px] inline-flex items-center gap-2.5 px-3.5 rounded-xl border border-[#D6E0EF] bg-white text-sm font-semibold text-[#0B2A5B] hover:border-[#9DB8E8] transition-colors"
+      className={`w-full h-[42px] inline-flex items-center gap-2.5 px-3.5 rounded-xl border border-[#D6E0EF] bg-white text-sm font-semibold text-[#0B2A5B] hover:border-[#9DB8E8] transition-colors ${className}`}
     >
       <CalendarDays className="w-4 h-4 text-[#1D5BD6] flex-shrink-0" />
       <span className="flex-1 text-left truncate">{label}</span>

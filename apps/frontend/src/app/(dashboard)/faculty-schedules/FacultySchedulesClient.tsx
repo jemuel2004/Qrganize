@@ -7,14 +7,17 @@ import { useSchoolYear } from '@/context/SchoolYearContext';
 import { useRealtime } from '@/context/RealtimeContext';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
-import { CalendarDays, ChevronDown, Download, Eye, FileSpreadsheet, Loader2, Printer, X } from 'lucide-react';
+import { AlertTriangle, CalendarDays, ChevronDown, Download, Eye, FileSpreadsheet, Loader2, Printer, Trash2, X } from 'lucide-react';
+import Modal from '@/components/ui/Modal';
 import {
   buildWorkloadFormModel,
   printRegularLoadDocument,
   type PrintDeduction, type PrintFaculty, type PrintPraise, type PrintWorkloadLoad,
 } from '@/lib/instructorWorkloadPrintDocument';
 import type { WorkloadDocumentKind } from '@/lib/workloadPrintStorage';
-import { SearchInput, FilterSelect } from '@/components/ui/SearchFilter';
+import { SearchInput } from '@/components/ui/SearchFilter';
+import FriendlySelect from '@/components/ui/FriendlySelect';
+import CountFilterTabs, { type CountFilterOption } from '@/components/ui/CountFilterTabs';
 import LoadBreakdownDonut from '@/components/charts/LoadBreakdownDonut';
 import { useScrollLock } from '@/hooks/useScrollLock';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
@@ -36,6 +39,8 @@ interface FacultyScheduleRow {
   program_code: string;
   program_name: string;
   load_id: number;
+  /** The class (master_schedule) — what Remove Subject takes off this faculty */
+  master_schedule_id: number;
   load_category: 'Regular' | 'Overload' | 'Praise';
   units: number | null;
   hours: number | null;
@@ -54,6 +59,8 @@ interface FacultyScheduleRow {
   room_name: string | null;
   /** Set on the split portion (only the Lec or Lab) moved to Overload / Praise */
   split_component?: 'lec' | 'lab' | null;
+  /** This row is the moved part of the subject listed in another row */
+  split_portion?: boolean;
 }
 
 interface Summary {
@@ -71,9 +78,12 @@ interface FacultyOption {
   position: string;
 }
 
-/** Read-only term boxes — same 42px, outlined look as the filter selects. */
+/** Field label + read-only term box — same height as the dropdown beside it. */
+const FS_LABEL = 'text-xs font-semibold uppercase tracking-wide text-[#475569] mb-1.5';
 const FS_READONLY =
-  'flex items-center gap-2 h-[42px] bg-[#F4F7FC] border border-[#D6E0EF] rounded-xl px-3 select-none min-w-0';
+  'flex items-center gap-2 min-h-[48px] bg-[#F4F7FC] border border-[#D6E0EF] rounded-xl px-3.5 select-none min-w-0';
+
+type EmploymentTab = 'all' | 'Permanent' | 'Contractual';
 
 /* ── Helpers ────────────────────────────────────────────────────────────── */
 
@@ -412,6 +422,106 @@ function LoadBadge({ cat, part }: { cat: string; part?: 'lec' | 'lab' | null }) 
 /** Which subjects the Schedule Details table shows — picked with the stat cards. */
 type CardFilter = 'all' | 'Regular' | 'Overload' | 'Praise';
 
+interface ActivityRow { id: number; day_of_week: string; start_time: string; end_time: string; activity: string }
+
+const DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+/**
+ * The faculty's non-teaching time this term (Consultation, Flag Ceremony, …)
+ * — not teaching load, but it keeps them unavailable for classes. Same entry
+ * on several days is one line; Remove clears it from every day.
+ */
+function NonTeachingTime({ facultyId, semester, academicYear }: { facultyId: number; semester: string; academicYear: string }) {
+  const toast = useToast();
+  const reduceMotion = useReducedMotion();
+  const [rows, setRows] = useState<ActivityRow[]>([]);
+  const [confirmKey, setConfirmKey] = useState<string | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const qs = new URLSearchParams({ semester, academic_year: academicYear });
+    const res = await fetch(`/api/faculty/${facultyId}/activities?${qs}`).catch(() => null);
+    const data = res?.ok ? await res.json().catch(() => null) : null;
+    if (data && Array.isArray(data.activities)) setRows(data.activities);
+  }, [facultyId, semester, academicYear]);
+  useEffect(() => { void load(); }, [load]);
+  useRealtime(['schedule', 'faculty'], load);
+
+  const groups = useMemo(() => {
+    const map = new Map<string, { key: string; ids: number[]; days: string[]; start: string; end: string; activity: string }>();
+    for (const r of rows) {
+      const key = `${r.activity.toLowerCase()}|${r.start_time}|${r.end_time}`;
+      const g = map.get(key) ?? { key, ids: [], days: [], start: r.start_time, end: r.end_time, activity: r.activity };
+      g.ids.push(r.id);
+      g.days.push(r.day_of_week);
+      map.set(key, g);
+    }
+    return [...map.values()].sort((a, b) =>
+      DAY_ORDER.indexOf(a.days[0]) - DAY_ORDER.indexOf(b.days[0]) || a.start.localeCompare(b.start));
+  }, [rows]);
+
+  async function remove(g: { key: string; ids: number[]; activity: string }) {
+    setBusyKey(g.key);
+    try {
+      for (const id of g.ids) {
+        const res = await fetch(`/api/faculty/${facultyId}/activities?activity_id=${id}`, { method: 'DELETE' });
+        if (!res.ok && res.status !== 404) throw new Error();
+      }
+      toast.success(`${g.activity} removed.`);
+      setConfirmKey(null);
+      await load();
+    } catch {
+      toast.error('Could not remove it. Please try again.');
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  if (groups.length === 0) return null;
+  return (
+    <div className="px-4 sm:px-6 py-3 border-t border-[#F1F5F9] flex-shrink-0 max-h-[30vh] overflow-auto">
+      <p className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: '#64748B' }}>
+        Non-teaching time <span className="normal-case tracking-normal font-medium" style={{ color: '#94A3B8' }}>· not teaching load; no class can be scheduled then</span>
+      </p>
+      <ul className="divide-y divide-[#F1F5F9]">
+        {groups.map(g => (
+          <li key={g.key} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+            <span style={{ color: '#0B2A5B' }}>
+              <span className="font-semibold">{g.activity}</span>
+              <span style={{ color: '#64748B' }}>
+                {' · '}{DAY_ORDER.filter(d => g.days.includes(d)).map(d => d.slice(0, 3)).join('/')} {fmtRange(g.start, g.end)}
+              </span>
+            </span>
+            {confirmKey === g.key ? (
+              <span className="flex items-center gap-2">
+                <span className="text-xs" style={{ color: '#64748B' }}>Remove?</span>
+                <motion.button type="button" onClick={() => remove(g)} disabled={busyKey === g.key}
+                  whileTap={reduceMotion ? undefined : { scale: 0.96 }}
+                  className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white bg-[#DC2626] hover:bg-[#B91C1C] disabled:opacity-60 transition-colors">
+                  {busyKey === g.key ? 'Removing…' : 'Yes, remove'}
+                </motion.button>
+                <motion.button type="button" onClick={() => setConfirmKey(null)} disabled={busyKey === g.key}
+                  whileTap={reduceMotion ? undefined : { scale: 0.96 }}
+                  className="px-3 py-1.5 rounded-lg text-sm font-semibold border hover:bg-[#F1F5F9] transition-colors"
+                  style={{ color: '#64748B', borderColor: '#E2E8F0' }}>
+                  Keep
+                </motion.button>
+              </span>
+            ) : (
+              <motion.button type="button" onClick={() => setConfirmKey(g.key)}
+                whileTap={reduceMotion ? undefined : { scale: 0.96 }}
+                className="px-3 py-1.5 rounded-lg text-sm font-semibold border hover:bg-[#FEF2F2] transition-colors"
+                style={{ color: '#DC2626', borderColor: '#FECACA' }}>
+                Remove
+              </motion.button>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /** Table text colour per load type — matches the Load Breakdown colours */
 const LOAD_COLOR: Record<string, string> = {
   Overload: 'var(--load-overload)',
@@ -457,8 +567,8 @@ export default function FacultySchedulesClient({
   const { schoolYear: globalYear, semester: globalSemester } = useSchoolYear();
   const appliedFacultyQuery = useRef<string | null>(null);
 
+  /** Every faculty's subjects this term — Employment Type, Faculty and search filter it on the page */
   const [rows, setRows]               = useState<FacultyScheduleRow[]>([]);
-  const [summary, setSummary]         = useState<Summary>({ totalSchedules: 0, totalInstructors: 0, totalRegular: 0, totalOverload: 0, totalPraise: 0 });
   const [facultyList, setFacultyList] = useState<FacultyOption[]>([]);
   const [loading, setLoading]         = useState(true);
 
@@ -474,6 +584,12 @@ export default function FacultySchedulesClient({
   const [cardPick, setCardPick] = useState<{ facultyId: number; filter: CardFilter } | null>(null);
   const cardFilter: CardFilter = viewFaculty && cardPick?.facultyId === viewFaculty.id ? cardPick.filter : 'all';
   const reduceMotion = useReducedMotion();
+  /* The open Schedule Details reads the live rows, so a background refresh
+     (another user changing this faculty's classes) shows up there too. */
+  const viewRows = useMemo(
+    () => (viewFaculty ? rows.filter(r => r.faculty_id === viewFaculty.id) : []),
+    [rows, viewFaculty],
+  );
 
   const [filters, setFilters] = useState({
     employment_status: '',
@@ -525,10 +641,8 @@ export default function FacultySchedulesClient({
     if (!silent) setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (filters.employment_status) params.set('employment_status', filters.employment_status);
-      if (globalSemester)            params.set('semester',          globalSemester);
-      if (globalYear)                params.set('academic_year',     globalYear);
-      if (filters.faculty_id)        params.set('faculty_id',        filters.faculty_id);
+      if (globalSemester) params.set('semester',      globalSemester);
+      if (globalYear)     params.set('academic_year', globalYear);
 
       const res  = await fetch(`/api/faculty-schedules?${params}`);
       const data = await res.json();
@@ -536,19 +650,51 @@ export default function FacultySchedulesClient({
       if (!res.ok) { if (!silent) toast.error(data.error ?? 'Failed to load schedules.'); return; }
 
       setRows(data.schedules ?? []);
-      setSummary(data.summary ?? { totalSchedules: 0, totalInstructors: 0, totalRegular: 0, totalOverload: 0, totalPraise: 0 });
     } catch {
       if (!silent && seq === loadSeq.current) toast.error('Connection error. Please try again.');
     } finally {
       if (!silent && seq === loadSeq.current) setLoading(false);
     }
-  }, [filters.employment_status, filters.faculty_id, globalSemester, globalYear, toast]);
+  }, [globalSemester, globalYear, toast]);
 
   useEffect(() => { load(); }, [load]);
 
   // Live updates: schedules, loads, rooms or faculty changed elsewhere — quiet
   // reload; filters, search and the open schedule details stay.
   useRealtime(['schedule', 'workload', 'rooms', 'faculty'], () => Promise.all([load(true), loadFacultyList()]), { enabled: !loading });
+
+  /* Remove Subject (trash in Schedule Details) — the same action as on Faculty
+     Workload: the class leaves this faculty's load, its day / time / room are
+     cleared and it goes back to Unassigned for reassignment. */
+  const [removeTarget, setRemoveTarget] = useState<FacultyScheduleRow | null>(null);
+  const [removing, setRemoving] = useState(false);
+  /* Every row of the subject being removed (Regular + a moved Overload / Praise part) */
+  const removeRows = removeTarget
+    ? rows.filter(r => r.faculty_id === removeTarget.faculty_id && r.master_schedule_id === removeTarget.master_schedule_id)
+    : [];
+  async function confirmRemoveSubject() {
+    if (!removeTarget || removing) return;
+    setRemoving(true);
+    try {
+      const res = await fetch('/api/workload/unassign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ faculty_id: removeTarget.faculty_id, master_schedule_id: removeTarget.master_schedule_id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to remove subject.');
+        return;
+      }
+      toast.success(`${removeTarget.subject_code} removed from ${removeTarget.faculty_name}.`);
+      setRemoveTarget(null);
+      await load(true);
+    } catch {
+      toast.error('Connection error. Please try again.');
+    } finally {
+      setRemoving(false);
+    }
+  }
 
   const filteredFaculty = useMemo(() => {
     const byEmp = filters.employment_status
@@ -559,30 +705,28 @@ export default function FacultySchedulesClient({
 
   useEffect(() => {
     if (filters.faculty_id && !filteredFaculty.some(f => String(f.id) === filters.faculty_id)) {
-      setF('faculty_id', '');
+      setFilters(prev => ({ ...prev, faculty_id: '' }));
     }
   }, [filteredFaculty, filters.faculty_id]);
 
   const q = filters.search.toLowerCase().trim();
 
-  const groups = useMemo(() => {
+  /** One group per faculty with subjects this term (every employment type) */
+  const allGroups = useMemo(() => {
     type Group = {
       facultyId: number; facultyName: string; position: string;
       empStatus: string; empId: string; rows: FacultyScheduleRow[];
     };
-    const result: Group[] = [];
+    const byFaculty = new Map<number, Group>();
     for (const row of rows) {
-      const last = result[result.length - 1];
-      if (!last || last.facultyId !== row.faculty_id) {
-        result.push({ facultyId: row.faculty_id, facultyName: row.faculty_name, position: row.position, empStatus: row.employment_status, empId: row.employee_id, rows: [row] });
-      } else {
-        last.rows.push(row);
-      }
+      const g = byFaculty.get(row.faculty_id);
+      if (g) g.rows.push(row);
+      else byFaculty.set(row.faculty_id, { facultyId: row.faculty_id, facultyName: row.faculty_name, position: row.position ?? '', empStatus: row.employment_status, empId: row.employee_id, rows: [row] });
     }
     // Permanent block first, then Contractual — never interleaved. Within each
     // block, lowest total load (least complete) first; ties by name.
     const totalOf = (g: Group) => g.rows.reduce((sum, r) => sum + rowValue(r), 0);
-    return result.sort((a, b) => {
+    return [...byFaculty.values()].sort((a, b) => {
       const ta = a.empStatus === 'Permanent' ? 0 : 1;
       const tb = b.empStatus === 'Permanent' ? 0 : 1;
       if (ta !== tb) return ta - tb;
@@ -592,22 +736,55 @@ export default function FacultySchedulesClient({
     });
   }, [rows]);
 
-  const visibleGroups = useMemo(() =>
-    q
-      ? groups.filter(g =>
-          g.facultyName.toLowerCase().includes(q) ||
-          g.position.toLowerCase().includes(q) ||
-          g.empStatus.toLowerCase().includes(q) ||
-          g.rows.some(r =>
-            r.subject_code.toLowerCase().includes(q) ||
-            r.subject_name.toLowerCase().includes(q) ||
-            r.block_name.toLowerCase().includes(q) ||
-            (r.room_name ?? '').toLowerCase().includes(q)
-          )
-        )
-      : groups,
-    [groups, q]
-  );
+  /** The chosen Employment Type and Faculty */
+  const groups = useMemo(() => allGroups.filter(g =>
+    (!filters.employment_status || g.empStatus === filters.employment_status)
+    && (!filters.faculty_id || String(g.facultyId) === filters.faculty_id),
+  ), [allGroups, filters.employment_status, filters.faculty_id]);
+
+  const matchesSearch = useCallback((g: (typeof allGroups)[number]) =>
+    !q ||
+    g.facultyName.toLowerCase().includes(q) ||
+    g.position.toLowerCase().includes(q) ||
+    g.empStatus.toLowerCase().includes(q) ||
+    g.rows.some(r =>
+      r.subject_code.toLowerCase().includes(q) ||
+      r.subject_name.toLowerCase().includes(q) ||
+      r.block_name.toLowerCase().includes(q) ||
+      (r.room_name ?? '').toLowerCase().includes(q)
+    ), [q]);
+
+  const visibleGroups = useMemo(() => groups.filter(matchesSearch), [groups, matchesSearch]);
+
+  /* Employment Type buttons count every faculty matching the search, whichever
+     type is chosen — picking Permanent never turns Contractual into 0. */
+  const typeCounts = useMemo(() => {
+    const searched = allGroups.filter(matchesSearch);
+    return {
+      all: searched.length,
+      Permanent: searched.filter(g => g.empStatus === 'Permanent').length,
+      Contractual: searched.filter(g => g.empStatus === 'Contractual').length,
+    };
+  }, [allGroups, matchesSearch]);
+  const typeTab = (filters.employment_status || 'all') as EmploymentTab;
+  const typeTabs: CountFilterOption<EmploymentTab>[] = [
+    { key: 'all',         label: 'All',         count: typeCounts.all,         color: '#0B2A5B' },
+    { key: 'Permanent',   label: 'Permanent',   count: typeCounts.Permanent,   color: '#17805F', dot: '#1F9D74' },
+    { key: 'Contractual', label: 'Contractual', count: typeCounts.Contractual, color: '#A85F12', dot: '#C9761A' },
+  ];
+
+  /* Load Breakdown — the chosen Employment Type and Faculty, counted the same
+     way the server used to (subjects per load type, faculty scheduled). */
+  const summary: Summary = useMemo(() => {
+    const shown = groups.flatMap(g => g.rows);
+    return {
+      totalSchedules:   new Set(shown.map(r => r.load_id)).size,
+      totalInstructors: groups.length,
+      totalRegular:     shown.filter(r => r.load_category === 'Regular').length,
+      totalOverload:    shown.filter(r => r.load_category === 'Overload').length,
+      totalPraise:      shown.filter(r => r.load_category === 'Praise').length,
+    };
+  }, [groups]);
 
   /** Faculty behind the clicked Load Breakdown slice, most subjects first */
   const pickedFaculty = useMemo(() => {
@@ -633,14 +810,28 @@ export default function FacultySchedulesClient({
         <Skeleton className="h-4 w-full max-w-xl rounded" />
       </div>
 
-      {/* Filters (2×2 + search) left · donut right */}
+      {/* Filters (type buttons · faculty + term · search) left · donut right */}
       <div className="bg-white rounded-2xl border border-[#E3E9F3] shadow-[0_1px_3px_rgba(11,42,91,0.06)] p-4 sm:p-6 w-full min-w-0">
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_auto] gap-6 lg:gap-10 items-start">
-          <div className="space-y-3 min-w-0">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-[42px] w-full rounded-xl" />)}
+          <div className="space-y-5 min-w-0">
+            <div className="space-y-2">
+              <Skeleton className="h-3 w-32 rounded" />
+              <div className="flex flex-wrap gap-2.5">
+                {Array.from({ length: 3 }, (_, i) => <Skeleton key={i} className="h-11 w-32 rounded-xl" />)}
+              </div>
             </div>
-            <Skeleton className="h-[42px] w-full max-w-md rounded-full" />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {Array.from({ length: 2 }, (_, i) => (
+                <div key={i} className="space-y-2">
+                  <Skeleton className="h-3 w-20 rounded" />
+                  <Skeleton className="h-12 w-full rounded-xl" />
+                </div>
+              ))}
+            </div>
+            <div className="space-y-2">
+              <Skeleton className="h-3 w-16 rounded" />
+              <Skeleton className="h-11 w-full rounded-2xl" />
+            </div>
           </div>
           <div className="rounded-2xl border border-[#E3E9F3] p-5 space-y-4">
             <Skeleton className="h-4 w-40 rounded" />
@@ -682,35 +873,56 @@ export default function FacultySchedulesClient({
       <div className="bg-white rounded-2xl border border-[#E3E9F3] shadow-[0_1px_3px_rgba(11,42,91,0.06)] p-4 sm:p-6 w-full min-w-0">
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_auto] gap-6 lg:gap-10 items-start">
 
-          {/* Left — 2×2 filters, search underneath */}
-          <div className="space-y-3 min-w-0">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <FilterSelect value={filters.employment_status} onChange={v => setF('employment_status', v)} label="Employment Type" className="qr-ms-field">
-                <option value="">All Employment Types</option>
-                <option value="Permanent">Permanent</option>
-                <option value="Contractual">Contractual</option>
-              </FilterSelect>
-              <FilterSelect value={filters.faculty_id} onChange={v => setF('faculty_id', v)} label="Faculty" className="qr-ms-field">
-                <option value="">All Faculty</option>
-                {filteredFaculty.map(f => (
-                  <option key={f.id} value={f.id}>{f.name}</option>
-                ))}
-              </FilterSelect>
-              <div className={FS_READONLY} title="Semester (set in Settings)">
-                <CalendarDays className="w-4 h-4 text-[#1D5BD6] flex-shrink-0" />
-                <span className="text-sm text-[#0B2A5B] font-semibold truncate">{globalSemester || 'Semester'}</span>
+          {/* Left — Employment Type buttons, Faculty + Term, search */}
+          <div className="space-y-5 min-w-0">
+            <div className="min-w-0">
+              <p className={FS_LABEL}>Employment Type</p>
+              {/* Counts cover every faculty matching the search, whichever type is chosen */}
+              <CountFilterTabs
+                label="Employment type"
+                layoutId="faculty-schedules-type"
+                value={typeTab}
+                onChange={key => setF('employment_status', key === 'all' ? '' : key)}
+                options={typeTabs}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="min-w-0">
+                <p className={FS_LABEL}>Faculty</p>
+                <FriendlySelect
+                  value={filters.faculty_id}
+                  onChange={v => setF('faculty_id', v)}
+                  label="Faculty"
+                  searchable
+                  searchPlaceholder="Type a name…"
+                  minPanelWidth={340}
+                  options={[
+                    { value: '', label: 'All Faculty' },
+                    ...filteredFaculty.map(f => ({ value: String(f.id), label: f.name, hint: f.position || f.employment_status })),
+                  ]}
+                />
               </div>
-              <div className={FS_READONLY} title="School Year (set in Settings)">
-                <CalendarDays className="w-4 h-4 text-[#1D5BD6] flex-shrink-0" />
-                <span className="text-sm text-[#0B2A5B] font-semibold truncate">{globalYear || 'School Year'}</span>
+              <div className="min-w-0">
+                <p className={FS_LABEL}>Term</p>
+                <div className={FS_READONLY}>
+                  <CalendarDays className="w-4 h-4 text-[#1D5BD6] flex-shrink-0" />
+                  <span className="text-[15px] text-[#0B2A5B] font-semibold truncate">
+                    {[globalSemester, globalYear].filter(Boolean).join(' · ') || '—'}
+                  </span>
+                </div>
               </div>
             </div>
-            <SearchInput
-              value={filters.search}
-              onChange={v => setF('search', v)}
-              placeholder="Search faculty or subject…"
-              className="w-full sm:max-w-md !bg-white border border-[#D6E0EF] shadow-[0_1px_3px_rgba(11,42,91,0.06)] hover:border-[#9DB8E8] focus-within:border-[#1D5BD6]"
-            />
+
+            <div className="min-w-0">
+              <p className={FS_LABEL}>Search</p>
+              <SearchInput
+                value={filters.search}
+                onChange={v => setF('search', v)}
+                placeholder="Search faculty or subject…"
+                className="w-full !bg-white border border-[#D6E0EF] hover:border-[#9DB8E8] focus-within:border-[#1D5BD6]"
+              />
+            </div>
           </div>
 
           {/* Right — load breakdown donut + legend (printing lives in each instructor's View) */}
@@ -873,11 +1085,11 @@ export default function FacultySchedulesClient({
       <AnimatePresence>
       {viewFaculty && (() => {
         const isPerm       = viewFaculty.empStatus === 'Permanent';
-        const regularRows  = viewFaculty.rows.filter(r => r.load_category === 'Regular');
-        const overloadRows = viewFaculty.rows.filter(r => r.load_category === 'Overload');
-        const praiseRows   = viewFaculty.rows.filter(r => r.load_category === 'Praise');
-        const totalVal     = viewFaculty.rows.reduce((s, r) => s + rowValue(r), 0);
-        const shownRows    = cardFilter === 'all' ? viewFaculty.rows : viewFaculty.rows.filter(r => r.load_category === cardFilter);
+        const regularRows  = viewRows.filter(r => r.load_category === 'Regular');
+        const overloadRows = viewRows.filter(r => r.load_category === 'Overload');
+        const praiseRows   = viewRows.filter(r => r.load_category === 'Praise');
+        const totalVal     = viewRows.reduce((s, r) => s + rowValue(r), 0);
+        const shownRows    = cardFilter === 'all' ? viewRows : viewRows.filter(r => r.load_category === cardFilter);
         const shownTotal   = shownRows.reduce((s, r) => s + rowValue(r), 0);
         const pickCard = (filter: CardFilter) => setCardPick({
           facultyId: viewFaculty.id,
@@ -900,7 +1112,8 @@ export default function FacultySchedulesClient({
             aria-modal="true"
             aria-labelledby="sched-modal-title"
             onClick={() => setViewFaculty(null)}
-            onKeyDown={e => { if (e.key === 'Escape') setViewFaculty(null); }}
+            // Esc while Remove Subject is asking closes only that question
+            onKeyDown={e => { if (e.key === 'Escape' && !removeTarget) setViewFaculty(null); }}
             tabIndex={-1}
           >
             <motion.div
@@ -967,7 +1180,7 @@ export default function FacultySchedulesClient({
               <div className="px-4 sm:px-6 py-3 border-b border-[#F1F5F9] flex-shrink-0" style={{ backgroundColor: '#F8FAFC' }}>
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-3">
                   {([
-                    { filter: 'all' as const,      label: 'Actual Load',  value: viewFaculty.rows.length, color: '#0B2A5B' },
+                    { filter: 'all' as const,      label: 'Actual Load',  value: viewRows.length, color: '#0B2A5B' },
                     { filter: 'Regular' as const,  label: 'Regular Load', value: regularRows.length,      color: 'var(--load-regular)' },
                     { filter: 'Overload' as const, label: 'Overload',     value: overloadRows.length,     color: 'var(--load-overload)' },
                     { filter: 'Praise' as const,   label: 'Praise Load',  value: praiseRows.length,       color: 'var(--load-praise)' },
@@ -1004,6 +1217,7 @@ export default function FacultySchedulesClient({
                     <col style={{ width: '150px', minWidth: '140px' }} />
                     <col style={{ width: '120px', minWidth: '120px' }} />
                     <col style={{ width: '90px',  minWidth: '90px'  }} />
+                    <col style={{ width: '64px',  minWidth: '64px'  }} />
                   </colgroup>
                   <thead className="sticky top-0 z-10">
                     <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '2px solid #E2E8F0' }}>
@@ -1024,9 +1238,17 @@ export default function FacultySchedulesClient({
                           {h}
                         </th>
                       ))}
+                      <th className="px-2 py-2.5"><span className="sr-only">Remove</span></th>
                     </tr>
                   </thead>
                   <tbody key={cardFilter}>
+                    {shownRows.length === 0 && (
+                      <tr>
+                        <td colSpan={9} className="px-4 py-10 text-center text-sm" style={{ color: '#94A3B8' }}>
+                          No subjects{cardFilter === 'all' ? '' : ` in ${cardFilter === 'Overload' ? 'Overload' : `${cardFilter} Load`}`}.
+                        </td>
+                      </tr>
+                    )}
                     {shownRows.map((row, i) => {
                       const val = rowValue(row);
                       const valColor = LOAD_COLOR[row.load_category] ?? unitColor;
@@ -1071,6 +1293,23 @@ export default function FacultySchedulesClient({
                           <td className="px-4 py-2.5 whitespace-nowrap font-semibold text-right" style={{ color: valColor }}>
                             {val.toFixed(2)}
                           </td>
+                          <td className="px-2 py-2 text-center">
+                            {/* A moved Overload / Praise part is removed with its subject's main row */}
+                            {!row.split_portion && (
+                              <motion.button
+                                type="button"
+                                onClick={() => setRemoveTarget(row)}
+                                whileHover={reduceMotion ? undefined : { y: -1 }}
+                                whileTap={reduceMotion ? undefined : { scale: 0.9 }}
+                                transition={{ duration: 0.18, ease }}
+                                title="Remove subject"
+                                aria-label={`Remove ${row.subject_code} from ${row.faculty_name}`}
+                                className="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 hover:border-red-300 transition-colors"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </motion.button>
+                            )}
+                          </td>
                         </motion.tr>
                       );
                     })}
@@ -1089,11 +1328,14 @@ export default function FacultySchedulesClient({
                         <td className="px-4 py-3 whitespace-nowrap text-right tabular-nums" style={{ color: unitColor, fontSize: '15px', fontWeight: 800 }}>
                           {shownTotal.toFixed(2)}
                         </td>
+                        <td aria-hidden="true" />
                       </tr>
                     </tfoot>
                   )}
                 </table>
               </div>
+
+              <NonTeachingTime key={`nt-${viewFaculty.id}`} facultyId={viewFaculty.id} semester={globalSemester} academicYear={globalYear} />
 
               {/* ── Footer ── */}
               <div className="px-6 py-3 border-t border-[#F1F5F9] flex items-center justify-between flex-shrink-0">
@@ -1116,6 +1358,72 @@ export default function FacultySchedulesClient({
         );
       })()}
       </AnimatePresence>
+
+      {/* ── Remove Subject confirmation (same as Faculty Workload) — outside the
+          Schedule Details overlay, so Esc here only closes this ── */}
+      <Modal
+        open={!!removeTarget}
+        onClose={() => { if (!removing) setRemoveTarget(null); }}
+        title="Remove Subject"
+        footer={
+          <div className="flex gap-3">
+            <motion.button
+              type="button"
+              onClick={() => setRemoveTarget(null)}
+              disabled={removing}
+              whileTap={reduceMotion ? undefined : { scale: 0.97 }}
+              className="flex-1 border border-[#E2E8F0] text-[#64748B] py-2.5 rounded-xl text-sm font-semibold hover:bg-[#F8FAFC] transition disabled:opacity-50"
+            >
+              Cancel
+            </motion.button>
+            <motion.button
+              type="button"
+              onClick={confirmRemoveSubject}
+              disabled={removing}
+              whileTap={reduceMotion ? undefined : { scale: 0.97 }}
+              className="flex-1 py-2.5 rounded-xl text-sm font-bold transition disabled:opacity-60 flex items-center justify-center gap-2"
+              style={{ backgroundColor: '#DC2626', color: '#ffffff' }}
+            >
+              {removing
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> Removing…</>
+                : <><Trash2 className="w-4 h-4" /> Remove Subject</>}
+            </motion.button>
+          </div>
+        }
+      >
+        {removeTarget && (() => {
+          const isPermTarget = removeTarget.employment_status === 'Permanent';
+          const total = removeRows.reduce((s, r) => s + rowValue(r), 0);
+          const movedPart = removeRows.find(r => r.split_portion);
+          return (
+            <div className="space-y-4">
+              {/* Subject */}
+              <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl px-4 py-3">
+                <div className="font-mono font-bold text-sm text-[#0B2A5B] mb-0.5">{removeTarget.subject_code}</div>
+                <div className="text-sm text-[#64748B]">{removeTarget.subject_name}</div>
+                <div className="flex items-center gap-3 mt-2 text-[11px] text-[#94A3B8] flex-wrap">
+                  <span>{removeTarget.program_code} · Block {removeTarget.block_name} · {removeTarget.year_level}</span>
+                  {total > 0 && (
+                    <span className="font-semibold text-[#0B2A5B]">
+                      {total.toFixed(2)} {isPermTarget ? 'units' : 'hrs'}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* What happens */}
+              <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+                <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+                <div className="text-sm text-red-700 leading-relaxed">
+                  This subject will be <span className="font-bold">permanently removed</span> from {removeTarget.faculty_name}&apos;s workload
+                  {movedPart ? `, including its ${movedPart.load_category} part` : ''}.
+                  Its day, time and room are cleared, and the subject becomes available for reassignment.
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
 
       {/* ── Load Breakdown drill-down: faculty who have the clicked load ── */}
       <AnimatePresence>

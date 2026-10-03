@@ -2,6 +2,7 @@
 import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { ensureRoomOccupancy, expireStaleOccupancy } from '@/services/ensureRoomOccupancy';
+import { getActiveAcademicPeriod } from '@/services/activeAcademicPeriod';
 
 /**
  * Admin / dept-chair operational dashboard.
@@ -21,6 +22,11 @@ export async function GET(req: NextRequest) {
     const TODAY = `TRIM(TO_CHAR(NOW() AT TIME ZONE 'Asia/Manila', 'FMDay'))`;
     const NOW_T = `(NOW() AT TIME ZONE 'Asia/Manila')::time`;
     const SCHEDULED = `ms.status IN ('Assigned', 'Scheduled', 'Completed')`;
+    // Only classes of the active school year + semester (Settings → School Year),
+    // the same term Faculty Workload, Scheduling and Class Program show.
+    const period = await getActiveAcademicPeriod();
+    const term = [period.schoolYear ?? '', period.semester ?? ''];
+    const IN_TERM = `($1 = '' OR b.academic_year = $1) AND ($2 = '' OR b.semester = $2)`;
     const FACULTY_NAME = `COALESCE(NULLIF(TRIM(f.name), ''), NULLIF(TRIM(CONCAT_WS(' ', f.first_name, f.last_name)), ''), '—')`;
 
     const [occupancyRes, pendingRequestsRes, todayScheduleRes, liveRoomsRes] = await Promise.all([
@@ -47,10 +53,10 @@ export async function GET(req: NextRequest) {
         LEFT JOIN faculty     f ON ms.faculty_id         = f.id
         LEFT JOIN rooms       r ON ms.room_id            = r.id
         LEFT JOIN rooms      sr ON ss.room_id            = sr.id
-        WHERE ${SCHEDULED} AND ss.day_of_week = ${TODAY}
+        WHERE ${SCHEDULED} AND ss.day_of_week = ${TODAY} AND ${IN_TERM}
           AND ss.start_time IS NOT NULL AND ss.end_time IS NOT NULL
         ORDER BY ss.start_time, c.subject_code
-      `).catch(() => ({ rows: [] })),
+      `, term).catch(() => ({ rows: [] })),
       // Each active room: live status + the class running now (or next today)
       query(`
         SELECT r.id, r.room_name, r.room_type,
@@ -70,13 +76,14 @@ export async function GET(req: NextRequest) {
           JOIN master_schedule ms ON ms.id = ss.master_schedule_id
           JOIN block_subjects bs ON bs.id = ms.block_subject_id
           JOIN curriculums c ON c.id = bs.curriculum_id
+          JOIN blocks b ON b.id = bs.block_id
           LEFT JOIN faculty f ON f.id = ms.faculty_id
-          WHERE ss.room_id = r.id AND ${SCHEDULED} AND ss.day_of_week = ${TODAY} AND ss.end_time > ${NOW_T}
+          WHERE ss.room_id = r.id AND ${SCHEDULED} AND ss.day_of_week = ${TODAY} AND ss.end_time > ${NOW_T} AND ${IN_TERM}
           ORDER BY ss.start_time LIMIT 1
         ) cls ON true
         WHERE r.status = 'Active'
         ORDER BY CASE COALESCE(ro.status, 'Available') WHEN 'Occupied' THEN 0 WHEN 'Pending' THEN 1 ELSE 2 END, r.room_name
-      `),
+      `, term),
     ]);
 
     const liveRooms = liveRoomsRes.rows;

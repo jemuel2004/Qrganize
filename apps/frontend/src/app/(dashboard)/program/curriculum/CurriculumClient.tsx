@@ -100,6 +100,8 @@ const MAX_IMPORT_BYTES = 8 * 1024 * 1024;
 
 const YEAR_LEVELS = ['1st Year', '2nd Year', '3rd Year', '4th Year'];
 const SEMESTERS   = ['1st Semester', '2nd Semester', 'Summer'];
+/** Program filter value for every program at once (GET /api/curriculum?program_id=all) */
+const ALL_PROGRAMS = 'all';
 const SUBJECT_TYPES = ['Lecture', 'Laboratory', 'Lecture + Laboratory'] as const;
 type SubjectType = typeof SUBJECT_TYPES[number] | '';
 
@@ -280,8 +282,8 @@ export default function CurriculumPage() {
     setForm({
       ...emptyForm,
       // Pre-fill from active filters so the user doesn't have to re-select
-      // Leave year_level / semester blank when filter is "All" — user must pick explicitly
-      program_id: filters.program_id,
+      // Leave program / year_level / semester blank when the filter is "All" — user must pick explicitly
+      program_id: filters.program_id === ALL_PROGRAMS ? '' : filters.program_id,
       year_level: filters.year_level,
       semester:   filters.semester,
     });
@@ -396,14 +398,25 @@ export default function CurriculumPage() {
     if (bulkDeleteLoading || ids.length === 0) return;
     setBulkDeleteLoading(true);
     try {
-      const res = await fetch('/api/curriculum', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ program_id: filters.program_id, ids }),
-      });
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok) { toast.error(d.error || 'Failed to delete subjects.'); return; }
-      const count = d.deleted ?? ids.length;
+      // One request per program — the server deletes within one program at a time
+      // (several when "All Programs" is shown)
+      const byProgram = new Map<number, number[]>();
+      for (const c of selectedVisible) byProgram.set(c.program_id, [...(byProgram.get(c.program_id) ?? []), c.id]);
+      let count = 0;
+      for (const [programId, programIds] of byProgram) {
+        const res = await fetch('/api/curriculum', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ program_id: programId, ids: programIds }),
+        });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          toast.error(d.error || 'Failed to delete subjects.');
+          if (count > 0) fetchCurriculums(filters.program_id, filters.year_level, filters.semester, filters.curriculum_version);
+          return;
+        }
+        count += d.deleted ?? programIds.length;
+      }
       setBulkDeleteSuccess(true);
       fetchCurriculums(filters.program_id, filters.year_level, filters.semester, filters.curriculum_version);
       setTimeout(() => {
@@ -420,7 +433,7 @@ export default function CurriculumPage() {
   }
 
   async function handleDownload() {
-    if (!filters.program_id || groups.length === 0) return;
+    if (!filters.program_id || filters.program_id === ALL_PROGRAMS || groups.length === 0) return;
     const prog = programs.find(p => String(p.id) === filters.program_id);
     try {
       await downloadCurriculumExcel({
@@ -433,8 +446,8 @@ export default function CurriculumPage() {
   }
 
   async function handlePrint() {
-    if (!filters.program_id) {
-      toast.error('Please select a Program before printing.');
+    if (!filters.program_id || filters.program_id === ALL_PROGRAMS) {
+      toast.error('Please select one Program before printing.');
       return;
     }
     if (curriculums.length === 0) {
@@ -707,6 +720,7 @@ export default function CurriculumPage() {
   const selectedVisible = filtered.filter(c => selectedIds.has(c.id));
   const allVisibleSelected = filtered.length > 0 && selectedVisible.length === filtered.length;
   const selectedProg = programs.find(p => String(p.id) === filters.program_id);
+  const allPrograms = filters.program_id === ALL_PROGRAMS;
   const showPageSkeleton = useMinLoading(booting, LOADING_DELAY);
   const showTableSkeleton = useMinLoading(
     !showPageSkeleton && listLoading && !!filters.program_id,
@@ -797,15 +811,18 @@ export default function CurriculumPage() {
           <BackButton />
         </div>
         <div className="flex gap-2 flex-wrap">
+          {/* The official document is one program's curriculum — "All Programs" asks for one */}
           <button
             onClick={handlePrint}
-            disabled={!filters.program_id || curriculums.length === 0}
+            disabled={!filters.program_id || allPrograms || curriculums.length === 0}
             title={
               !filters.program_id
                 ? 'Select a program first'
-                : curriculums.length === 0
-                  ? 'No subjects to print'
-                  : 'Print official NEMSU curriculum document'
+                : allPrograms
+                  ? 'Choose one program to print its curriculum'
+                  : curriculums.length === 0
+                    ? 'No subjects to print'
+                    : 'Print official NEMSU curriculum document'
             }
             className={btnSecondary}
           >
@@ -813,8 +830,8 @@ export default function CurriculumPage() {
           </button>
           <button
             onClick={handleDownload}
-            disabled={!filters.program_id || filtered.length === 0}
-            title={!filters.program_id ? 'Select a program first' : filtered.length === 0 ? 'No subjects to export' : 'Download in official curriculum format'}
+            disabled={!filters.program_id || allPrograms || filtered.length === 0}
+            title={!filters.program_id ? 'Select a program first' : allPrograms ? 'Choose one program to download its curriculum' : filtered.length === 0 ? 'No subjects to export' : 'Download in official curriculum format'}
             className={btnSecondary}
           >
             <Download className="w-4 h-4" /> Download Excel
@@ -859,10 +876,13 @@ export default function CurriculumPage() {
               guide={!filters.program_id}
               showHintInTrigger
               minPanelWidth={380}
-              options={(userRole === 'program_chair'
-                ? programs.filter(p => p.id === chairProgramId)
-                : programs
-              ).map(p => ({ value: String(p.id), label: p.code, hint: p.name }))}
+              options={userRole === 'program_chair'
+                ? programs.filter(p => p.id === chairProgramId).map(p => ({ value: String(p.id), label: p.code, hint: p.name }))
+                : [
+                    // Every program at once — the list groups by program
+                    { value: ALL_PROGRAMS, label: 'All Programs', hint: 'Every program, grouped by program' },
+                    ...programs.map(p => ({ value: String(p.id), label: p.code, hint: p.name })),
+                  ]}
             />
           </div>
 

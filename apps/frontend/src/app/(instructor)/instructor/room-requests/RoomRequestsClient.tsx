@@ -686,8 +686,11 @@ export default function RoomRequestsClient() {
   );
 
   const selectedSchedule = validSchedules.find(s => String(s.id) === selectedScheduleId) ?? null;
-  /** Lecture-only subjects may only use lecture rooms (same rule as the server) */
+  /** Lecture-only subjects may only use lecture rooms, laboratory-only subjects
+   *  only laboratory rooms (same rules as the server) */
   const lectureOnly = !!selectedSchedule && !(parseFloat(String(selectedSchedule.laboratory_hours)) > 0);
+  const labOnly = !!selectedSchedule && !(parseFloat(String(selectedSchedule.lecture_hours)) > 0);
+  const lockedGroup: RoomGroup | null = lectureOnly ? 'lab' : labOnly ? 'lec' : null;
 
   // Check every room against each of the selected class's sessions
   useEffect(() => {
@@ -722,8 +725,8 @@ export default function RoomRequestsClient() {
     if (!requestedRoomId) return;
     const r = rooms.find(x => String(x.id) === requestedRoomId);
     if (!r) return;
-    if (busyRooms[r.id] || (lectureOnly && roomGroupOf(r) === 'lab')) setRequestedRoomId('');
-  }, [busyRooms, lectureOnly, requestedRoomId, rooms]);
+    if (busyRooms[r.id] || roomGroupOf(r) === lockedGroup) setRequestedRoomId('');
+  }, [busyRooms, lockedGroup, requestedRoomId, rooms]);
 
   useScrollLock(showForm);
   useEffect(() => {
@@ -1000,7 +1003,7 @@ export default function RoomRequestsClient() {
                       {ROOM_GROUPS.map(({ key, label, Icon, bg, fg }) => {
                         const list = rooms.filter(r => roomGroupOf(r) === key);
                         if (list.length === 0) return null;
-                        const locked = key === 'lab' && lectureOnly;
+                        const locked = key === lockedGroup;
                         const open = openGroups[key] && !locked;
                         const picked = list.find(r => requestedRoomId === String(r.id));
                         return (
@@ -1019,7 +1022,7 @@ export default function RoomRequestsClient() {
                               <span className="flex-1 min-w-0">
                                 <span className="block text-sm font-semibold text-[color:var(--foreground)]">{label}</span>
                                 {locked
-                                  ? <span className="block text-xs font-medium text-[color:var(--foreground-muted)]">Not allowed for a lecture subject</span>
+                                  ? <span className="block text-xs font-medium text-[color:var(--foreground-muted)]">Not allowed for a {key === 'lab' ? 'lecture' : 'laboratory'} subject</span>
                                   : picked && <span className="block text-xs font-medium truncate" style={{ color: fg }}>{picked.room_name}</span>}
                               </span>
                               <motion.span

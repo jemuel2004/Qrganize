@@ -1,4 +1,4 @@
-import { query } from '@/database/db';
+import { query, transaction } from '@/database/db';
 import { bumpTopics } from '@/services/realtime';
 
 let ready = false;
@@ -39,6 +39,7 @@ export async function ensureRoomRequestsSchema(): Promise<void> {
     `ALTER TABLE room_change_requests ADD COLUMN IF NOT EXISTS rejected_at           TIMESTAMPTZ`,
     `ALTER TABLE room_change_requests ADD COLUMN IF NOT EXISTS expired_at            TIMESTAMPTZ`,
     `ALTER TABLE room_change_requests ADD COLUMN IF NOT EXISTS confirmed_at          TIMESTAMPTZ`,
+    `ALTER TABLE room_change_requests ADD COLUMN IF NOT EXISTS session_rooms         JSONB`,
   ];
   for (const sql of cols) {
     await query(sql).catch(() => {});
@@ -147,11 +148,83 @@ export async function expireStaleOccupancy(roomId?: number): Promise<void> {
 }
 
 /**
+ * Put a class into the room its request was approved or confirmed for.
+ * Only sessions allowed in that room move — a lecture room never takes a
+ * Laboratory session (the Scheduling rule) — and each moved session's previous
+ * room is kept on the request (session_rooms), so releasing the room puts every
+ * session back exactly where it was, even when Lecture and Laboratory use
+ * different rooms.
+ */
+export async function applyRequestedRoom(rcr: {
+  id: number;
+  master_schedule_id: number;
+  requested_room_id: number;
+}): Promise<void> {
+  await ensureRoomRequestsSchema();
+  await transaction(async (client) => {
+    const moving = await client.query<{ id: number; room_id: number | null }>(`
+      SELECT ss.id, ss.room_id
+      FROM   schedule_sessions ss
+      JOIN   rooms r ON r.id = $2
+      WHERE  ss.master_schedule_id = $1
+        AND  ss.room_id IS DISTINCT FROM $2
+        AND  (LOWER(TRIM(r.room_type)) IN ('laboratory', 'computer lab') OR COALESCE(ss.type, 'lec') = 'lec')
+      ORDER BY ss.id
+      FOR UPDATE OF ss
+    `, [rcr.master_schedule_id, rcr.requested_room_id]);
+
+    const previous: Record<string, number | null> = {};
+    for (const s of moving.rows) previous[String(s.id)] = s.room_id;
+
+    if (moving.rows.length > 0) {
+      await client.query(
+        `UPDATE schedule_sessions SET room_id = $1 WHERE id = ANY($2::int[])`,
+        [rcr.requested_room_id, moving.rows.map(s => s.id)],
+      );
+    }
+    await client.query(`UPDATE master_schedule SET room_id = $1 WHERE id = $2`, [rcr.requested_room_id, rcr.master_schedule_id]);
+    await client.query(
+      `UPDATE room_change_requests SET session_rooms = $1::jsonb WHERE id = $2`,
+      [JSON.stringify(previous), rcr.id],
+    );
+  });
+}
+
+/**
+ * Sessions a released request moved go back to their own previous rooms.
+ * Only sessions still in the requested room are touched (a class rescheduled
+ * since then is left alone). Requests from before session_rooms was kept send
+ * them back to the class's original room.
+ */
+async function restoreRequestSessionRooms(r: {
+  master_schedule_id: number;
+  original_room_id: number | null;
+  requested_room_id: number | null;
+  session_rooms: Record<string, number | null> | null;
+}): Promise<void> {
+  if (r.session_rooms) {
+    await query(`
+      UPDATE schedule_sessions ss
+      SET    room_id = ($3::jsonb ->> ss.id::text)::int
+      WHERE  ss.master_schedule_id = $1
+        AND  ss.room_id IS NOT DISTINCT FROM $2
+        AND  $3::jsonb ? ss.id::text
+    `, [r.master_schedule_id, r.requested_room_id, JSON.stringify(r.session_rooms)]);
+    return;
+  }
+  await query(
+    `UPDATE schedule_sessions SET room_id = $1 WHERE master_schedule_id = $2 AND room_id IS NOT DISTINCT FROM $3`,
+    [r.original_room_id, r.master_schedule_id, r.requested_room_id],
+  );
+}
+
+/**
  * If the latest request for a class is Released but the schedule still
  * points at the requested room (leftover from admin approval), restore
- * original_room_id so the room can be requested again.
+ * the previous rooms so the room can be requested again.
  */
 async function restoreSchedulesAfterReleasedRequests(): Promise<void> {
+  await ensureRoomRequestsSchema();
   const classes = await query(`
     WITH latest AS (
       SELECT DISTINCT ON (master_schedule_id)
@@ -179,6 +252,8 @@ async function restoreSchedulesAfterReleasedRequests(): Promise<void> {
            )
   `).catch(() => null);
 
+  // Each moved session goes back to its own previous room (session_rooms);
+  // requests without that record fall back to the class's original room.
   const sessions = await query(`
     WITH latest AS (
       SELECT DISTINCT ON (master_schedule_id)
@@ -186,18 +261,25 @@ async function restoreSchedulesAfterReleasedRequests(): Promise<void> {
              original_room_id,
              requested_room_id,
              faculty_id,
-             status
+             status,
+             session_rooms
       FROM   room_change_requests
       WHERE  master_schedule_id IS NOT NULL
       ORDER BY master_schedule_id, created_at DESC, id DESC
     )
     UPDATE schedule_sessions ss
-    SET    room_id = latest.original_room_id
+    SET    room_id = CASE
+                       WHEN latest.session_rooms IS NULL THEN latest.original_room_id
+                       ELSE (latest.session_rooms ->> ss.id::text)::int
+                     END
     FROM   latest
     WHERE  ss.master_schedule_id = latest.master_schedule_id
       AND  latest.status = 'Released'
       AND  ss.room_id IS NOT DISTINCT FROM latest.requested_room_id
-      AND  ss.room_id IS DISTINCT FROM latest.original_room_id
+      AND  (
+             (latest.session_rooms IS NULL AND ss.room_id IS DISTINCT FROM latest.original_room_id)
+             OR latest.session_rooms ? ss.id::text
+           )
       AND  NOT EXISTS (
              SELECT 1 FROM room_occupancy ro
              WHERE  ro.room_id    = latest.requested_room_id
@@ -230,6 +312,7 @@ export async function completeRoomRelease(
   if (released.rows.length === 0) return false;
   bumpTopics(['occupancy']);
 
+  await ensureRoomRequestsSchema();
   const closed = await query(`
     UPDATE room_change_requests
     SET    status     = 'Released',
@@ -238,20 +321,22 @@ export async function completeRoomRelease(
     WHERE  faculty_id        = $1
       AND  requested_room_id = $2
       AND  status            = 'In-Use'
-    RETURNING master_schedule_id, original_room_id
+    RETURNING master_schedule_id, original_room_id, requested_room_id, session_rooms
   `, [facultyId, roomId]);
   if (closed.rows.length > 0) bumpTopics(['room-requests', 'schedule', 'workload']);
 
   for (const row of closed.rows) {
     if (!row.master_schedule_id) continue;
     await query(
-      `UPDATE master_schedule SET room_id = $1 WHERE id = $2`,
-      [row.original_room_id ?? null, row.master_schedule_id],
+      `UPDATE master_schedule SET room_id = $1 WHERE id = $2 AND room_id IS NOT DISTINCT FROM $3`,
+      [row.original_room_id ?? null, row.master_schedule_id, row.requested_room_id ?? null],
     );
-    await query(
-      `UPDATE schedule_sessions SET room_id = $1 WHERE master_schedule_id = $2`,
-      [row.original_room_id ?? null, row.master_schedule_id],
-    );
+    await restoreRequestSessionRooms({
+      master_schedule_id: Number(row.master_schedule_id),
+      original_room_id: row.original_room_id ?? null,
+      requested_room_id: row.requested_room_id ?? null,
+      session_rooms: row.session_rooms ?? null,
+    });
   }
 
   await restoreSchedulesAfterReleasedRequests();

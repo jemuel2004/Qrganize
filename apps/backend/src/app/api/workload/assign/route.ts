@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { query } from '@/database/db';
+import { query, transaction } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { regularLoadLimit as termRegularLoadLimit } from '@shared/regularLoad';
 import { getWorkloadPolicy } from '@/services/workloadPolicy';
@@ -166,49 +166,59 @@ async function POST_handler(req: NextRequest) {
       });
       if (capError) return NextResponse.json({ error: capError, overload_limit_reached: true }, { status: 409 });
     }
-    // Claim the subject atomically — two admins assigning at once can't both pass the checks above
-    const claimed = await query(
-      `UPDATE master_schedule SET faculty_id=$1, status=$2, updated_at=NOW()
-       WHERE id=$3 AND faculty_id IS NULL
-         AND COALESCE(status, 'Unassigned') NOT IN ('Assigned', 'Scheduled', 'Completed')
-       RETURNING id`,
-      [faculty_id, 'Assigned', master_schedule_id]
-    );
-    if (claimed.rows.length === 0) {
+    // Claim the subject and record its load together: two admins assigning at
+    // once can't both pass the checks above, and a failed insert never leaves
+    // a class marked Assigned with no load behind it.
+    // assign_category === 'regular' (or any other value) is stored as Regular —
+    // even past the limit; the admin can move it to Overload later.
+    const category = assign_category === 'overload' ? 'Overload' : 'Regular';
+    const claimed = await transaction(async (client) => {
+      const claim = await client.query(
+        `UPDATE master_schedule SET faculty_id=$1, status=$2, updated_at=NOW()
+         WHERE id=$3 AND faculty_id IS NULL
+           AND COALESCE(status, 'Unassigned') NOT IN ('Assigned', 'Scheduled', 'Completed')
+         RETURNING id`,
+        [faculty_id, 'Assigned', master_schedule_id]
+      );
+      if (claim.rows.length === 0) return false;
+
+      await client.query(`
+        INSERT INTO instructor_loads
+          (faculty_id, master_schedule_id, load_category, units, hours, academic_year, semester)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `, [
+        faculty_id, master_schedule_id, category,
+        isPermanent  ? subjectValue : 0,
+        !isPermanent ? subjectValue : 0,
+        sched.academic_year, sched.semester,
+      ]);
+
+      if (category === 'Overload') {
+        // Audit record in overloads table
+        await client.query('DELETE FROM overloads WHERE faculty_id=$1 AND master_schedule_id=$2', [faculty_id, master_schedule_id]);
+        await client.query(`
+          INSERT INTO overloads
+            (faculty_id, master_schedule_id, units, hours, reason, academic_year, semester)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [
+          faculty_id, master_schedule_id,
+          isPermanent  ? subjectValue : 0,
+          !isPermanent ? subjectValue : 0,
+          'Teaching overload — admin approved at assignment',
+          sched.academic_year, sched.semester,
+        ]);
+      }
+      return true;
+    });
+    if (!claimed) {
       return NextResponse.json(
         { error: 'This subject is already assigned to a faculty member and cannot be assigned again.' },
         { status: 409 },
       );
     }
 
-    if (assign_category === 'overload') {
-      // Full subject goes into instructor_loads as Overload
-      await query(`
-        INSERT INTO instructor_loads
-          (faculty_id, master_schedule_id, load_category, units, hours, academic_year, semester)
-        VALUES ($1, $2, 'Overload', $3, $4, $5, $6)
-      `, [
-        faculty_id, master_schedule_id,
-        isPermanent  ? subjectValue : 0,
-        !isPermanent ? subjectValue : 0,
-        sched.academic_year, sched.semester,
-      ]);
-
-      // Audit record in overloads table
-      await query('DELETE FROM overloads WHERE faculty_id=$1 AND master_schedule_id=$2', [faculty_id, master_schedule_id]);
-      await query(`
-        INSERT INTO overloads
-          (faculty_id, master_schedule_id, units, hours, reason, academic_year, semester)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-      `, [
-        faculty_id, master_schedule_id,
-        isPermanent  ? subjectValue : 0,
-        !isPermanent ? subjectValue : 0,
-        'Teaching overload — admin approved at assignment',
-        sched.academic_year, sched.semester,
-      ]);
-
-      void syncWorkloadMonitoringNotifications(true);
+    void syncWorkloadMonitoringNotifications(true);
+    if (category === 'Overload') {
       return NextResponse.json({
         success: true,
         load_category: 'Overload',
@@ -219,21 +229,6 @@ async function POST_handler(req: NextRequest) {
       });
     }
 
-    // assign_category === 'regular' (or any other value defaults to Regular)
-    // Admin chose to add within regular — store full value as Regular even if it
-    // temporarily exceeds the limit. Admin can promote to Overload manually later.
-    await query(`
-      INSERT INTO instructor_loads
-        (faculty_id, master_schedule_id, load_category, units, hours, academic_year, semester)
-      VALUES ($1, $2, 'Regular', $3, $4, $5, $6)
-    `, [
-      faculty_id, master_schedule_id,
-      isPermanent  ? subjectValue : 0,
-      !isPermanent ? subjectValue : 0,
-      sched.academic_year, sched.semester,
-    ]);
-
-    void syncWorkloadMonitoringNotifications(true);
     const remainingAfter = parseFloat((remainingRegular - subjectValue).toFixed(2));
     return NextResponse.json({
       success: true,

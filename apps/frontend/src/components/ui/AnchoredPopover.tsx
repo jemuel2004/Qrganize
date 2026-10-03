@@ -17,6 +17,23 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 
 const GAP = 8;
 const EASE = [0.4, 0, 0.2, 1] as const;
+/** Above the sticky app header (z-40) and the page's own overlays (z-50/60) */
+const BASE_Z = 80;
+
+/**
+ * The panel is portalled to <body>, so it must out-rank whatever layer its
+ * trigger sits in — a Modal is z-[9999], and at the base level the list would
+ * open hidden behind it. One above the trigger's highest ancestor, never
+ * below the base.
+ */
+function layerAbove(el: HTMLElement): number {
+  let top = 0;
+  for (let n: HTMLElement | null = el; n; n = n.parentElement) {
+    const z = Number.parseInt(getComputedStyle(n).zIndex, 10);
+    if (Number.isFinite(z)) top = Math.max(top, z);
+  }
+  return Math.max(BASE_Z, top + 1);
+}
 
 export default function AnchoredPopover({
   open,
@@ -46,7 +63,7 @@ export default function AnchoredPopover({
   children: ReactNode;
 }) {
   const reduceMotion = useReducedMotion();
-  const [pos, setPos] = useState<{ top: number; left: number; width: number; maxH: number; up: boolean } | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number; maxH: number; up: boolean; z: number } | null>(null);
 
   const place = useCallback(() => {
     const el = anchorRef.current;
@@ -65,7 +82,7 @@ export default function AnchoredPopover({
     const above = r.top - GAP - topSafe;
     const up = below < 300 && above > below;
     const maxH = Math.max(180, Math.min(maxHeight, up ? above : below));
-    setPos({ top: up ? r.top - GAP : r.bottom + GAP, left, width: w, maxH, up });
+    setPos({ top: up ? r.top - GAP : r.bottom + GAP, left, width: w, maxH, up, z: layerAbove(el) });
   }, [anchorRef, width, maxHeight, align]);
 
   /* Still on screen — open, or playing its close animation. */
@@ -113,7 +130,7 @@ export default function AnchoredPopover({
             maxHeight: pos.maxH,
             ...(pos.up ? { bottom: window.innerHeight - pos.top } : { top: pos.top }),
             transformOrigin: pos.up ? 'bottom center' : 'top center',
-            zIndex: 80, // above the sticky app header
+            zIndex: pos.z, // above the sticky app header, and above a modal it opens from
           }}
           className="flex flex-col bg-white border border-[#E2E8F0] rounded-2xl shadow-[0_18px_44px_-14px_rgba(11,42,91,0.4)] overflow-hidden"
         >

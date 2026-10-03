@@ -1,7 +1,7 @@
 ﻿import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUser } from '@/auth/auth';
 import { query } from '@/database/db';
-import { expireStaleOccupancy, expireStaleRoomRequests } from '@/services/ensureRoomOccupancy';
+import { applyRequestedRoom, expireStaleOccupancy, expireStaleRoomRequests } from '@/services/ensureRoomOccupancy';
 import { createNotification } from '@/services/notifications';
 import { withAudit } from '@/services/audit';
 import { canManageRooms } from '@/services/rooms';
@@ -53,22 +53,8 @@ async function PATCH_handler(
 
     let roomChangeApplied = false;
 
-    if (status === 'Approved' && rcr.master_schedule_id && rcr.requested_room_id) {
-      await query(`
-        UPDATE schedule_sessions
-        SET    room_id = $1
-        WHERE  master_schedule_id = $2
-      `, [rcr.requested_room_id, rcr.master_schedule_id]);
-
-      await query(`
-        UPDATE master_schedule
-        SET    room_id = $1
-        WHERE  id = $2
-      `, [rcr.requested_room_id, rcr.master_schedule_id]);
-
-      roomChangeApplied = true;
-    }
-
+    // The room is claimed first; the class only moves once the claim succeeds,
+    // so a room someone else holds never leaves the schedule half-changed.
     if (rcr.requested_room_id) {
       if (status === 'Rejected') {
         await query(`
@@ -135,6 +121,13 @@ async function PATCH_handler(
               rcr.faculty_id,
             ]).catch(() => {});
           }
+
+          await applyRequestedRoom({
+            id: rid,
+            master_schedule_id: Number(rcr.master_schedule_id),
+            requested_room_id: Number(rcr.requested_room_id),
+          });
+          roomChangeApplied = true;
         }
       }
     }

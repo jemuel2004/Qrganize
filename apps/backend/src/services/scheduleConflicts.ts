@@ -13,6 +13,10 @@
  * The component being edited (same master_schedule + same lec/lab type) is
  * excluded, since saving replaces it; the sibling Lecture/Laboratory of the
  * same subject still counts.
+ *
+ * The faculty's non-teaching time (faculty_activities — Consultation,
+ * meetings, …) also makes them unavailable. Callers ensure that table exists
+ * (ensureFacultyActivitiesTable) before calling findScheduleConflicts.
  */
 
 export const WEEK_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -182,6 +186,29 @@ export async function findScheduleConflicts(q: Queryable, opts: {
       const r = await q(`SELECT ${cols} ${from} WHERE ms2.faculty_id = $9 AND ${common} LIMIT 1`, [...base, facultyId]);
       if (r.rows[0]) push('instructor', r.rows[0], (st, et) =>
         `Faculty already has a class on ${s.day}: ${r.rows[0].subject_code} (${r.rows[0].block_name}) ${fmt12(st)}–${fmt12(et)}.`);
+      // Non-teaching time on the faculty's timetable (Consultation, meetings, …) —
+      // not workload, but the faculty is not available then.
+      else {
+        const ra = await q(
+          `SELECT fa.activity, fa.start_time::text AS start_time, fa.end_time::text AS end_time
+             FROM faculty_activities fa
+            WHERE fa.faculty_id = $1 AND fa.day_of_week = $2
+              AND ($3 = '' OR fa.semester = $3) AND ($4 = '' OR fa.academic_year = $4)
+              AND (EXTRACT(EPOCH FROM fa.start_time) / 60) < $6
+              AND (EXTRACT(EPOCH FROM fa.end_time) / 60) > $5
+            ORDER BY fa.start_time LIMIT 1`,
+          [facultyId, s.day, semester || '', academicYear || '', start, end],
+        );
+        const a = ra.rows[0];
+        if (a) {
+          const st = String(a.start_time).substring(0, 5);
+          const et = String(a.end_time).substring(0, 5);
+          conflicts.push({
+            session_index: i, type: 'instructor', day: s.day, existing_start: st, existing_end: et,
+            message: `Faculty is not available on ${s.day} ${fmt12(st)}–${fmt12(et)}: ${a.activity} (non-teaching).`,
+          });
+        }
+      }
     }
 
     const rb = await q(`SELECT ${cols} ${from} WHERE bs2.block_id = $9 AND ${common} LIMIT 1`, [...base, blockId]);

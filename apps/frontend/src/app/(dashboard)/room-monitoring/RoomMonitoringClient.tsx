@@ -5,22 +5,29 @@
  *
  * A live board, one card per room: who is in it now (QR check-in), how much of
  * the class is left, the next class today, and rooms whose class started with
- * no check-in. Refreshes quietly every 30 s. Built on /api/rooms/utilization
- * (today, daily) — the same data behind Room Utilization, which covers the
- * history/report side.
+ * no check-in. Clicking a room opens its schedule: the class in it now and
+ * every class coming up over the next week (instructor, subject, block, day,
+ * time). Refreshes quietly every 30 s. Built on /api/rooms/utilization (today,
+ * daily; one room, upcoming) — the same data behind Room Utilization, which
+ * covers the history/report side.
  */
 
 import { useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import { Clock, DoorOpen, Hourglass, User, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { BookOpen, ChevronRight, Clock, DoorOpen, Hourglass, Loader2, Monitor, Printer, User, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
+import Modal from '@/components/ui/Modal';
+import FriendlySelect from '@/components/ui/FriendlySelect';
 import { SearchInput } from '@/components/ui/SearchFilter';
 import { CardSkeleton, PillsSkeleton, Skeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import CountFilterTabs from '@/components/ui/CountFilterTabs';
+import { dayTone } from '@/lib/dayTones';
+import { useToast } from '@/context/ToastContext';
+import { printRoomSchedule, type RoomClass } from './roomSchedulePrint';
 import {
-  fmt12, RefreshButton, RoomIcon, useUtilization,
+  fmt12, fmtDate, RefreshButton, RoomIcon, useUtilization,
   type UtilRoom, type UtilRow,
 } from '../room-utilization/shared';
 
@@ -90,35 +97,129 @@ function fmtLeft(min: number) {
   return h ? `${h} hr${m ? ` ${m} min` : ''} left` : `${m} min left`;
 }
 
-/* ─── Room card ─────────────────────────────────────────────────────────── */
+/* ─── Pieces shared by the room card and the room's schedule ────────────── */
 
-function RoomCard({ info, index }: { info: RoomNow; index: number }) {
+const EASE_OUT = [0.16, 1, 0.3, 1] as const;
+
+/** Lecture / Laboratory tag of a class */
+function PartPill({ component }: { component: string }) {
+  const lab = component.toLowerCase().startsWith('lab');
+  return (
+    <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${
+      lab ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-[#EFF6FF] text-[#1D5BD6] border-[#BFDBFE]'
+    }`}>
+      {lab ? 'Laboratory' : 'Lecture'}
+    </span>
+  );
+}
+
+/** Block chip — solid royal blue (translucent white on the navy In-use panel) */
+function BlockChip({ block, onDark = false }: { block: string; onDark?: boolean }) {
+  return (
+    <span
+      className="text-[11px] font-bold px-2 py-0.5 rounded-md whitespace-nowrap"
+      style={onDark ? { backgroundColor: 'rgba(255,255,255,0.18)', color: '#FFFFFF' } : { backgroundColor: '#1E4FB8', color: '#FFFFFF' }}
+    >
+      {block}
+    </span>
+  );
+}
+
+/** "Now" — the class in the room at this moment and how much of it is left, or that the room is free */
+function NowPanel({ info }: { info: RoomNow }) {
   const reduceMotion = useReducedMotion();
-  const { room, current, next } = info;
-  const lab = isLabRoom(room.room_type);
-  const type = lab ? TYPE_TONE.lab : TYPE_TONE.lecture;
+  const { room, current: cls } = info;
+  const type = isLabRoom(room.room_type) ? TYPE_TONE.lab : TYPE_TONE.lecture;
   // Free rooms take their room-type tint; other states their status colour
   const tone = info.status === 'Free'
     ? { ...LIVE_TONE.Free, bar: type.bar, soft: type.soft, text: type.text }
     : LIVE_TONE[info.status];
-  const cls = current ?? null;
-  // Text colours inside the "Now" panel (white on the navy In-use panel)
+  // Text colours inside the panel (white on the navy In-use panel)
   const ink = tone.dark
     ? { strong: '#FFFFFF', body: '#DCE6F7', track: 'rgba(255,255,255,0.22)', fill: '#FFFFFF' }
     : { strong: '#0B2A5B', body: '#334155', track: 'rgba(255,255,255,0.8)', fill: tone.bar };
 
   return (
+    <div className="rounded-xl px-3.5 py-3" style={{ background: tone.soft }}>
+      {cls ? (
+        <>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-bold text-[15px]" style={{ color: ink.strong }}>{cls.subject_code}</span>
+            {cls.component && <PartPill component={cls.component} />}
+            {cls.block && <BlockChip block={cls.block} onDark={tone.dark} />}
+          </div>
+          {cls.subject_name && <div className="text-sm mt-0.5 truncate" style={{ color: ink.body }}>{cls.subject_name}</div>}
+          <div className="mt-2 flex items-center justify-between gap-2 text-sm">
+            <span className="inline-flex items-center gap-1.5 min-w-0" style={{ color: ink.body }}>
+              <User className="w-3.5 h-3.5 flex-shrink-0" />
+              <span className="truncate">{cls.faculty_name ?? 'No instructor'}</span>
+            </span>
+            <span className="inline-flex items-center gap-1 font-semibold whitespace-nowrap" style={{ color: ink.strong }}>
+              <Clock className="w-3.5 h-3.5" /> {fmt12(cls.start)}–{fmt12(cls.end)}
+            </span>
+          </div>
+          {/* Time used / left */}
+          <div className="mt-2.5">
+            <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: ink.track }}>
+              <motion.div
+                className="h-full rounded-full"
+                style={{ backgroundColor: ink.fill }}
+                initial={reduceMotion ? false : { width: 0 }}
+                animate={{ width: `${Math.round(info.progress * 100)}%` }}
+                transition={{ duration: reduceMotion ? 0 : 0.6, ease: EASE_OUT }}
+              />
+            </div>
+            <div className="mt-1 text-xs font-semibold" style={{ color: tone.dark ? ink.body : tone.text }}>
+              {info.status === 'No check-in'
+                ? 'Class started — instructor has not scanned the room QR'
+                : info.status === 'Waiting'
+                  ? 'Class started — waiting for the instructor to scan'
+                  : fmtLeft(info.minutesLeft)}
+            </div>
+          </div>
+        </>
+      ) : info.status === 'In use' ? (
+        <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: tone.text }}>
+          <CheckCircle2 className="w-4 h-4" />
+          In use{room.live_faculty ? ` by ${room.live_faculty}` : ''} (no class scheduled now)
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: tone.text }}>
+          <DoorOpen className="w-4 h-4" /> Free right now
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Room card ─────────────────────────────────────────────────────────── */
+
+function RoomCard({ info, index, onOpen }: { info: RoomNow; index: number; onOpen: () => void }) {
+  const reduceMotion = useReducedMotion();
+  const { room, next } = info;
+  const lab = isLabRoom(room.room_type);
+  const type = lab ? TYPE_TONE.lab : TYPE_TONE.lecture;
+  const name = displayRoomName(room.room_name);
+
+  return (
     <motion.div
       layout={!reduceMotion}
+      // The whole card opens the room's schedule (mouse, Enter or Space)
+      role="button"
+      tabIndex={0}
+      aria-label={`${name} — view schedule`}
+      onClick={onOpen}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}
       initial={reduceMotion ? false : { opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.97 }}
-      transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1], delay: reduceMotion ? 0 : Math.min(index, 12) * 0.03 }}
-      whileHover={reduceMotion ? undefined : { y: -3 }}
-      className={`relative rounded-2xl border bg-white overflow-hidden shadow-[0_1px_2px_rgba(15,23,42,0.05)] hover:shadow-[0_14px_28px_-16px_rgba(11,42,91,0.45)] transition-shadow ${
+      transition={{ duration: 0.28, ease: EASE_OUT, delay: reduceMotion ? 0 : Math.min(index, 12) * 0.03 }}
+      whileHover={reduceMotion ? undefined : { y: -3, transition: { duration: 0.2, ease: EASE_OUT } }}
+      whileTap={reduceMotion ? undefined : { scale: 0.985, transition: { duration: 0.12 } }}
+      className={`group relative rounded-2xl border bg-white overflow-hidden cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[#1D5BD6]/40 shadow-[0_1px_2px_rgba(15,23,42,0.05)] hover:shadow-[0_14px_28px_-16px_rgba(11,42,91,0.45)] transition-shadow ${
         info.status === 'No check-in' ? 'qr-flag-pulse border-red-300'
           : info.status === 'In use' ? 'border-[#9DB8E8]'
-          : 'border-[#E2E8F0]'
+          : 'border-[#E2E8F0] hover:border-[#BFD3F5]'
       }`}
     >
       <div className="h-1.5" style={{ backgroundColor: type.bar }} />
@@ -128,87 +229,271 @@ function RoomCard({ info, index }: { info: RoomNow; index: number }) {
           <span className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${type.tile}`}>
             <RoomIcon type={lab ? 'Laboratory' : 'Lecture'} className="w-[18px] h-[18px]" />
           </span>
-          <div className="text-lg font-bold text-[#0B2A5B] truncate">{displayRoomName(room.room_name)}</div>
+          <div className="text-lg font-bold text-[#0B2A5B] truncate">{name}</div>
         </div>
 
-        {/* Now */}
-        <div className="mt-4 rounded-xl px-3.5 py-3" style={{ background: tone.soft }}>
-          {cls ? (
-            <>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="font-bold text-[15px]" style={{ color: ink.strong }}>{cls.subject_code}</span>
-                {cls.component && (
-                  <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${
-                    cls.component.toLowerCase().startsWith('lab')
-                      ? 'bg-amber-50 text-amber-700 border-amber-200'
-                      : 'bg-[#EFF6FF] text-[#1D5BD6] border-[#BFDBFE]'
-                  }`}>
-                    {cls.component.toLowerCase().startsWith('lab') ? 'Laboratory' : 'Lecture'}
-                  </span>
-                )}
-                {cls.block && (
-                  <span
-                    className="text-[11px] font-bold px-2 py-0.5 rounded-md"
-                    style={tone.dark ? { backgroundColor: 'rgba(255,255,255,0.18)', color: '#FFFFFF' } : { backgroundColor: '#1E4FB8', color: '#FFFFFF' }}
-                  >
-                    {cls.block}
-                  </span>
-                )}
-              </div>
-              {cls.subject_name && <div className="text-sm mt-0.5 truncate" style={{ color: ink.body }}>{cls.subject_name}</div>}
-              <div className="mt-2 flex items-center justify-between gap-2 text-sm">
-                <span className="inline-flex items-center gap-1.5 min-w-0" style={{ color: ink.body }}>
-                  <User className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span className="truncate">{cls.faculty_name ?? 'No instructor'}</span>
-                </span>
-                <span className="inline-flex items-center gap-1 font-semibold whitespace-nowrap" style={{ color: ink.strong }}>
-                  <Clock className="w-3.5 h-3.5" /> {fmt12(cls.start)}–{fmt12(cls.end)}
-                </span>
-              </div>
-              {/* Time used / left */}
-              <div className="mt-2.5">
-                <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: ink.track }}>
-                  <motion.div
-                    className="h-full rounded-full"
-                    style={{ backgroundColor: ink.fill }}
-                    initial={reduceMotion ? false : { width: 0 }}
-                    animate={{ width: `${Math.round(info.progress * 100)}%` }}
-                    transition={{ duration: reduceMotion ? 0 : 0.6, ease: [0.16, 1, 0.3, 1] }}
-                  />
-                </div>
-                <div className="mt-1 text-xs font-semibold" style={{ color: tone.dark ? ink.body : tone.text }}>
-                  {info.status === 'No check-in'
-                    ? 'Class started — instructor has not scanned the room QR'
-                    : info.status === 'Waiting'
-                      ? 'Class started — waiting for the instructor to scan'
-                      : fmtLeft(info.minutesLeft)}
-                </div>
-              </div>
-            </>
-          ) : info.status === 'In use' ? (
-            <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: tone.text }}>
-              <CheckCircle2 className="w-4 h-4" />
-              In use{room.live_faculty ? ` by ${room.live_faculty}` : ''} (no class scheduled now)
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: tone.text }}>
-              <DoorOpen className="w-4 h-4" /> Free right now
-            </div>
-          )}
-        </div>
+        <div className="mt-4"><NowPanel info={info} /></div>
 
-        {/* Next class today (only when there is one) */}
-        {next && (
-          <div className="mt-3 flex items-center gap-1.5 text-sm text-[#64748B] min-w-0">
-            <Hourglass className="w-3.5 h-3.5 flex-shrink-0" />
-            <span className="truncate">
-              Next: <span className="font-semibold text-[#0B2A5B]">{next.subject_code}</span>
-              {next.block ? ` · ${next.block}` : ''} at <span className="font-semibold text-[#0B2A5B]">{fmt12(next.start)}</span>
+        {/* Next class today (when there is one), and the way into the room's schedule */}
+        <div className="mt-3 flex items-center gap-2 text-sm min-w-0">
+          {next && (
+            <span className="inline-flex items-center gap-1.5 min-w-0 text-[#64748B]">
+              <Hourglass className="w-3.5 h-3.5 flex-shrink-0" />
+              <span className="truncate">
+                Next: <span className="font-semibold text-[#0B2A5B]">{next.subject_code}</span>
+                {next.block ? ` · ${next.block}` : ''} at <span className="font-semibold text-[#0B2A5B]">{fmt12(next.start)}</span>
+              </span>
             </span>
-          </div>
-        )}
+          )}
+          <span className="ml-auto inline-flex items-center gap-0.5 font-semibold text-[#1D5BD6] whitespace-nowrap">
+            View schedule <ChevronRight className="w-4 h-4 transition-transform duration-200 group-hover:translate-x-0.5" />
+          </span>
+        </div>
       </div>
     </motion.div>
+  );
+}
+
+/* ─── One room's schedule (opened from a card) ──────────────────────────── */
+
+const classes = (n: number) => `${n} ${n === 1 ? 'class' : 'classes'}`;
+const addDay = (date: string, n: number) => {
+  const [y, m, d] = date.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+};
+const SECTION_LABEL = 'text-xs font-bold uppercase tracking-wide text-[#475569]';
+
+/** One class: time · subject + Lecture/Lab + block, then instructor · subject name */
+function ClassRow({ row, next }: { row: UtilRow; next: boolean }) {
+  return (
+    <li
+      className="flex gap-3 rounded-xl border bg-white px-3.5 py-2.5"
+      style={next ? { borderColor: '#9DB8E8', boxShadow: '0 8px 18px -14px rgba(11,42,91,0.55)' } : { borderColor: '#E3E9F3' }}
+    >
+      <div className="w-[86px] flex-shrink-0 pr-3 border-r border-[#EEF2F7]">
+        <div className="text-[15px] font-bold text-[#0B2A5B] tabular-nums whitespace-nowrap">{fmt12(row.start)}</div>
+        <div className="text-xs text-[#64748B] tabular-nums whitespace-nowrap">to {fmt12(row.end)}</div>
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-bold text-[15px] text-[#0B2A5B]">{row.subject_code}</span>
+          {row.component && <PartPill component={row.component} />}
+          {row.block && <BlockChip block={row.block} />}
+          {next && (
+            <span className="ml-auto text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ backgroundColor: '#0B2A5B', color: '#FFFFFF' }}>
+              Next
+            </span>
+          )}
+        </div>
+        <div className="mt-1 flex items-center gap-1.5 text-sm min-w-0" title={row.subject_name ?? undefined}>
+          <User className="w-3.5 h-3.5 flex-shrink-0 text-[#1D5BD6]" />
+          <span className="font-semibold text-[#334155] truncate flex-shrink-0 max-w-[65%]">{row.faculty_name ?? 'No instructor'}</span>
+          {row.subject_name && <span className="text-[#64748B] truncate min-w-0">· {row.subject_name}</span>}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+/** Switching days slides the list the way of the button pressed */
+const daySlide = {
+  enter: (dir: number) => ({ opacity: 0, x: dir * 24 }),
+  center: { opacity: 1, x: 0, transition: { duration: 0.25, ease: EASE_OUT } },
+  exit: (dir: number) => ({ opacity: 0, x: dir * -24, transition: { duration: 0.15, ease: EASE_OUT } }),
+};
+
+function RoomScheduleModal({ info, onClose }: { info: RoomNow; onClose: () => void }) {
+  const reduceMotion = useReducedMotion();
+  const { room } = info;
+  const lab = isLabRoom(room.room_type);
+  // Today's remaining classes and the week ahead — kept live like the board
+  const { data, error } = useUtilization('', 'upcoming', room.id, 30_000);
+  const [who, setWho] = useState('all');
+
+  const { coming, faculty } = useMemo(() => {
+    const rows = (data?.activity ?? []).filter(r => r.status === 'Upcoming' && r.subject_code);
+    const byFaculty = new Map<string, { key: string; name: string; count: number }>();
+    for (const r of rows) {
+      const key = String(r.faculty_id ?? 'none');
+      const f = byFaculty.get(key) ?? { key, name: r.faculty_name ?? 'No instructor', count: 0 };
+      f.count++;
+      byFaculty.set(key, f);
+    }
+    return {
+      coming: rows,
+      faculty: [...byFaculty.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
+    };
+  }, [data]);
+  // A pick that left the list (the schedule changed) falls back to everyone
+  const pick = faculty.some(f => f.key === who) ? who : 'all';
+
+  /** Classes grouped by date, in time order (the server sorts them) */
+  const days = useMemo(() => {
+    const out: { date: string; day: string; rows: UtilRow[] }[] = [];
+    for (const r of coming) {
+      if (pick !== 'all' && String(r.faculty_id ?? 'none') !== pick) continue;
+      const last = out[out.length - 1];
+      if (last?.date === r.date) last.rows.push(r);
+      else out.push({ date: r.date, day: r.day, rows: [r] });
+    }
+    return out;
+  }, [coming, pick]);
+  const nextKey = days[0]?.rows[0]?.key;
+  const tomorrow = data ? addDay(data.today, 1) : '';
+
+  /* Print: every class the room has in a week (whatever the faculty pick).
+     The 8 days loaded cover each weekday at least once — kept once each. */
+  const toast = useToast();
+  const [printing, setPrinting] = useState(false);
+  const weekly = useMemo(() => {
+    const out = new Map<string, RoomClass>();
+    for (const r of data?.activity ?? []) {
+      if (!r.subject_code || !r.start || !r.end) continue; // walk-ins
+      const key = [r.day, r.start, r.end, r.subject_code, r.component, r.block, r.faculty_id].join('|');
+      if (!out.has(key)) {
+        out.set(key, {
+          day: r.day, start: r.start, end: r.end, subject_code: r.subject_code, subject_name: r.subject_name,
+          component: r.component, block: r.block, faculty_id: r.faculty_id, faculty_name: r.faculty_name,
+        });
+      }
+    }
+    return [...out.values()];
+  }, [data]);
+  const print = async () => {
+    if (!data || printing) return;
+    setPrinting(true);
+    try {
+      const result = await printRoomSchedule({
+        roomName: displayRoomName(room.room_name),
+        classes: weekly,
+        term: data.term,
+      });
+      if (!result.ok) toast.error('Could not open the print window. Allow pop-ups for this site, then try again.');
+    } finally {
+      setPrinting(false);
+    }
+  };
+  const nearLabel = (date: string) => (data && date === data.today ? 'Today' : date === tomorrow ? 'Tomorrow' : null);
+
+  /* One day at a time — opens on the day of the next class; a day that left
+     the list (other faculty picked, schedule changed) falls back to the first */
+  const [dayView, setDayView] = useState<{ date: string | null; dir: number }>({ date: null, dir: 1 });
+  const current = days.find(g => g.date === dayView.date) ?? days[0] ?? null;
+  const pickDay = (date: string) => {
+    const from = days.findIndex(g => g.date === current?.date);
+    setDayView({ date, dir: days.findIndex(g => g.date === date) >= from ? 1 : -1 });
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={displayRoomName(room.room_name)}
+      subtitle={[lab ? 'Laboratory' : 'Lecture room', room.building, room.capacity ? `${room.capacity} seats` : ''].filter(Boolean).join(' · ')}
+      icon={lab ? Monitor : BookOpen}
+      size="lg"
+      footer={
+        <div className="flex items-center justify-end gap-3">
+          <motion.button
+            type="button"
+            onClick={print}
+            disabled={!data || printing}
+            whileTap={reduceMotion || !data || printing ? undefined : { scale: 0.97 }}
+            className="inline-flex items-center justify-center gap-2 h-11 px-5 rounded-xl text-sm font-bold bg-[#1D5BD6] hover:bg-[#164BB5] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            style={{ color: '#FFFFFF' }}
+          >
+            {printing
+              ? <Loader2 className="w-4 h-4 animate-spin" style={{ color: '#FFFFFF' }} />
+              : <Printer className="w-4 h-4" style={{ color: '#FFFFFF' }} />}
+            {printing ? 'Preparing…' : 'Print schedule'}
+          </motion.button>
+        </div>
+      }
+    >
+      <div className="space-y-6">
+        <section>
+          <h3 className={`${SECTION_LABEL} mb-2`}>Right now</h3>
+          <NowPanel info={info} />
+        </section>
+
+        <section>
+          <div className="mb-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <h3 className={SECTION_LABEL}>Coming up{data ? ` · ${classes(coming.length)}` : ''}</h3>
+            {faculty.length > 1 && (
+              <div className="w-full sm:w-72">
+                <FriendlySelect
+                  value={pick}
+                  onChange={setWho}
+                  label="Faculty"
+                  searchable={faculty.length > 8}
+                  searchPlaceholder="Type a name…"
+                  options={[
+                    { value: 'all', label: 'All faculty', badge: classes(coming.length), badgeTone: 'muted' },
+                    ...faculty.map(f => ({ value: f.key, label: f.name, badge: classes(f.count), badgeTone: 'blue' as const })),
+                  ]}
+                />
+              </div>
+            )}
+          </div>
+
+          {!data ? (
+            error ? (
+              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+            ) : (
+              <div className="space-y-2" role="status" aria-label="Loading schedule">
+                {[0, 1, 2].map(i => <Skeleton key={i} className="h-[76px] rounded-xl" />)}
+              </div>
+            )
+          ) : !current ? (
+            <div className="rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] px-4 py-10 text-center text-sm font-semibold text-[#64748B]">
+              No classes coming up in this room in the next 7 days.
+            </div>
+          ) : (
+            <>
+              {/* Day buttons — each in its timetable colour (Mon+Thu, Tue+Fri, Wed, Sat) */}
+              <CountFilterTabs
+                className="mb-4"
+                label="Choose a day"
+                layoutId={`room-schedule-day-${room.id}`}
+                value={current.date}
+                onChange={pickDay}
+                options={days.map(g => ({
+                  key: g.date,
+                  label: nearLabel(g.date) ?? g.day.slice(0, 3),
+                  count: g.rows.length,
+                  color: dayTone(g.day).bar,
+                  dot: dayTone(g.day).bar,
+                }))}
+              />
+
+              <div className="overflow-hidden">
+                <AnimatePresence mode="wait" initial={false} custom={dayView.dir}>
+                  <motion.div
+                    key={`${pick}-${current.date}`}
+                    custom={dayView.dir}
+                    variants={reduceMotion ? undefined : daySlide}
+                    initial="enter"
+                    animate="center"
+                    exit="exit"
+                  >
+                    <div className="mb-2 flex items-center gap-2.5">
+                      <span className="w-1.5 h-6 rounded-full flex-shrink-0" style={{ backgroundColor: dayTone(current.day).bar }} />
+                      <span className="text-[15px] font-bold text-[#0B2A5B]">
+                        {nearLabel(current.date) ? `${nearLabel(current.date)} · ` : ''}
+                        {fmtDate(current.date, { weekday: 'long', month: 'long', day: 'numeric' })}
+                      </span>
+                    </div>
+                    <ul className="space-y-2">
+                      {current.rows.map(r => <ClassRow key={r.key} row={r} next={r.key === nextKey} />)}
+                    </ul>
+                  </motion.div>
+                </AnimatePresence>
+              </div>
+            </>
+          )}
+        </section>
+      </div>
+    </Modal>
   );
 }
 
@@ -224,12 +509,16 @@ export default function RoomMonitoringClient() {
   const firstLoad = useMinLoading(!data && !error, LOADING_DELAY);
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
+  /** Room whose schedule is open */
+  const [openId, setOpenId] = useState<number | null>(null);
 
   const rooms = useMemo(() => {
     if (!data) return [] as RoomNow[];
     const nowMin = toMin(data.now);
     return data.rooms.map(r => roomNow(r, data.activity, nowMin));
   }, [data]);
+  // Follows the live board; closes if the room is no longer active
+  const openRoom = openId == null ? null : rooms.find(r => r.room.id === openId) ?? null;
 
   const searched = rooms.filter(r => {
     const q = search.trim().toLowerCase();
@@ -344,10 +633,12 @@ export default function RoomMonitoringClient() {
       ) : (
         <motion.div layout className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
           <AnimatePresence mode="popLayout" initial={false}>
-            {shown.map((info, i) => <RoomCard key={info.room.id} info={info} index={i} />)}
+            {shown.map((info, i) => <RoomCard key={info.room.id} info={info} index={i} onOpen={() => setOpenId(info.room.id)} />)}
           </AnimatePresence>
         </motion.div>
       )}
+
+      {openRoom && <RoomScheduleModal key={openRoom.room.id} info={openRoom} onClose={() => setOpenId(null)} />}
     </div>
   );
 }

@@ -211,7 +211,7 @@ CREATE TABLE IF NOT EXISTS qr_scan_logs (
   master_schedule_id INTEGER REFERENCES master_schedule(id) ON DELETE SET NULL,
   scan_time TIMESTAMP NOT NULL DEFAULT NOW(),
   scan_date DATE NOT NULL DEFAULT CURRENT_DATE,
-  status VARCHAR(20) NOT NULL CHECK (status IN ('Valid', 'Late', 'Overuse', 'Invalid')),
+  status VARCHAR(20) NOT NULL CHECK (status IN ('Valid', 'Late', 'Overuse', 'Invalid', 'Blocked', 'Unauthorized')),
   notes TEXT,
   created_at TIMESTAMP DEFAULT NOW()
 );
@@ -314,6 +314,7 @@ CREATE TABLE IF NOT EXISTS room_change_requests (
   rejected_at           TIMESTAMPTZ,
   expired_at            TIMESTAMPTZ,
   confirmed_at          TIMESTAMPTZ,
+  session_rooms         JSONB,
   created_at            TIMESTAMP DEFAULT NOW(),
   updated_at            TIMESTAMP DEFAULT NOW()
 );

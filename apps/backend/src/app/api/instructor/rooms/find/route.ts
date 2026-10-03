@@ -2,6 +2,7 @@
 import { getAuthUser } from '@/auth/auth';
 import { query } from '@/database/db';
 import { ensureRoomOccupancy, expireStaleOccupancy } from '@/services/ensureRoomOccupancy';
+import { getActiveAcademicPeriod } from '@/services/activeAcademicPeriod';
 
 /**
  * GET /api/instructor/rooms/find?time=HH:MM&day=Monday
@@ -35,6 +36,8 @@ export async function GET(req: NextRequest) {
 
     await ensureRoomOccupancy();
     await expireStaleOccupancy();
+    // Only live classes of the active school year + semester take a room
+    const period = await getActiveAcademicPeriod();
 
     const result = await query(`
       SELECT
@@ -58,13 +61,19 @@ export async function GET(req: NextRequest) {
         AND NOT EXISTS (
           SELECT 1
           FROM   schedule_sessions ss
+          JOIN   master_schedule ms ON ms.id = ss.master_schedule_id
+          JOIN   block_subjects  bs ON bs.id = ms.block_subject_id
+          JOIN   blocks          b  ON b.id  = bs.block_id
           WHERE  ss.room_id     = r.id
             AND  ss.day_of_week = $1
             AND  $2::time BETWEEN ss.start_time AND ss.end_time
+            AND  ms.status IN ('Assigned', 'Scheduled', 'Completed')
+            AND  ($3 = '' OR b.academic_year = $3)
+            AND  ($4 = '' OR b.semester      = $4)
         )
 
       ORDER BY r.room_type, r.room_name
-    `, [day, time]);
+    `, [day, time, period.schoolYear ?? '', period.semester ?? '']);
 
     return NextResponse.json({ rooms: result.rows, time, day });
   } catch (error) {

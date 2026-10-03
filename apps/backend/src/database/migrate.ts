@@ -6,6 +6,8 @@ import { ensureCurriculumVersion, ensureBlockCurriculumVersion } from './migrate
 import { ensureAuditTable } from './auditSchema';
 import { ensureRealtimeTable } from './realtimeSchema';
 import { ensureErrorLogTable } from './errorLogSchema';
+import { ensureFacultyActivitiesTable } from './facultyActivitiesSchema';
+import { ensureNotificationsTable } from './notificationsSchema';
 import { canonicalSubjectCode, subjectKey } from '@shared/subjectCode';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -59,6 +61,39 @@ async function runMigration(
   console.log(`[migrate] v${version} applied.`);
 }
 
+/**
+ * Split a SQL file into statements. `--` comments are dropped and semicolons
+ * inside quoted strings are kept, so a comment that mentions a ';' can't cut
+ * a statement in two (schema.sql has no dollar-quoted bodies).
+ */
+export function splitSqlStatements(sql: string): string[] {
+  const statements: string[] = [];
+  let current = '';
+  let inQuote = false;
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i];
+    if (inQuote) {
+      current += ch;
+      if (ch === "'") inQuote = false; // a doubled '' re-opens on the next character
+      continue;
+    }
+    if (ch === "'") { inQuote = true; current += ch; continue; }
+    if (ch === '-' && sql[i + 1] === '-') {
+      while (i < sql.length && sql[i] !== '\n') i++;
+      current += '\n';
+      continue;
+    }
+    if (ch === ';') {
+      if (current.trim()) statements.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  if (current.trim()) statements.push(current.trim());
+  return statements;
+}
+
 // ─── individual migration functions ─────────────────────────────────────────
 
 async function v1_initialSchema() {
@@ -66,7 +101,7 @@ async function v1_initialSchema() {
     path.join(process.cwd(), 'database', 'schema.sql'),
     'utf-8'
   );
-  const stmts = sql.split(';').map(s => s.trim()).filter(Boolean);
+  const stmts = splitSqlStatements(sql);
   for (const stmt of stmts) {
     try {
       await query(stmt);
@@ -781,21 +816,20 @@ async function v36_blockCurriculumVersion() {
   await ensureBlockCurriculumVersion();
 }
 
+/**
+ * notifications is created on first use, so on a fresh database it doesn't
+ * exist yet here — indexing it directly failed and stopped every later
+ * migration. ensureNotificationsTable creates the table together with the
+ * condition-alert unique index over the full, current list of alert types.
+ */
 async function v37_monitoringNotificationUnique() {
-  await query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_monitoring_unique
-    ON notifications (recipient_role, recipient_id, type, related_module, related_id)
-    WHERE type IN ('workload_incomplete', 'block_unassigned')
-  `);
+  await ensureNotificationsTable();
 }
 
+/** Superseded by v37: the index already covers every condition-alert type
+ *  (rebuilding it here for only three types broke the other alerts' upserts). */
 async function v38_overloadReviewNotificationUnique() {
-  await query(`DROP INDEX IF EXISTS idx_notifications_monitoring_unique`);
-  await query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_monitoring_unique
-    ON notifications (recipient_role, recipient_id, type, related_module, related_id)
-    WHERE type IN ('workload_incomplete', 'workload_overload', 'block_unassigned')
-  `);
+  await ensureNotificationsTable();
 }
 
 async function v39_facultyPrioritySubjects() {
@@ -833,10 +867,17 @@ async function v41_auditLogs() {
  * generated from position, so only its expression changes — no rows rewritten.
  */
 async function v43_temporaryPermanentUnitBased() {
-  await query(`
-    ALTER TABLE faculty ALTER COLUMN employment_status
-    SET EXPRESSION AS (CASE WHEN position = 'Contractual' THEN 'Contractual' ELSE 'Permanent' END)
-  `);
+  const expr = `CASE WHEN position = 'Contractual' THEN 'Contractual' ELSE 'Permanent' END`;
+  const version = await query(`SELECT current_setting('server_version_num')::int AS n`);
+  if (Number(version.rows[0]?.n) >= 170000) {
+    await query(`ALTER TABLE faculty ALTER COLUMN employment_status SET EXPRESSION AS (${expr})`);
+    return;
+  }
+  // SET EXPRESSION needs PostgreSQL 17+; older servers rebuild the generated column (as v12 did)
+  await transaction(async (client) => {
+    await client.query(`ALTER TABLE faculty DROP COLUMN IF EXISTS employment_status`);
+    await client.query(`ALTER TABLE faculty ADD COLUMN employment_status VARCHAR(20) GENERATED ALWAYS AS (${expr}) STORED`);
+  });
 }
 
 /** Faculty → blocks they are assigned to teach (filters Faculty Workload's block list). */
@@ -885,6 +926,31 @@ async function v48_realtimeVersions() {
 /** Error log for System → Error Logs (services/errorLog.ts). */
 async function v49_errorLogs() {
   await ensureErrorLogTable();
+}
+
+/**
+ * Excel workload import: non-teaching time that blocks a faculty's
+ * availability, and faculty whose academic rank is not known yet (a new
+ * Permanent faculty from the workload forms) keep Position empty until set.
+ */
+async function v50_facultyActivitiesAndOptionalRank() {
+  await ensureFacultyActivitiesTable();
+  await query(`ALTER TABLE faculty ALTER COLUMN position DROP NOT NULL`);
+}
+
+/**
+ * QR scans that are turned away are logged too ('Blocked', 'Unauthorized'),
+ * but the original check only allowed attendance results, so those rows were
+ * rejected. Room requests also keep each moved session's previous room
+ * (session_rooms), so a release puts every session back exactly where it was.
+ */
+async function v51_scanLogStatusesAndRequestSessionRooms() {
+  await query(`ALTER TABLE qr_scan_logs DROP CONSTRAINT IF EXISTS qr_scan_logs_status_check`);
+  await query(`
+    ALTER TABLE qr_scan_logs ADD CONSTRAINT qr_scan_logs_status_check
+      CHECK (status IN ('Valid', 'Late', 'Overuse', 'Invalid', 'Blocked', 'Unauthorized'))
+  `);
+  await query(`ALTER TABLE room_change_requests ADD COLUMN IF NOT EXISTS session_rooms JSONB`);
 }
 
 /** One-time: each faculty is assigned the blocks they already teach, so the new
@@ -994,6 +1060,8 @@ const MIGRATIONS: Array<{ version: number; name: string; fn: () => Promise<void>
   { version: 47, name: 'curriculum manual subject_category',      fn: v47_curriculumCategoryManual },
   { version: 48, name: 'realtime_versions table',                 fn: v48_realtimeVersions },
   { version: 49, name: 'error_logs table',                        fn: v49_errorLogs },
+  { version: 50, name: 'faculty_activities + optional rank',      fn: v50_facultyActivitiesAndOptionalRank },
+  { version: 51, name: 'scan log statuses + request session rooms', fn: v51_scanLogStatusesAndRequestSessionRooms },
 ];
 
 // ─── public entry point ───────────────────────────────────────────────────────

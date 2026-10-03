@@ -5,6 +5,7 @@ import { canAccessMasterSchedule } from '@/services/programScope';
 import { findScheduleConflicts, validateSessions, type ConflictSessionInput } from '@/services/scheduleConflicts';
 import { withAudit } from '@/services/audit';
 import { termDayCombinationError } from '@/services/dayCombinations';
+import { ensureFacultyActivitiesTable } from '@/database/facultyActivitiesSchema';
 
 /**
  * Preview conflicts for sessions before saving. Uses the same rules as the
@@ -54,6 +55,7 @@ async function POST_handler(req: NextRequest) {
     const invalid = validateSessions(complete.map(x => x.s));
     if (invalid) return NextResponse.json({ error: invalid }, { status: 400 });
 
+    await ensureFacultyActivitiesTable();
     const found = await findScheduleConflicts(query, {
       masterScheduleId: Number(master_schedule_id),
       facultyId: sched.faculty_id ? Number(sched.faculty_id) : null,

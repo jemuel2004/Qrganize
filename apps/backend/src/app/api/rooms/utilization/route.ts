@@ -5,9 +5,10 @@ import { getActiveAcademicPeriod } from '@/services/activeAcademicPeriod';
 import { ensureQrScanLogsSchema, ensureRoomOccupancy, expireStaleOccupancy } from '@/services/ensureRoomOccupancy';
 
 /**
- * GET /api/rooms/utilization?date=YYYY-MM-DD&view=daily|weekly|monthly[&room_id=N]
+ * GET /api/rooms/utilization?date=YYYY-MM-DD&view=daily|weekly|monthly|upcoming[&room_id=N]
  *
  * "Are the rooms actually being used as scheduled?"
+ * (upcoming = `date` and the 7 days after it — a room's schedule on Room Monitoring)
  *
  * For every scheduled class session (active term) that falls in the range,
  * matches the instructor's actual QR check-in for that room/day/time and
@@ -22,7 +23,7 @@ import { ensureQrScanLogsSchema, ensureRoomOccupancy, expireStaleOccupancy } fro
  * room_id, that room's raw QR scan logs.
  */
 
-type View = 'daily' | 'weekly' | 'monthly';
+type View = 'daily' | 'weekly' | 'monthly' | 'upcoming';
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const CHECKIN_EARLY_MIN = 30; // a scan up to 30 min before start counts
 const PENDING_WINDOW_MIN = 15; // same 15-minute window as room reservations
@@ -35,6 +36,8 @@ const fmtD = (d: Date) => d.toISOString().slice(0, 10);
 const addDays = (s: string, n: number) => { const d = parseD(s); d.setUTCDate(d.getUTCDate() + n); return fmtD(d); };
 
 function rangeFor(date: string, view: View): { start: string; end: string } {
+  // Today's remaining classes and a full week ahead, so every weekday shows once more
+  if (view === 'upcoming') return { start: date, end: addDays(date, 7) };
   if (view === 'weekly') {
     const dow = parseD(date).getUTCDay();          // 0 Sun … 6 Sat
     const start = addDays(date, dow === 0 ? -6 : 1 - dow); // Monday
@@ -67,7 +70,7 @@ export async function GET(req: NextRequest) {
     const rawDate = searchParams.get('date') ?? today;
     const date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) && !Number.isNaN(parseD(rawDate).getTime()) ? rawDate : today;
     const rawView = searchParams.get('view') ?? 'daily';
-    const view: View = rawView === 'weekly' || rawView === 'monthly' ? rawView : 'daily';
+    const view: View = rawView === 'weekly' || rawView === 'monthly' || rawView === 'upcoming' ? rawView : 'daily';
     const roomIdParam = Number.parseInt(searchParams.get('room_id') ?? '', 10);
     const roomId = Number.isInteger(roomIdParam) && roomIdParam > 0 ? roomIdParam : null;
     const { start, end } = rangeFor(date, view);
@@ -217,7 +220,7 @@ export async function GET(req: NextRequest) {
 
     /* Raw scan logs for one room (usage history page) */
     let logs: unknown[] = [];
-    if (roomId) {
+    if (roomId && view !== 'upcoming') {
       logs = (await query(`
         SELECT q.id, q.scan_date::text AS scan_date, to_char(q.scan_time, 'HH24:MI') AS scan_hm, q.status, q.notes,
                q.scheduled_start::text AS scheduled_start, q.scheduled_end::text AS scheduled_end,

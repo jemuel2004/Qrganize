@@ -691,6 +691,11 @@ export default function ClassProgramPage() {
             and the header sticks inside it. */}
         <div id="cp-preview" className="cp-shell">
           <div className="page">
+          {/* Page frame (officialPrintPagedHtml): the header repeats at the top of
+              every printed page; the table-foot spacer keeps text off the footer */}
+          <table className="op-frame">
+          <thead><tr><td>
+            <div className="op-top" />
 
             {/* Header — same structure as Faculty Workload Print */}
             <div className="hdr">
@@ -705,6 +710,8 @@ export default function ClassProgramPage() {
               <div className="hdr-sem">{semesterHeading(blockDetail!.semester)}</div>
               <div className="hdr-ay">A.Y {formatAy(blockDetail!.academic_year)}</div>
             </div>
+          </td></tr></thead>
+          <tbody><tr><td>
 
             {/* Block info — semester and A.Y. are already in the header above */}
             <div className="info">
@@ -862,6 +869,10 @@ export default function ClassProgramPage() {
                 </tr>
               </tbody>
             </table>
+
+          </td></tr></tbody>
+          <tfoot><tr><td><div className="op-foot-space" /></td></tr></tfoot>
+          </table>
 
             {/* Print footer — same chrome as Faculty Workload */}
             <div className="pf">

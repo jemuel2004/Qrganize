@@ -11,6 +11,7 @@ import {
 } from '@shared/curriculumVersion';
 import { resolveProgramScope, canAccessProgram } from '@/services/programScope';
 import { withAudit } from '@/services/audit';
+import { assignedSubjectCodes, assignedSubjectsMessage } from '@/services/curriculumUsage';
 
 function versionFromQuery(req: NextRequest): CurriculumVersion {
   return parseCurriculumVersion(new URL(req.url).searchParams.get('curriculum_version'))
@@ -26,14 +27,17 @@ export async function GET(req: NextRequest) {
 
     await ensureCurriculumFields();
     const { searchParams } = new URL(req.url);
-    const scope = await resolveProgramScope(auth, { requestedProgramId: searchParams.get('program_id') });
+    const rawProgram = searchParams.get('program_id');
+    /** program_id=all — every program this user may see (a chair limited to one program still gets only theirs) */
+    const allPrograms = rawProgram === 'all';
+    const scope = await resolveProgramScope(auth, { requestedProgramId: allPrograms ? null : rawProgram });
     if (!scope.ok) return scope.response;
 
-    // Program is always required — prevent full-table scans
-    if (scope.programId == null) {
+    // A program is required unless "all" is asked for explicitly
+    if (scope.programId == null && !allPrograms) {
       return NextResponse.json({ curriculums: [] });
     }
-    const programId = String(scope.programId);
+    const programId = scope.programId == null ? null : Number(scope.programId);
 
     /*
      * Normalize year_level and semester so that "First Year" / "FIRST YEAR"
@@ -51,7 +55,7 @@ export async function GET(req: NextRequest) {
       FROM curriculums c
       JOIN programs p ON c.program_id = p.id
       WHERE c.is_active = true
-        AND c.program_id = $1
+        AND ($1::int IS NULL OR c.program_id = $1)
         AND c.curriculum_version = $2
     `;
     const params: unknown[] = [programId, version];
@@ -60,7 +64,7 @@ export async function GET(req: NextRequest) {
     if (yearLevel) { sql += ` AND c.year_level = $${idx++}`; params.push(yearLevel); }
     if (semester)  { sql += ` AND c.semester   = $${idx++}`; params.push(semester); }
 
-    sql += ' ORDER BY c.year_level, c.semester, c.subject_code';
+    sql += ' ORDER BY p.code, c.year_level, c.semester, c.subject_code';
 
     const result = await query(sql, params);
     return NextResponse.json({
@@ -187,6 +191,11 @@ async function DELETE_handler(req: NextRequest) {
     }
     if (!(await canAccessProgram(auth, programId))) {
       return NextResponse.json({ error: 'You can only manage curriculum for your assigned program.' }, { status: 403 });
+    }
+
+    const inUse = await assignedSubjectCodes(ids);
+    if (inUse.length > 0) {
+      return NextResponse.json({ error: assignedSubjectsMessage(inUse) }, { status: 409 });
     }
 
     // Only subjects of that program are touched, whatever ids are sent

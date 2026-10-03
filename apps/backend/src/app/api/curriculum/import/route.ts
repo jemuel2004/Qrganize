@@ -11,6 +11,7 @@ import {
 import { normalizeComparableText, normalizeCourseCode } from '@shared/curriculumImport';
 import { getChairAssignedProgramId, isScopedChair } from '@/services/programScope';
 import { withAudit } from '@/services/audit';
+import { assignedSubjectCodes, assignedSubjectsMessage } from '@/services/curriculumUsage';
 
 interface ImportRow {
   program_id: number;
@@ -171,6 +172,11 @@ async function POST_handler(req: NextRequest) {
     }
     if (programIds.length === 0) {
       return NextResponse.json({ imported: 0, reactivated: 0, updated: 0, removed: 0, total: 0, duplicated: 0, errors });
+    }
+    // Same rule as deleting on the Curriculum page: assigned subjects stay
+    const inUse = await assignedSubjectCodes(removeIds);
+    if (inUse.length > 0) {
+      return NextResponse.json({ error: assignedSubjectsMessage(inUse) }, { status: 409 });
     }
     const existingRes = await query(
       `SELECT id, program_id, year_level, semester, subject_code, subject_name,

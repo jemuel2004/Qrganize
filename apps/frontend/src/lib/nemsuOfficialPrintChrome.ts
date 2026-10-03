@@ -33,9 +33,21 @@ export function formatAy(year: string): string {
  */
 function officialPrintTypographyAndTableCss(): string {
   return `
-.page { padding: 0.44in 0.5in 0.75in; }
+.page { padding: 0 0.5in; }
 
-.hdr { text-align: center; margin-bottom: 4px; line-height: 1.28; }
+/* Page frame (officialPrintPagedHtml): the header sits in the table head, which
+   the browser repeats at the top of every printed page; the table-foot spacer
+   keeps each page's text clear of the fixed footer (.pf). */
+.op-frame { width: 100%; border-collapse: collapse; }
+.op-frame > thead > tr > td, .op-frame > tbody > tr > td, .op-frame > tfoot > tr > td {
+  padding: 0; border: none; vertical-align: top;
+}
+.op-frame > thead { display: table-header-group; }
+.op-frame > tfoot { display: table-footer-group; }
+.op-top { height: 0.44in; }
+.op-foot-space { height: 0.95in; }
+
+.hdr { text-align: center; margin-bottom: 10px; line-height: 1.28; }
 .hdr img { width: 80px; height: 80px; object-fit: contain; display: block; margin: 0 auto 4px; }
 .hdr-rep  { font-size: 8pt; }
 .hdr-univ { font-size: 9.5pt; font-weight: bold; }
@@ -171,6 +183,20 @@ export function officialPrintHeaderHtml(input: OfficialPrintHeaderInput): string
 </div>`.trim();
 }
 
+/**
+ * Lays out an official document so the institutional header prints at the top
+ * of every page (not only the first) and no page's text runs under the fixed
+ * footer. Put the result inside `.page`; the footer (footerHtml) stays after it.
+ */
+export function officialPrintPagedHtml(headerHtml: string, bodyHtml: string): string {
+  return `
+<table class="op-frame">
+  <thead><tr><td><div class="op-top"></div>${headerHtml}</td></tr></thead>
+  <tbody><tr><td>${bodyHtml}</td></tr></tbody>
+  <tfoot><tr><td><div class="op-foot-space"></div></td></tr></tfoot>
+</table>`.trim();
+}
+
 export function escapePrintHtml(s: string | null | undefined): string {
   if (s == null) return '';
   return String(s)
@@ -200,7 +226,7 @@ export function officialPrintPreviewShellCss(): string {
     padding: 0 !important; max-width: none !important; box-shadow: none !important;
     border: none !important; border-radius: 0 !important; background: white !important;
   }
-  .cp-shell .page { padding: 0.44in 0.5in 0.75in !important; }
+  .cp-shell .page { padding: 0 0.5in !important; }
   thead { display: table-header-group; }
   tfoot { display: table-footer-group; }
   .cp-shell .wl tbody tr { page-break-inside: avoid; }
@@ -224,6 +250,8 @@ export function officialPrintPreviewShellCss(): string {
     border-radius: 2px;
   }
   .cp-shell .page { padding: 0.44in 0.5in 0.75in; }
+  /* Page-frame spacers are for paper only */
+  .cp-shell .op-top, .cp-shell .op-foot-space { display: none; }
   .cp-shell .pf {
     position: relative;
     bottom: auto;

@@ -21,6 +21,7 @@ import {
   DEFAULT_FOOTER_CONFIG,
   officialPrintDocumentCss,
   officialPrintHeaderHtml,
+  officialPrintPagedHtml,
   semesterHeading,
   formatAy,
   escapePrintHtml,
@@ -691,13 +692,13 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
       qualification: fac.educational_qualification ?? '',
       major: fac.major ?? '',
       eligibility: fac.eligibility ?? '',
-      position: fac.position,
+      position: fac.position ?? '',
     },
     sections,
     summary,
     signatures: {
       preparedBy: { name: 'NELYNE LOURDES Y. PLAZA, Ph.D.', title: 'Chair, Dept. Computer Studies' },
-      conformed: { name: fac.name.toUpperCase(), title: fac.position },
+      conformed: { name: fac.name.toUpperCase(), title: fac.position ?? '' },
       certifiedCorrect: { name: 'RAMONA LIZA A. ESPENIDO, MST-SS', title: 'Registrar III' },
       recommending: [
         { name: 'JUANCHO A. INTANO, Ph.D.', title: 'Campus Director' },
@@ -788,14 +789,13 @@ ${officialPrintDocumentCss()}
 <body>
 <div class="page">
 
-${officialPrintHeaderHtml({
+${officialPrintPagedHtml(officialPrintHeaderHtml({
   logoSrc: `${origin}/nemlogo/NEMSU-logo.png`,
   department: m.department,
   title: m.title,
   semesterHeading: m.semesterHeading,
   academicYear: input.academicYear,
-})}
-
+}), `
 <div class="info">
   <div class="info-left">
     <div class="hf"><span class="i-lbl">Name:</span><span class="i-val"><strong>${escHtml(fac.name)}</strong></span></div>
@@ -877,7 +877,7 @@ ${officialPrintHeaderHtml({
     </td>
   </tr>
 </table>
-
+`)}
 </div>
 
 ${footerHtml({

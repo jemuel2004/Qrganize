@@ -1070,14 +1070,23 @@ export default function WorkloadPage({
 
   async function unassignSubject(msId: number) {
     if (!selectedFaculty) return;
-    const res = await fetch('/api/workload/unassign', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ faculty_id: selectedFaculty.id, master_schedule_id: msId }),
-    });
-    if (!res.ok) { const d = await res.json(); setAssignError(d.error || 'Failed to unassign subject'); toast.error(d.error || 'Failed to remove subject.'); return; }
-    toast.success('Subject removed successfully.');
-    loadWorkload(); loadAllFacultyLoads(); loadAvailable(); loadFacultySummaries(); loadBlocks();
+    try {
+      const res = await fetch('/api/workload/unassign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ faculty_id: selectedFaculty.id, master_schedule_id: msId }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setAssignError(d.error || 'Failed to unassign subject');
+        toast.error(d.error || 'Failed to remove subject.');
+        return;
+      }
+      toast.success('Subject removed successfully.');
+      loadWorkload(); loadAllFacultyLoads(); loadAvailable(); loadFacultySummaries(); loadBlocks();
+    } catch {
+      toast.error('Connection error. Please try again.');
+    }
   }
 
   async function confirmRemoveSubject() {

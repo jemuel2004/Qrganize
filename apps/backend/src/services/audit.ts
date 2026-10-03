@@ -57,6 +57,7 @@ const RULES: Rule[] = [
   { re: /^\/api\/curriculum\/import/, category: 'Setup', noun: 'curriculum', verbs: { POST: 'Imported curriculum' } },
   { re: /^\/api\/curriculum/, category: 'Setup', noun: 'curriculum subject' },
   { re: /^\/api\/faculty\/[^/]+\/deductions/, category: 'Setup', noun: 'load deduction' },
+  { re: /^\/api\/faculty\/[^/]+\/activities/, category: 'Scheduling', noun: 'non-teaching time', verbs: { DELETE: 'Removed non-teaching time' } },
   { re: /^\/api\/faculty/, category: 'Setup', noun: 'faculty' },
   { re: /^\/api\/blocks\/[^/]+\/reload/, category: 'Setup', noun: 'block subjects', verbs: { POST: 'Reloaded block subjects' } },
   { re: /^\/api\/blocks\/[^/]+\/subjects/, category: 'Setup', noun: 'block subject', verbs: { POST: 'Added subject to block', DELETE: 'Removed subject from block' } },
@@ -75,6 +76,7 @@ const RULES: Rule[] = [
 
   { re: /^\/api\/qr\/scan/, category: 'Rooms', noun: 'room QR', verbs: { POST: 'Scanned room QR' } },
   { re: /^\/api\/rooms\/qr-codes/, category: 'Rooms', noun: 'room QR codes', verbs: { POST: 'Generated room QR codes' } },
+  { re: /^\/api\/rooms\/unassigned/, category: 'Rooms', noun: 'class room', verbs: { POST: 'Assigned rooms to classes' } },
   { re: /^\/api\/rooms/, category: 'Rooms', noun: 'room' },
   { re: /^\/api\/admin\/room-requests/, category: 'Rooms', noun: 'room request', verbs: { PATCH: 'Reviewed room request', PUT: 'Reviewed room request' } },
   { re: /^\/api\/instructor\/room-requests/, category: 'Rooms', noun: 'room request', verbs: { POST: 'Submitted room request', DELETE: 'Cancelled room request' } },

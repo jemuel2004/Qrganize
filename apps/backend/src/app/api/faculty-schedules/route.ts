@@ -48,6 +48,7 @@ export async function GET(req: NextRequest) {
         p.code         AS program_code,
         p.name         AS program_name,
         il.id          AS load_id,
+        ms.id          AS master_schedule_id,
         il.load_category,
         il.units,
         il.hours,
@@ -125,6 +126,8 @@ export async function GET(req: NextRequest) {
         load_category: split_is_praise ? 'Praise' : 'Overload',
         units: isPerm ? portion : 0,
         hours: isPerm ? 0 : portion,
+        // Same subject as the row above — only its moved part
+        split_portion: true,
         split_component: component,
         ...(component && split_start_time
           ? { day_pattern: split_day_pattern, start_time: split_start_time, end_time: split_end_time }

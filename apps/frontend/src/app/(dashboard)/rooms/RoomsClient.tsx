@@ -4,7 +4,8 @@
  * Room Management — register and manage the rooms available in DCS.
  * Main question it answers: "What rooms exist in the department?"
  *
- *  • Add Room — number/name, type (Lecture / Laboratory), status
+ *  • Add Room — numbered names (Lecture-8, + Lecture-9 …) or a custom name
+ *    (CCA Gym, M.P. 3 …), type (Lecture / Laboratory), status
  *  • Room list — room, type, status, actions
  *  • Edit Room
  *  • Activate / Deactivate — inactive rooms stay on file (and on existing
@@ -28,7 +29,7 @@ import { FilterSelect } from '@/components/ui/SearchFilter';
 import {
   AlertTriangle, BookOpen, Building2, Download, Loader2, Monitor, MoreVertical,
   Pencil, Plus, Power, QrCode, Search, Trash2, X, Zap,
-  ChevronDown,
+  ChevronDown, ListOrdered, PenLine,
 } from 'lucide-react';
 import { ListSkeleton } from '@/components/ui/skeletons';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
@@ -73,6 +74,11 @@ const norm = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
 
 /** Most rooms added in one save */
 const MAX_NEW_ROOMS = 20;
+
+/** Add Room naming: numbered (Lecture-8, Lecture-9 …) or a name typed in (CCA Gym, M.P. 3 …) */
+type NameMode = 'numbered' | 'custom';
+/** Same rule as the server (services/rooms.ts validateRoom) */
+const ROOM_NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N} ._\-/#()]*$/u;
 
 /** "Lab-1" / "lec 2" → "laboratory-1" / "lecture-2" — so short names count as taken too */
 const canonicalRoomName = (s: string) =>
@@ -307,8 +313,8 @@ export default function RoomsPage() {
 
   const [search, setSearch] = useState('');
   const [activeType, setActiveType] = useState<RoomType>('Lecture'); // tab
-  // Click the selected tab again to hide / show its room list
-  const [listOpen, setListOpen] = useState(true);
+  // Closed when the page opens — a tab opens its room list; clicking it again closes it
+  const [listOpen, setListOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState(''); // '' = All Status
 
   const [formOpen, setFormOpen] = useState(false);
@@ -318,6 +324,8 @@ export default function RoomsPage() {
   const [saving, setSaving] = useState(false);
   /** Add mode: how many rooms to create in one save (names are suggested) */
   const [addCount, setAddCount] = useState(1);
+  /** Add mode: numbered names (Lecture-8, Lecture-9 …) or one room with a name typed in */
+  const [nameMode, setNameMode] = useState<NameMode>('numbered');
 
   const [qrRoom, setQrRoom] = useState<Room | null>(null);
   /** Room being activated/deactivated, and which way — drives the button's loading label */
@@ -362,6 +370,18 @@ export default function RoomsPage() {
 
   const filtersOn = !!search || !!statusFilter;
   const clearFilters = () => { setSearch(''); setStatusFilter(''); };
+
+  /** Typing a search opens the list (the lists start closed) — on the room type that has matches */
+  function onSearch(value: string) {
+    setSearch(value);
+    const q = norm(value);
+    if (!q) return;
+    const hasMatch = (t: RoomType) => rooms.some(r => r.room_type === t && norm(r.room_name).includes(q)
+      && (!statusFilter || (statusFilter === 'Active' ? r.status === 'Active' : r.status !== 'Active')));
+    const other: RoomType = activeType === 'Lecture' ? 'Laboratory' : 'Lecture';
+    if (!hasMatch(activeType) && hasMatch(other)) setActiveType(other);
+    setListOpen(true);
+  }
   const showSkeleton = useMinLoading(roomsLoading && rooms.length === 0, PAGE_SKELETON_MIN_MS);
 
   /* ── Add / Edit ── */
@@ -370,6 +390,7 @@ export default function RoomsPage() {
     // Start with the type of the tab being viewed
     setForm({ ...EMPTY_FORM, room_type: activeType });
     setAddCount(1);
+    setNameMode('numbered');
     setFormError('');
     setFormOpen(true);
   }
@@ -396,19 +417,32 @@ export default function RoomsPage() {
     setFormOpen(true);
   }
 
-  const nameClash = useMemo(() => {
-    const n = norm(form.room_name);
-    return !!n && rooms.some(r => r.id !== editRoom?.id && norm(r.room_name) === n);
-  }, [form.room_name, rooms, editRoom]);
+  /** A name typed in (Edit, or Add → Custom name) */
+  const typedName = editRoom || nameMode === 'custom';
+  const cleanName = form.room_name.trim().replace(/\s+/g, ' ');
+  /** The registered room a typed name matches — same name apart from case and
+   *  spacing, or the short form ("Lab 1" = "Laboratory-1") */
+  const clashRoom = useMemo(() => {
+    if (!typedName || !cleanName) return null;
+    const c = canonicalRoomName(cleanName);
+    return rooms.find(r => r.id !== editRoom?.id && canonicalRoomName(r.room_name) === c) ?? null;
+  }, [typedName, cleanName, rooms, editRoom]);
+  const nameInvalid = typedName && !!cleanName && !ROOM_NAME_RE.test(cleanName);
+  const nameProblem = clashRoom
+    ? `${clashRoom.room_name} is already registered.`
+    : nameInvalid ? 'Use letters, numbers, spaces and - _ . / # ( ) only.' : null;
+  /** Rooms this Add will create */
+  const addNames = nameMode === 'custom' ? (cleanName ? [cleanName] : []) : newRoomNames;
 
-  /** Add mode: create each suggested room in turn; stop at the first failure */
+  /** Add mode: create each room in turn; stop at the first failure */
   async function createRooms() {
+    if (nameProblem) { setFormError(nameProblem); return; }
     setSaving(true);
     setFormError('');
     const created: string[] = [];
     const noQr: string[] = [];
     try {
-      for (const name of newRoomNames) {
+      for (const name of addNames) {
         const res = await fetch('/api/rooms', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -455,7 +489,7 @@ export default function RoomsPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!editRoom) { await createRooms(); return; }
-    if (nameClash) { setFormError(`"${form.room_name.trim()}" is already registered.`); return; }
+    if (nameProblem) { setFormError(nameProblem); return; }
     setSaving(true);
     setFormError('');
     try {
@@ -645,7 +679,7 @@ export default function RoomsPage() {
             <input
               type="search"
               value={search}
-              onChange={e => setSearch(e.target.value)}
+              onChange={e => onSearch(e.target.value)}
               placeholder="Search room number or name…"
               aria-label="Search rooms"
               className={FIELD_CONTROL}
@@ -686,10 +720,11 @@ export default function RoomsPage() {
         ) : (
           <div className="space-y-4">
             <UnassignedRoomsPanel refreshKey={rooms.length} />
-            {/* Lecture Rooms | Laboratory Rooms — click to show that type */}
+            {/* Lecture Rooms | Laboratory Rooms — click to show that type (both closed at first) */}
             <div className="grid grid-cols-2 gap-4" role="tablist" aria-label="Room type">
               {TABS.map(t => {
-                const on = activeType === t.type;
+                // Highlighted only while its list is open
+                const on = listOpen && activeType === t.type;
                 const count = visible.filter(r => r.room_type === t.type).length;
                 return (
                   <motion.button
@@ -697,9 +732,9 @@ export default function RoomsPage() {
                     type="button"
                     role="tab"
                     aria-selected={on}
-                    onClick={() => { if (on) setListOpen(o => !o); else { setActiveType(t.type); setListOpen(true); } }}
-                    aria-expanded={on ? listOpen : undefined}
-                    title={on ? (listOpen ? 'Hide rooms' : 'Show rooms') : undefined}
+                    onClick={() => { if (on) setListOpen(false); else { setActiveType(t.type); setListOpen(true); } }}
+                    aria-expanded={on}
+                    title={on ? 'Hide rooms' : 'Show rooms'}
                     whileHover={reduceMotion || on ? undefined : { y: -2 }}
                     whileTap={reduceMotion ? undefined : { scale: 0.98 }}
                     className={`relative overflow-hidden text-left bg-white rounded-2xl border px-3 sm:px-5 py-4 flex items-center gap-2 sm:gap-3 transition-[border-color,box-shadow] duration-300 ${
@@ -726,7 +761,7 @@ export default function RoomsPage() {
                       {count}
                     </span>
                     <motion.span
-                      animate={{ rotate: on && listOpen ? 180 : 0, opacity: on ? 1 : 0.35 }}
+                      animate={{ rotate: on ? 180 : 0, opacity: on ? 1 : 0.55 }}
                       transition={{ duration: reduceMotion ? 0 : 0.3, ease: T.ease }}
                       className="flex-shrink-0"
                       style={{ color: on ? t.bar : '#94A3B8' }}
@@ -828,7 +863,7 @@ export default function RoomsPage() {
               <label htmlFor="room-name" className="block text-sm font-semibold mb-2 text-[#0B2A5B]">
                 Room Name / Number <span className="text-red-500">*</span>
               </label>
-              <FieldBox error={nameClash} className="h-11 px-3.5">
+              <FieldBox error={!!nameProblem} className="h-11 px-3.5">
                 <input
                   id="room-name"
                   value={form.room_name}
@@ -837,10 +872,11 @@ export default function RoomsPage() {
                   maxLength={50}
                   required
                   autoFocus
+                  aria-invalid={!!nameProblem}
                   className={FIELD_CONTROL}
                 />
               </FieldBox>
-              {nameClash && <p className="text-xs mt-1.5 font-medium text-red-600">A room with this name is already registered.</p>}
+              {nameProblem && <p className="text-xs mt-1.5 font-medium text-red-600">{nameProblem}</p>}
             </div>
           )}
 
@@ -878,19 +914,86 @@ export default function RoomsPage() {
             </div>
           </div>
 
-          {/* Add mode — rooms to create, like Block Creation: "Lecture-1", then + for the next */}
+          {/* Add mode — Room Name: numbered (like Block Creation: "Lecture-1", then + for
+              the next) or a name typed in for rooms that aren't numbered (CCA Gym, M.P. 3 …) */}
           {!editRoom && (
             <div>
               <div className="flex items-baseline justify-between gap-2 mb-2">
                 <span className="block text-sm font-semibold text-[#0B2A5B]">
-                  Rooms to Create <span className="text-red-500">*</span>
+                  Room Name <span className="text-red-500">*</span>
                 </span>
-                {newRoomNames.length > 1 && (
+                {nameMode === 'numbered' && newRoomNames.length > 1 && (
                   <span className="text-xs font-semibold" style={{ color: TYPE_CHIP[form.room_type].text }}>
                     {newRoomNames.length} rooms · {newRoomNames[0]} – {newRoomNames[newRoomNames.length - 1]}
                   </span>
                 )}
               </div>
+
+              <div role="radiogroup" aria-label="How to name the room" className="grid grid-cols-2 gap-1 p-1 mb-3 rounded-xl bg-[#F1F5F9] border border-[#E2E8F0]">
+                {([
+                  { key: 'numbered', label: 'Numbered', icon: ListOrdered },
+                  { key: 'custom', label: 'Custom name', icon: PenLine },
+                ] as const).map(m => {
+                  const on = nameMode === m.key;
+                  return (
+                    <motion.button
+                      key={m.key}
+                      type="button"
+                      role="radio"
+                      aria-checked={on}
+                      onClick={() => { setNameMode(m.key); setFormError(''); }}
+                      whileTap={reduceMotion ? undefined : { scale: 0.97 }}
+                      className={`relative h-10 rounded-lg text-sm font-semibold transition-colors ${on ? '' : 'text-[#475569] hover:text-[#0B2A5B] hover:bg-white/70'}`}
+                      style={on ? WHITE : undefined}
+                    >
+                      {on && (
+                        <motion.span
+                          layoutId="room-name-mode"
+                          className="absolute inset-0 rounded-lg bg-[#1D5BD6] shadow-[0_6px_14px_-8px_rgba(29,91,214,0.8)]"
+                          transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 420, damping: 34 }}
+                        />
+                      )}
+                      <span className="relative inline-flex items-center justify-center gap-1.5">
+                        <m.icon className="w-4 h-4" style={on ? WHITE : undefined} /> {m.label}
+                      </span>
+                    </motion.button>
+                  );
+                })}
+              </div>
+
+              <AnimatePresence mode="wait" initial={false}>
+              {nameMode === 'custom' ? (
+                <motion.div
+                  key="custom"
+                  initial={reduceMotion ? false : { opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0, transition: { duration: 0.22, ease: T.ease } }}
+                  exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4, transition: { duration: 0.15 } }}
+                >
+                  <FieldBox error={!!nameProblem} className="h-11 px-3.5">
+                    <input
+                      id="room-custom-name"
+                      value={form.room_name}
+                      onChange={e => { setForm(f => ({ ...f, room_name: e.target.value })); setFormError(''); }}
+                      placeholder="e.g. CCA Gym, M.P. 3, Robotics Lab"
+                      maxLength={50}
+                      autoFocus
+                      aria-label="Room name"
+                      aria-invalid={!!nameProblem}
+                      aria-describedby="room-custom-help"
+                      className={FIELD_CONTROL}
+                    />
+                  </FieldBox>
+                  <p id="room-custom-help" className={`text-[11px] mt-1.5 ${nameProblem ? 'font-medium text-red-600' : 'text-[#94A3B8]'}`}>
+                    {nameProblem ?? 'For rooms not named Lecture-N or Laboratory-N. Adds one room.'}
+                  </p>
+                </motion.div>
+              ) : (
+              <motion.div
+                key="numbered"
+                initial={reduceMotion ? false : { opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0, transition: { duration: 0.22, ease: T.ease } }}
+                exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4, transition: { duration: 0.15 } }}
+              >
               <motion.div layout className="flex flex-wrap items-center gap-2" role="group" aria-label="Rooms to create">
                 <AnimatePresence initial={false}>
                   {newRoomNames.map((name, i) => {
@@ -943,6 +1046,9 @@ export default function RoomsPage() {
               <p className="text-[11px] mt-1.5 text-[#94A3B8]">
                 Click <span className="font-semibold text-[#64748B]">+</span> to add the next room. All rooms are saved together.
               </p>
+              </motion.div>
+              )}
+              </AnimatePresence>
             </div>
           )}
 
@@ -984,13 +1090,13 @@ export default function RoomsPage() {
               Cancel
             </button>
             <button type="submit"
-              disabled={saving || (editRoom ? nameClash || !form.room_name.trim() : newRoomNames.length === 0)}
+              disabled={saving || (typedName ? !!nameProblem || !cleanName : addNames.length === 0)}
               className="h-11 px-5 inline-flex items-center justify-center gap-2 rounded-xl text-sm font-semibold bg-[#1D5BD6] hover:bg-[#164BB5] transition-colors disabled:opacity-50"
               style={WHITE}>
               {saving && <Loader2 className="w-4 h-4 animate-spin" style={WHITE} />}
               {saving
-                ? (!editRoom && newRoomNames.length > 1 ? `Saving ${newRoomNames.length} rooms…` : 'Saving…')
-                : (!editRoom && newRoomNames.length > 1 ? `Save ${newRoomNames.length} Rooms` : 'Save Room')}
+                ? (!editRoom && addNames.length > 1 ? `Saving ${addNames.length} rooms…` : 'Saving…')
+                : (!editRoom && addNames.length > 1 ? `Save ${addNames.length} Rooms` : 'Save Room')}
             </button>
           </div>
         </form>

@@ -42,7 +42,8 @@ interface Faculty {
   first_name: string | null; last_name: string | null; middle_name: string | null;
   name: string;
   program_id: number | null; program_code: string | null; program_name: string | null;
-  position: string; employment_status: string;
+  /** null until the academic rank is set (e.g. a faculty added from the workload Excel) */
+  position: string | null; employment_status: string;
   designation_type: string; designation_units: number;
   load_type: string; email: string | null;
   google_verified?: boolean;
@@ -154,13 +155,13 @@ function computeFullName(fn?: string | null, mn?: string | null, ln?: string | n
   return [(fn ?? '').trim(), (mn ?? '').trim(), (ln ?? '').trim()].filter(Boolean).join(' ');
 }
 
-function deriveEmploymentStatus(position: string): 'Permanent' | 'Contractual' {
-  return HOUR_BASED_POSITIONS.has(position) ? 'Contractual' : 'Permanent';
+function deriveEmploymentStatus(position: string | null): 'Permanent' | 'Contractual' {
+  return HOUR_BASED_POSITIONS.has(position ?? '') ? 'Contractual' : 'Permanent';
 }
 
 /** Display grouping for the Faculty list/filter/stats. Temporary Permanent is
  *  unit-based, so its stored `employment_status` is already 'Permanent'. */
-function facultyDisplayGroup(f: { position: string; employment_status: string }): 'Permanent' | 'Contractual' {
+function facultyDisplayGroup(f: { position: string | null; employment_status: string }): 'Permanent' | 'Contractual' {
   return f.employment_status as 'Permanent' | 'Contractual';
 }
 
@@ -395,7 +396,10 @@ export default function FacultyPage() {
   useEffect(() => () => { if (pageSwitchTimeout.current) clearTimeout(pageSwitchTimeout.current); }, []);
 
   useEffect(() => {
-    fetch('/api/programs').then(r => r.json()).then(d => setPrograms(d.programs || []));
+    fetch('/api/programs')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => setPrograms(d?.programs ?? []))
+      .catch(() => {});
     fetch('/api/account/me')
       .then(r => r.ok ? r.json() : null)
       .then(d => {
@@ -514,7 +518,7 @@ export default function FacultyPage() {
       last_name: f.last_name ?? '',
       middle_name: f.middle_name ?? '',
       program_id: f.program_id ? String(f.program_id) : '',
-      position: f.position,
+      position: f.position ?? '',
       designation_type: f.designation_type,
       designation_units: f.designation_units,
       load_type: f.load_type || 'Regular',
@@ -737,9 +741,9 @@ export default function FacultyPage() {
       f.name.toLowerCase().includes(search.toLowerCase()) ||
       (f.program_code || '').toLowerCase().includes(search.toLowerCase()) ||
       (f.program_name || '').toLowerCase().includes(search.toLowerCase()) ||
-      f.position.toLowerCase().includes(search.toLowerCase())
+      (f.position ?? '').toLowerCase().includes(search.toLowerCase())
     )
-    .sort((a, b) => POSITIONS.indexOf(b.position) - POSITIONS.indexOf(a.position));
+    .sort((a, b) => POSITIONS.indexOf(b.position ?? '') - POSITIONS.indexOf(a.position ?? ''));
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / FACULTY_PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
@@ -1201,7 +1205,7 @@ export default function FacultyPage() {
                       <p className="text-xs mt-0.5 break-words" style={{ color: '#1D5BD6' }}>{f.specialization}</p>
                     )}
                     <p className="text-sm mt-1 break-words" style={{ color: '#64748B' }}>
-                      {f.position}
+                      {f.position ?? 'Rank not set'}
                       {f.program_code ? ` · ${f.program_code}` : ''}
                     </p>
                     {f.program_name && (
@@ -1313,7 +1317,9 @@ export default function FacultyPage() {
                         )
                         : <span className="text-xs italic font-medium" style={{ color: '#D97706' }}>Not assigned</span>}
                     </td>
-                    <td className="px-5 py-4 font-medium" style={{ color: '#0B2A5B' }}>{f.position}</td>
+                    <td className="px-5 py-4 font-medium" style={{ color: '#0B2A5B' }}>
+                      {f.position ?? <span className="text-xs italic font-medium" style={{ color: '#D97706' }}>Not set</span>}
+                    </td>
                     <td className="px-5 py-4 text-xs" style={{ color: '#64748B' }}>{f.designation_type}</td>
                     <td className="px-5 py-4 text-center font-bold" style={{ color: employmentColors(empStatus).fg }}>
                       {isPermanent
