@@ -304,6 +304,17 @@ export default function DashboardClient() {
   // Fallback for time-based changes (classes starting / ending)
   useVisibilityAwareInterval(() => load(undefined, true), 60_000);
 
+  /* Couldn't load (e.g. the server was restarting after an update): try again by
+     itself — after 3 s, 8 s, 20 s, then every 30 s — until it comes back */
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    if (loading || data) return;
+    const wait = [3_000, 8_000, 20_000][retry] ?? 30_000;
+    const t = window.setTimeout(() => { setRetry(n => n + 1); load(undefined, true); }, wait);
+    return () => window.clearTimeout(t);
+  }, [loading, data, retry, load]);
+  const reduceMotion = useReducedMotion();
+
   const showSkeleton = useMinLoading(loading && !data, LOADING_DELAY);
   const term = [an?.term.semester, an?.term.school_year ? `AY ${an.term.school_year}` : null].filter(Boolean).join(' · ');
   const st = data?.stats;
@@ -477,7 +488,18 @@ export default function DashboardClient() {
           <div className="bg-white rounded-2xl border border-[#E3E9F3] px-5 py-16 text-center">
             <AlertTriangle className="w-8 h-8 mx-auto mb-3 text-[#94A3B8]" />
             <p className="font-semibold text-[#0B2A5B]">Could not load dashboard</p>
-            <p className="text-[15px] mt-1 text-[#64748B]">Check your connection and try again.</p>
+            <p className="text-[15px] mt-1 text-[#64748B]">
+              The server may be restarting after an update — trying again automatically.
+            </p>
+            <motion.button
+              type="button"
+              onClick={() => load()}
+              whileTap={reduceMotion ? undefined : { scale: 0.97 }}
+              className="mt-5 inline-flex items-center justify-center gap-2 h-11 px-5 rounded-xl text-sm font-semibold bg-[#1D5BD6] hover:bg-[#164BB5] transition-colors"
+              style={{ color: '#FFFFFF' }}
+            >
+              Try again
+            </motion.button>
           </div>
         )}
       </PageLoadTransition>
