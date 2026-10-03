@@ -603,7 +603,7 @@ export default function ReportsClient() {
             </span>
             <div className="min-w-0">
               <h2 className="text-lg font-bold text-[#0B2A5B]">Faculty Workload Form</h2>
-              <p className="text-sm text-[#64748B] mt-0.5">Regular Load, Actual Load, Overload or Praise Load · Print or Excel</p>
+              <p className="text-sm text-[#64748B] mt-0.5">Actual Load, Regular Load, Overload or Praise Load · Print or Excel</p>
             </div>
           </div>
 

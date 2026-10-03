@@ -38,11 +38,14 @@ export default function RoomPicker({
   rooms,
   day,
   warnEmpty = false,
+  preferred = null,
 }: {
   /** room id as string, '' = none */
   value: string;
   onChange: (value: string) => void;
   rooms: RoomOption[];
+  /** The room the class's other part uses (e.g. "Lecture's room") — listed first, tagged */
+  preferred?: { id: number; label: string } | null;
   component: 'lec' | 'lab';
   /** Selected day ('' = no day yet — availability unknown) */
   day: string;
@@ -63,13 +66,15 @@ export default function RoomPicker({
   const selectedBusy = !!selected?.busyWith;
   const types = useMemo(() => [...new Set(rooms.map(r => r.room_type))].sort(), [rooms]);
 
-  // Free rooms first, then booked; natural name order (Lecture-2 before Lecture-10)
+  // Free rooms first, then booked; the other part's room leads its group; natural name order (Lecture-2 before Lecture-10)
+  const preferredId = preferred?.id ?? null;
   const list = useMemo(() => rooms
     .filter(r => typeFilter === 'all' || r.room_type === typeFilter)
     .sort((a, b) =>
       Number(!!a.busyWith) - Number(!!b.busyWith)
+      || Number(b.id === preferredId) - Number(a.id === preferredId)
       || a.room_name.localeCompare(b.room_name, undefined, { numeric: true })),
-  [rooms, typeFilter]);
+  [rooms, typeFilter, preferredId]);
 
 
   useEffect(() => {
@@ -230,6 +235,14 @@ export default function RoomPicker({
                         </span>
                       ) : null}
                       {busy && !isSel && <span className="truncate font-semibold text-[#B45309]">Busy · {r.busyWith}</span>}
+                      {!busy && r.id === preferredId && (
+                        <span
+                          className={`truncate font-semibold ${isSel ? '' : 'text-[#1D5BD6]'}`}
+                          style={isSel ? { color: 'rgba(255,255,255,0.9)' } : undefined}
+                        >
+                          {preferred?.label}
+                        </span>
+                      )}
                     </div>
                   </motion.button>
                 );

@@ -164,6 +164,23 @@ function currentAcademicYear(): string {
 }
 
 const LAB_ROOM_TYPES = ['Laboratory', 'Computer Lab'];
+
+/**
+ * The room the class's other part (its Lecture or Laboratory) already uses,
+ * when this part may use it too — a Lec + Lab subject keeps one room. A
+ * Laboratory needs a lab room; the Lecture of a Lec + Lab subject may use any.
+ */
+function pairedRoom(load: WorkloadLoad, part: 'lec' | 'lab', rooms: Room[]): Room | null {
+  const sibling = asSessionList<WorkloadSession>(load.sessions)
+    .find(s => (s.type === 'lab' ? 'lab' : 'lec') !== part && s.room_id != null);
+  const room = sibling ? rooms.find(r => r.id === Number(sibling.room_id)) : undefined;
+  if (!room || (part === 'lab' && !LAB_ROOM_TYPES.includes(room.room_type))) return null;
+  return room;
+}
+
+/** Room names a part's sessions use, in order ('' sessions have no room) */
+const roomNamesOf = (names: (string | null | undefined)[]) => [...new Set(names.filter((n): n is string => !!n))];
+
 const TIME_SLOTS = Array.from({ length: 29 }, (_, i) => {
   const totalMin = 7 * 60 + i * 30;
   const h = Math.floor(totalMin / 60);
@@ -1212,6 +1229,9 @@ export default function SchedulingClient() {
   const [panelSwitching, setPanelSwitching] = useState(false);
   const panelSwitchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [rooms, setRooms]                 = useState<Room[]>([]);
+  /** Latest rooms for the session builder below — a rooms reload must not rebuild the open form */
+  const roomsRef = useRef<Room[]>([]);
+  useEffect(() => { roomsRef.current = rooms; }, [rooms]);
   const [facultySearch, setFacultySearch] = useState('');
   const [pendingFacultyId, setPendingFacultyId] = useState<number | null>(null);
   const [backLoading, setBackLoading] = useState(false);
@@ -1444,6 +1464,10 @@ export default function SchedulingClient() {
     prefillRef.current = null;
     const comboDays = comboDaysRef.current;
     comboDaysRef.current = null;
+    // A new row starts in the room the class's other part (Lecture / Laboratory)
+    // already uses, when this part may use it — Lec and Lab keep one room. The
+    // time picker then offers only times that room is free.
+    const pair = pairedRoom(selLoad.load, comp, roomsRef.current);
     // Changing the session count keeps the rows already filled in (day, time,
     // room) — only new rows start blank; hours are re-split evenly.
     setSessions(prev => {
@@ -1457,7 +1481,7 @@ export default function SchedulingClient() {
           start_time: start,
           units: uPerSession, hours: hPerSession,
           end_time: addMinutes(start, Math.round(hPerSession * 60)),
-          type: comp, room_id: old?.room_id ?? '',
+          type: comp, room_id: old ? old.room_id : pair ? String(pair.id) : '',
         };
       });
     });
@@ -1934,6 +1958,24 @@ export default function SchedulingClient() {
   const activeRooms  = selLoad?.component === 'lab'
     ? labRooms
     : subjectHasLab ? [...lectureRooms, ...labRooms] : lectureRooms;
+  /** The class's other part's room — offered first in the Room picker */
+  const pairRoom = selLoad ? pairedRoom(selLoad.load, selLoad.component, rooms) : null;
+  /** Lec + Lab subjects: each part's room(s) — this part as being edited, the other as saved */
+  const partRooms = (() => {
+    if (!selLoad || toNum(selLoad.load.lecture_hours) <= 0 || !subjectHasLab) return null;
+    const other: 'lec' | 'lab' = selLoad.component === 'lec' ? 'lab' : 'lec';
+    const otherSessions = asSessionList<WorkloadSession>(selLoad.load.sessions)
+      .filter(s => (s.type === 'lab' ? 'lab' : 'lec') === other);
+    const parts = {} as Record<'lec' | 'lab', { names: string[]; scheduled: boolean }>;
+    parts[selLoad.component] = {
+      names: roomNamesOf(sessions.map(s => rooms.find(r => String(r.id) === s.room_id)?.room_name)),
+      scheduled: true,
+    };
+    parts[other] = { names: roomNamesOf(otherSessions.map(s => s.room_name)), scheduled: otherSessions.length > 0 };
+    const both = parts.lec.names.length > 0 && parts.lab.names.length > 0;
+    const same = both && parts.lec.names.length === 1 && parts.lab.names.length === 1 && parts.lec.names[0] === parts.lab.names[0];
+    return { parts, same, different: both && !same };
+  })();
   const showFacultySkeleton = useMinLoading(
     // Wait for the real remaining loads on first load so cards don't flash red
     facultyLoading || (summariesLoading && Object.keys(loadSummaries).length === 0),
@@ -2702,15 +2744,41 @@ export default function SchedulingClient() {
                       </div>
                       <div className="mt-1 text-[14px] text-[#475569] leading-snug truncate" title={selLoad.load.subject_name}>{selLoad.load.subject_name}</div>
                       <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-[#64748B]">
-                        {[selLoad.load.program_code, selLoad.load.year_level, selLoad.load.block_semester, `${toNum(selLoad.componentUnits).toFixed(2)} units`]
+                        {[selFaculty?.name, selLoad.load.program_code, selLoad.load.year_level, selLoad.load.block_semester, `${toNum(selLoad.componentUnits).toFixed(2)} units`]
                           .filter(Boolean)
                           .map((t, i) => (
                             <Fragment key={i}>
                               {i > 0 && <span className="text-[#CBD5E1]" aria-hidden>•</span>}
-                              <span>{t}</span>
+                              <span className={i === 0 && selFaculty?.name ? 'font-semibold text-[#0B2A5B]' : undefined}>{t}</span>
                             </Fragment>
                           ))}
                       </div>
+                      {/* Lec + Lab subject: both parts' rooms side by side — one room for both where it fits */}
+                      {partRooms && (
+                        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                          {(['lec', 'lab'] as const).map(part => {
+                            const p = partRooms.parts[part];
+                            const editing = part === selLoad.component;
+                            return (
+                              <span
+                                key={part}
+                                className={`inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border text-[13px] ${
+                                  part === 'lec' ? 'bg-[#EFF6FF] border-[#BFDBFE] text-[#1D5BD6]' : 'bg-amber-50 border-amber-200 text-amber-700'
+                                } ${editing ? 'ring-2 ring-offset-1 ring-[#1D5BD6]/25' : ''}`}
+                                title={editing ? 'The part you are scheduling' : `Saved ${part === 'lec' ? 'Lecture' : 'Laboratory'} room`}
+                              >
+                                {part === 'lec' ? <BookOpen className="w-3.5 h-3.5" /> : <Monitor className="w-3.5 h-3.5" />}
+                                <span className="font-bold">{part === 'lec' ? 'Lec:' : 'Lab:'}</span>
+                                <span className="font-semibold text-[#0B2A5B]">
+                                  {p.names.length ? p.names.join(', ') : p.scheduled ? 'No room yet' : 'Not scheduled yet'}
+                                </span>
+                              </span>
+                            );
+                          })}
+                          {partRooms.same && <span className="text-[12.5px] font-semibold text-emerald-700">Same room</span>}
+                          {partRooms.different && <span className="text-[12.5px] font-semibold text-amber-700">Different rooms</span>}
+                        </div>
+                      )}
                     </div>
                     {/* Totals for this part */}
                     <div className="grid grid-cols-3 gap-2 md:w-[330px] flex-shrink-0">
@@ -2884,6 +2952,7 @@ export default function SchedulingClient() {
                                   value={sess.room_id}
                                   onChange={v => updateSession(sess.id, 'room_id', v)}
                                   rooms={activeRooms.map(r => ({ ...r, busyWith: roomBusyWith(sess, r.id) || null }))}
+                                  preferred={pairRoom ? { id: pairRoom.id, label: selLoad.component === 'lab' ? "Lecture's room" : "Laboratory's room" } : null}
                                   component={selLoad.component}
                                   day={sess.day}
                                   timeLabel={sess.start_time ? `${fmt12(sess.start_time)} – ${fmt12(sess.end_time)}` : undefined}

@@ -20,8 +20,8 @@ import { useToast } from '@/context/ToastContext';
 
 interface FreeRoom {
   id: number; name: string;
-  /** Why it is offered first: the class's room on other days, the teacher's or the subject's usual room */
-  note: 'class' | 'faculty' | 'subject' | null;
+  /** Why it is offered first: the class's room on other days, its Lecture's / Laboratory's room, the teacher's or the subject's usual room */
+  note: 'class' | 'pair' | 'faculty' | 'subject' | null;
 }
 interface Session {
   id: number; day: string; start_time: string; end_time: string; type: string; ms_id: number;
@@ -32,11 +32,14 @@ interface Session {
   suggested_room_id: number | null;
 }
 
-const NOTE_LABEL: Record<NonNullable<FreeRoom['note']>, string> = {
+const NOTE_LABEL: Record<Exclude<NonNullable<FreeRoom['note']>, 'pair'>, string> = {
   class: 'Its room on other days',
   faculty: "This teacher's usual room",
   subject: 'Usual room for this subject',
 };
+/** Why a room is offered first, in words — the class's other part is named by its type */
+const noteLabel = (note: NonNullable<FreeRoom['note']>, type: string) =>
+  note === 'pair' ? `Same room as its ${type === 'lab' ? 'Lecture' : 'Laboratory'}` : NOTE_LABEL[note];
 interface FacultyGroup { faculty_id: number | null; faculty_name: string; employee_id: string | null; sessions: Session[] }
 interface Data { faculty: FacultyGroup[]; total_sessions: number; no_room_available: number }
 interface AssignResult {
@@ -390,7 +393,7 @@ export default function UnassignedRoomsPanel({ refreshKey = 0 }: { refreshKey?: 
                               options={x.free_rooms.map(r => ({
                                 value: String(r.id),
                                 label: r.name,
-                                hint: [r.id === x.suggested_room_id ? 'Suggested' : '', r.note ? NOTE_LABEL[r.note] : ''].filter(Boolean).join(' · ') || undefined,
+                                hint: [r.id === x.suggested_room_id ? 'Suggested' : '', r.note ? noteLabel(r.note, x.type) : ''].filter(Boolean).join(' · ') || undefined,
                               }))}
                             />
                           </div>

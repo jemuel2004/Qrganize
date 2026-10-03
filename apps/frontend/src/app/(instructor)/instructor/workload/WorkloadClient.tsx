@@ -1,21 +1,26 @@
 'use client';
 
 import { motion, useReducedMotion } from 'framer-motion';
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
 import { useRealtime } from '@/context/RealtimeContext';
+import { useToast } from '@/context/ToastContext';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import { RefreshButton } from '@/app/(dashboard)/room-utilization/shared';
 import {
-  AlertTriangle, ChevronDown, ChevronRight,
+  AlertTriangle, ChevronDown,
 } from 'lucide-react';
 import OfficialWorkloadFormTable, { type OfficialFormRow } from '@/components/OfficialWorkloadFormTable';
 import WorkloadPrintMenu from '@/components/WorkloadPrintMenu';
-import { buildOfficialGroups, loadDayPatterns, matchOfficialSlot, formatOfficialNumber, formatOfficialTimeRange, occupiedRangeFromScheduleTimes } from '@/lib/officialWorkloadSlots';
+import {
+  buildOfficialGroups, loadDayPatterns, matchOfficialSlot, formatOfficialNumber, formatOfficialTotal,
+  formatOfficialTimeRange, occupiedRangeFromScheduleTimes,
+} from '@/lib/officialWorkloadSlots';
 import { useDayCombinations } from '@/lib/dayCombinations';
 import {
-  actualLoadLines, designationFooterLines, designationRowText, isResearchExtensionType, type PrintDocumentResult,
+  actualLoadLines, designationFooterLines, designationRowText, hoursToUnits, isResearchExtensionType,
+  type PrintDocumentResult,
 } from '@/lib/instructorWorkloadPrintDocument';
 import { openWorkloadPrintableVersion } from '@/lib/openPrintHtmlDocument';
 import { formatLoadCap, regularUnitsCap, shownUnitsCap, shownUnitsOver } from '@shared/regularLoad';
@@ -169,6 +174,8 @@ function computeRegularRowValues(
         ? parseFloat(((totalStored / (totalStored + splitOvU)) * totalCurrH).toFixed(2))
         : totalCurrH);
   }
+  // Contractual loads are kept in hours: a split part's units are those hours in work units
+  if (!isP && isSplitLoad) displayWU = hoursToUnits(displayHours, row.type);
   return { displayWU, displayHours };
 }
 
@@ -223,9 +230,13 @@ function splitLoad(load: WorkloadLoad, isPermanent = false): SplitRow[] {
 const TAB_TONE = LOAD_TONE;
 type WorkloadTab = keyof typeof TAB_TONE;
 
-/** Summary card tinted in its load colour (Regular blue · Overload orange · Praise gold · Total navy) */
-function LoadCard({ tone, label, unit, value, of, note, index, onClick, active = false }: {
+/** Summary card tinted in its load colour (Actual Load navy · Regular blue · Overload orange · Praise gold) */
+function LoadCard({ tone, edgeColor = tone, label, unit, value, of, note, detail, index, onClick, active = false }: {
   tone: string; label: string; unit: string; value: string; of?: number | string; note?: string; index: number;
+  /** Top strip colour, when it must differ from `tone` (e.g. a theme-aware CSS variable) */
+  edgeColor?: string;
+  /** Extra plain line under the unit, e.g. how the number adds up */
+  detail?: string;
   /** Opens this load's table below */
   onClick?: () => void;
   active?: boolean;
@@ -248,64 +259,37 @@ function LoadCard({ tone, label, unit, value, of, note, index, onClick, active =
         boxShadow: active ? `0 10px 24px -14px ${tone}` : undefined,
       }}
     >
-      <span aria-hidden className="absolute inset-x-0 top-0 h-1" style={{ backgroundColor: tone }} />
+      <span aria-hidden className="absolute inset-x-0 top-0 h-1" style={{ backgroundColor: edgeColor }} />
       <div className="text-2xl sm:text-3xl font-black mb-1.5 tabular-nums" style={{ color: tone }}>
-        {value}
+        {/* A live update eases the new number in, so the change is noticed */}
+        <motion.span
+          key={value}
+          className="inline-block"
+          initial={reduceMotion ? false : { opacity: 0, y: -6 }}
+          animate={{ opacity: 1, y: 0, transition: { duration: 0.35, ease: [0.16, 1, 0.3, 1] } }}
+        >
+          {value}
+        </motion.span>
         {of != null && <span className="text-base sm:text-lg font-bold text-[#94A3B8]"> / {of}</span>}
       </div>
       <div className="text-sm font-bold text-[#0B2A5B]">{label}</div>
       <div className="text-xs mt-0.5 text-[#64748B]">{unit}</div>
+      {detail && <div className="text-xs mt-0.5 text-[#64748B]">{detail}</div>}
       {note && <div className="text-xs mt-1 font-semibold text-[#DC2626]">{note}</div>}
     </motion.div>
   );
 }
 
-/** Total card's view: how Regular + Overload (+ Praise) add up — each row opens its table. */
-function TotalBreakdown({ unit, rows, total, subjects, onOpen }: {
-  unit: string;
-  rows: { key: 'regular' | 'overload' | 'praise'; label: string; count: number; value: number }[];
-  total: number;
-  subjects: number;
-  onOpen: (key: 'regular' | 'overload' | 'praise') => void;
-}) {
-  const reduceMotion = useReducedMotion();
-  return (
-    <div className="divide-y divide-[#E2E8F0]">
-      {rows.map((r, i) => (
-        <motion.button
-          key={r.key}
-          type="button"
-          onClick={() => onOpen(r.key)}
-          initial={reduceMotion ? false : { opacity: 0, x: -8 }}
-          animate={{ opacity: 1, x: 0, transition: { duration: 0.25, delay: i * 0.05 } }}
-          className="w-full flex items-center gap-3 px-4 sm:px-5 py-4 text-left hover:bg-[#F8FAFC] transition-colors"
-        >
-          <span aria-hidden className="w-1.5 self-stretch rounded-full" style={{ backgroundColor: TAB_TONE[r.key] }} />
-          <span className="flex-1 min-w-0">
-            <span className="block text-[15px] font-bold text-[#0B2A5B]">{r.label}</span>
-            <span className="block text-sm text-[#64748B]">{r.count} subject{r.count !== 1 ? 's' : ''}</span>
-          </span>
-          <span className="text-lg font-black tabular-nums" style={{ color: TAB_TONE[r.key] }}>{r.value.toFixed(2)}</span>
-          <span className="text-sm text-[#64748B] w-12">{unit}</span>
-          <ChevronRight className="w-5 h-5 text-[#94A3B8] flex-shrink-0" />
-        </motion.button>
-      ))}
-      <div className="flex items-center gap-3 px-4 sm:px-5 py-4 bg-[#F8FAFC]">
-        <span aria-hidden className="w-1.5 self-stretch rounded-full" style={{ backgroundColor: TAB_TONE.total }} />
-        <span className="flex-1 min-w-0">
-          <span className="block text-[15px] font-black text-[#0B2A5B]">Total</span>
-          <span className="block text-sm text-[#64748B]">{subjects} subject{subjects !== 1 ? 's' : ''}</span>
-        </span>
-        <span className="text-lg font-black tabular-nums text-[#0B2A5B]">{total.toFixed(2)}</span>
-        <span className="text-sm text-[#64748B] w-12">{unit}</span>
-        <span className="w-5 flex-shrink-0" />
-      </div>
-    </div>
-  );
+/** What the workload response holds — compared after a live reload to tell whether anything changed. */
+function workloadSignature(w: WorkloadSummary): string {
+  return JSON.stringify([w.loads, w.praise, w.deductions, w.summary]);
 }
 
 export default function InstructorWorkloadClient() {
   const workloadPolicy = useWorkloadPolicy();
+  const toast = useToast();
+  /** Last workload seen — a live reload that differs from it tells the faculty */
+  const lastSignature = useRef('');
   const [semester,     setSemester]     = useState('');
   const [academicYear, setAcademicYear] = useState('');
   // Form groups follow the term's day combinations (Settings → Day Combinations)
@@ -317,7 +301,8 @@ export default function InstructorWorkloadClient() {
   const formGroups = useMemo(() => buildOfficialGroups(dayCombos, loadDayPatterns(data?.loads)), [dayCombos, data]);
   const [loading,      setLoading]      = useState(true);
   const [error,        setError]        = useState<string | null>(null);
-  const [activeTab,    setActiveTab]    = useState<WorkloadTab>('regular');
+  // Opens on Actual Load — the first section (falls back to Workload when there are no subjects)
+  const [activeTab,    setActiveTab]    = useState<WorkloadTab>('actual');
   const [printError,   setPrintError]   = useState('');
   const [printOfferFallback, setPrintOfferFallback] = useState(false);
   /** Whether the currently selected workload table is visible. */
@@ -345,6 +330,7 @@ export default function InstructorWorkloadClient() {
         setPeriodReady(true);
         setNoPeriod(true);
         setData(null);
+        lastSignature.current = '';
         return;
       }
       setSemester(sem);
@@ -358,6 +344,7 @@ export default function InstructorWorkloadClient() {
         if (res.status === 409) {
           setNoPeriod(true);
           setData(null);
+          lastSignature.current = '';
           return;
         }
         throw new Error(body.error || `Error ${res.status}`);
@@ -367,17 +354,24 @@ export default function InstructorWorkloadClient() {
       if (json.period?.schoolYear) setAcademicYear(json.period.schoolYear);
       setData(json);
       setError(null);
+      // The office changed this workload while the page was open — say so
+      const signature = workloadSignature(json);
+      if (silent && lastSignature.current && signature !== lastSignature.current) {
+        toast.info('Your workload was just updated.');
+      }
+      lastSignature.current = signature;
     } catch (err) {
       if (!silent) setError(err instanceof Error ? err.message : String(err));
     } finally {
       if (!silent) setLoading(false);
     }
-  }, []);
+  }, [toast]);
 
   useEffect(() => { fetchWorkload(); }, [fetchWorkload]);
 
   // Live updates: subjects assigned or moved, schedules, PRAISE or deloading
-  // changed, or a new active term — the workload reloads quietly (the open tab stays)
+  // changed, or a new active term — the workload reloads quietly (the open tab
+  // stays) within seconds of the change, and a short message says it changed
   useRealtime(['workload', 'schedule', 'faculty', 'term'], () => fetchWorkload(true), { enabled: !loading });
   // Fallback only — every change above arrives live
   useVisibilityAwareInterval(() => fetchWorkload(true), 120_000);
@@ -405,15 +399,16 @@ export default function InstructorWorkloadClient() {
   const effectiveTab: WorkloadTab =
     (activeTab === 'praise' && !hasPraiseSection) || (activeTab === 'actual' && !hasActualSection) ? 'regular' : activeTab;
 
+  // Only once the workload is in — before that every section looks empty
+  const workloadLoaded = !!workload;
   useEffect(() => {
-    if (activeTab !== effectiveTab) setActiveTab(effectiveTab);
-  }, [activeTab, effectiveTab]);
+    if (workloadLoaded && activeTab !== effectiveTab) setActiveTab(effectiveTab);
+  }, [workloadLoaded, activeTab, effectiveTab]);
 
   const totalDeductionUnits = isP ? (s?.total_deduction_units || 0) : 0;
   const olVal  = isP ? (s?.total_overload_units || 0) : (s?.total_overload_hours || 0);
   const praiseSubjectVal = isP ? (s?.total_praise_units || 0) : (s?.total_praise_hours || 0);
   const praiseTotal = praiseSubjectVal + (workload?.praise.reduce((sum, p) => sum + (parseFloat(String(p.equivalent_units)) || 0), 0) ?? 0);
-  const distinctSubjects = new Set(workload?.loads.map(l => l.ms_id) ?? []).size;
   /** No. of Preparation: the same subject (code + title) across blocks counts once. */
   const preparationCount = mergeSameSubjects(workload?.loads ?? []).length;
 
@@ -521,8 +516,8 @@ export default function InstructorWorkloadClient() {
   // Same text as the admin form and print: each deduction's description (e.g. "ICT Coordinator")
   const designationText = designationRowText(workload?.deductions ?? []);
   const officialRegularSummary = {
-    unitsText: formatOfficialNumber(totalRegularWU),
-    hoursText: formatOfficialNumber(totalRegularHoursDisplay),
+    unitsText: formatOfficialTotal(totalRegularWU),
+    hoursText: formatOfficialTotal(totalRegularHoursDisplay),
     designation: designationText,
     // Same lines as the admin form and print: one per deduction, labelled by type
     designationLines: designationFooterLines(isP ? (workload?.deductions ?? []) : []).map(l => ({
@@ -538,10 +533,10 @@ export default function InstructorWorkloadClient() {
         units: formatOfficialNumber(parseFloat(String(d.deducted_units)) || 0),
       })),
     preparations: String(preparationCount),
-    // Regular Load = teaching + deductions (Praise is not part of it — as on the admin form and print)
-    totalUnitsText: formatOfficialNumber(
-      isP ? totalRegularWU + totalDeductionUnits : totalRegularHoursDisplay
-    ),
+    // Regular Load = teaching + deductions (Praise is not part of it — as on the admin form and print).
+    // Units for everyone (no deductions for Contractual); hours go under Hours.
+    totalUnitsText: formatOfficialTotal(totalRegularWU + totalDeductionUnits),
+    totalHoursText: formatOfficialTotal(totalRegularHoursDisplay),
   };
 
   /* Group overload loads by section (same placement as official Regular slots) */
@@ -566,14 +561,18 @@ export default function InstructorWorkloadClient() {
   });
 
   const officialOverloadRows: OfficialFormRow[] = [];
+  /** Work units on the Overload lines — the form's units total for Contractual (kept in hours) */
+  let overloadRowsWU = 0;
   for (const list of Object.values(overloadGrouped)) {
     for (const { load, row } of list) {
       const lec2 = parseFloat(String(load.lecture_hours)) || 0;
       const lab2 = parseFloat(String(load.laboratory_hours)) || 0;
       const hasBoth2 = lec2 > 0 && lab2 > 0;
+      // Units column = work units for everyone (Contractual subjects are kept in hours)
       const olWU = hasBoth2
             ? (row.type === 'lec' ? lec2 : lab2 * 0.75)
-            : (isP ? parseFloat(String(load.units)) || 0 : parseFloat(String(load.hours)) || 0);
+            : (isP ? parseFloat(String(load.units)) || 0 : lec2 + lab2 * 0.75);
+      overloadRowsWU += olWU;
       const start = row.type === 'lec' ? (load.lec_start_time ?? load.start_time) : (load.lab_start_time ?? load.start_time);
       const end   = row.type === 'lec' ? (load.lec_end_time ?? load.end_time) : (load.lab_end_time ?? load.end_time);
       const day   = row.type === 'lec' ? (load.lec_day_pattern ?? load.day_pattern) : (load.lab_day_pattern ?? load.day_pattern);
@@ -631,6 +630,8 @@ export default function InstructorWorkloadClient() {
       const day   = row.type === 'lec' ? (load.lec_day_pattern ?? load.day_pattern) : (load.lab_day_pattern ?? load.day_pattern);
       const yearNum = extractYearNum(load.year_level);
       const occupied = occupiedRangeFromScheduleTimes(start, end);
+      const rowWU = isP ? olV : hoursToUnits(olHours, row.type);
+      overloadRowsWU += rowWU;
       officialOverloadRows.push({
         key: `${row.key}-split-ol`,
         slotId: matchOfficialSlot(day, start, end, formGroups),
@@ -641,22 +642,25 @@ export default function InstructorWorkloadClient() {
         description: row.description,
         course: `${load.program_code} ${yearNum}${load.block_name}`,
         students: load.number_of_students > 0 ? String(load.number_of_students) : '',
-        units: formatOfficialNumber(olV),
+        units: formatOfficialNumber(rowWU),
         hours: formatOfficialNumber(olHours),
         room: row.room_name || '',
       });
     }
   }
 
+  // Units under Units, hours under Hours — Contractual overloads are stored in hours only
+  const overloadUnits = isP ? olVal : overloadRowsWU;
   const officialOverloadSummary = {
-    unitsText: formatOfficialNumber(olVal),
-    hoursText: formatOfficialNumber(overloadContactHours),
+    unitsText: formatOfficialTotal(overloadUnits),
+    hoursText: formatOfficialTotal(overloadContactHours),
     designation: '',
     // Same row format as the Regular form — Designation / Special Assignment left blank
     designationLines: [{ key: 'designation-blank', label: 'Designation', description: '', units: '' }],
     specialAssignments: [] as { key: string; description: string; units: string }[],
     preparations: String(mergeSameSubjects([...overloadPrintLoads, ...splitPrintLoads]).length),
-    totalUnitsText: formatOfficialNumber(olVal),
+    totalUnitsText: formatOfficialTotal(overloadUnits),
+    totalHoursText: formatOfficialTotal(overloadContactHours),
     totalDescription: 'Overload',
   };
 
@@ -666,6 +670,8 @@ export default function InstructorWorkloadClient() {
     if (!isP) return sum + (parseFloat(String(l.split_overload_hours)) || 0);
     return sum + (parseFloat(String(l.overload_component === 'lab' ? l.laboratory_hours : l.lecture_hours)) || 0);
   }, 0);
+  /** Work units on the Praise lines — the form's units for Contractual (kept in hours) */
+  let praiseRowsWU = 0;
   const officialPraiseRows: OfficialFormRow[] = [
     ...praiseSubjectLoads.flatMap((load) =>
       splitLoad(load, isP).map((row) => {
@@ -674,7 +680,8 @@ export default function InstructorWorkloadClient() {
         const hasBoth2 = lec2 > 0 && lab2 > 0;
         const wu = hasBoth2
           ? (row.type === 'lec' ? lec2 : lab2 * 0.75)
-          : (isP ? parseFloat(String(load.units)) || 0 : parseFloat(String(load.hours)) || 0);
+          : (isP ? parseFloat(String(load.units)) || 0 : lec2 + lab2 * 0.75);
+        praiseRowsWU += wu;
         const start = row.type === 'lec' ? (load.lec_start_time ?? load.start_time) : (load.lab_start_time ?? load.start_time);
         const end   = row.type === 'lec' ? (load.lec_end_time ?? load.end_time) : (load.lab_end_time ?? load.end_time);
         const day   = row.type === 'lec' ? (load.lec_day_pattern ?? load.day_pattern) : (load.lab_day_pattern ?? load.day_pattern);
@@ -703,6 +710,8 @@ export default function InstructorWorkloadClient() {
         : (parseFloat(String(load.split_overload_hours)) || 0);
       return splitLoad(load, isP).filter(r => oc === 'full' || r.type === oc).map((row) => {
         const hrs = !isP ? val : parseFloat(String(row.type === 'lab' ? load.laboratory_hours : load.lecture_hours)) || 0;
+        const rowWU = isP ? val : hoursToUnits(hrs, row.type);
+        praiseRowsWU += rowWU;
         const start = row.type === 'lec' ? (load.lec_start_time ?? load.start_time) : (load.lab_start_time ?? load.start_time);
         const end   = row.type === 'lec' ? (load.lec_end_time ?? load.end_time) : (load.lab_end_time ?? load.end_time);
         const day   = row.type === 'lec' ? (load.lec_day_pattern ?? load.day_pattern) : (load.lab_day_pattern ?? load.day_pattern);
@@ -718,7 +727,7 @@ export default function InstructorWorkloadClient() {
           description: `${row.description} · Source: Regular`,
           course: `${load.program_code} ${yearNum}${load.block_name}`,
           students: load.number_of_students > 0 ? String(load.number_of_students) : '',
-          units: formatOfficialNumber(val),
+          units: formatOfficialNumber(rowWU),
           hours: formatOfficialNumber(hrs),
           room: row.room_name || '',
         };
@@ -735,14 +744,18 @@ export default function InstructorWorkloadClient() {
   const praiseRecords = workload?.praise ?? [];
   const praiseTeaching = praiseSubjectVal > 0.001;
   const praisePreparations = mergeSameSubjects([...praiseSubjectLoads, ...praiseSplitLoads]).length;
+  /* Units under Units, hours under Hours — Contractual praise subjects are stored in hours only */
+  const praiseTeachingUnits = isP ? praiseSubjectVal : praiseRowsWU;
+  const praiseFormUnits = praiseTeachingUnits + praiseRecords.reduce((sum, p) => sum + (parseFloat(String(p.equivalent_units)) || 0), 0);
   const officialPraiseSummary = {
-    unitsText: praiseTeaching ? formatOfficialNumber(praiseSubjectVal) : '',
-    hoursText: praiseTeaching ? formatOfficialNumber(praiseHoursSum) : '',
+    unitsText: praiseTeaching ? formatOfficialTotal(praiseTeachingUnits) : '',
+    hoursText: praiseTeaching ? formatOfficialTotal(praiseHoursSum) : '',
     designation: '',
     researchExtension: praiseRecords.filter(p => isResearchExtensionType(p.praise_type)).map(praiseRecordLine),
     specialAssignments: praiseRecords.filter(p => !isResearchExtensionType(p.praise_type)).map(praiseRecordLine),
     preparations: praiseTeaching && praisePreparations > 0 ? String(praisePreparations) : '',
-    totalUnitsText: formatOfficialNumber(praiseTotal),
+    totalUnitsText: formatOfficialTotal(praiseFormUnits),
+    totalHoursText: praiseTeaching ? formatOfficialTotal(praiseHoursSum) : '',
     totalDescription: 'Praise Load',
   };
 
@@ -768,15 +781,20 @@ export default function InstructorWorkloadClient() {
   });
   const actualWU = actualLines.reduce((sum, l) => sum + l.row.wu, 0);
   const actualHours = actualLines.reduce((sum, l) => sum + l.row.hours, 0);
+  /** The form's Total No. of Units (Actual Load): teaching + deloading */
+  const actualTotalUnits = actualWU + totalDeductionUnits;
+  /** The Actual Load card's number — units for Permanent, hours for Contractual (like the other cards) */
+  const actualTotal = isP ? actualTotalUnits : actualHours;
   const officialActualSummary = {
     ...officialRegularSummary,
-    unitsText: formatOfficialNumber(actualWU),
-    hoursText: formatOfficialNumber(actualHours),
-    totalUnitsText: formatOfficialNumber(isP ? actualWU + totalDeductionUnits : actualHours),
+    unitsText: formatOfficialTotal(actualWU),
+    hoursText: formatOfficialTotal(actualHours),
+    totalUnitsText: formatOfficialTotal(actualTotalUnits),
+    totalHoursText: formatOfficialTotal(actualHours),
     totalDescription: 'Actual Load',
   };
 
-  /* ── Print: the menu asks which official form first (Regular / Actual Load / Overload / Praise) ── */
+  /* ── Print: the menu asks which official form first (Actual Load / Regular / Overload / Praise) ── */
   function handlePrinted(result: PrintDocumentResult) {
     setPrintError('');
     setPrintOfferFallback(false);
@@ -905,7 +923,6 @@ export default function InstructorWorkloadClient() {
       {/* ── Workload content ──────────────────────────────────────────── */}
       {!showSkeleton && !error && !noPeriod && workload && (() => {
         const modalRegVal  = isP ? totalRegularWU : totalRegularHoursDisplay;
-        const modalTotal   = modalRegVal + olVal + praiseTotal;
         // The term's limit from the server (deloading applied); the policy is only a fallback.
         // `??`, not `||` — a limit of 0 (deloading ≥ the whole load) is a real limit.
         const regLimit = Number(s?.regular_load_limit ?? (isP ? regularUnitsCap(workloadPolicy) : workloadPolicy.contractualHours));
@@ -916,27 +933,31 @@ export default function InstructorWorkloadClient() {
         const regOverShown = isP ? shownUnitsOver(modalRegVal, regLimit) : modalExceeded;
         const overloadCount = overloadPrintLoads.length + splitPrintLoads.length;
         const praiseCount = (workload.praise ?? []).length + praiseSubjectLoads.length + praiseSplitLoads.length;
+        const actualCount = workload.loads.length;
 
         return (
           <>
-            {/* ── Summary cards: Regular · Overload · Praise (if any) · Total — click to open that table ── */}
+            {/* ── Summary cards: Actual Load · Regular · Overload · Praise (if any) — click to open that table ── */}
             <div className={`grid grid-cols-2 gap-3 sm:gap-4 mb-5 ${hasPraiseSection ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
-              <LoadCard index={0} tone={TAB_TONE.regular} label={isP ? 'Regular Load' : 'Regular Hours'} unit={isP ? 'units' : 'hours'}
+              <LoadCard index={0} tone={TAB_TONE.actual} edgeColor="var(--load-actual)" label="Actual Load"
+                unit={`${isP ? 'units' : 'hours'} · ${actualCount} subject${actualCount !== 1 ? 's' : ''}`}
+                // With deloading the form's total is teaching + deloading — show how it adds up
+                detail={totalDeductionUnits > 0.001 ? `${actualWU.toFixed(2)} teaching + ${totalDeductionUnits.toFixed(2)} deloading` : undefined}
+                value={actualTotal.toFixed(2)}
+                active={effectiveTab === 'actual' && tableVisible}
+                onClick={hasActualSection ? () => selectTab('actual') : undefined} />
+              <LoadCard index={1} tone={TAB_TONE.regular} label={isP ? 'Regular Load' : 'Regular Hours'} unit={isP ? 'units' : 'hours'}
                 value={modalRegVal.toFixed(2)} of={regLimitShown}
                 note={modalIsExceeded ? `Exceeded by ${regOverShown.toFixed(2)}` : undefined}
                 active={effectiveTab === 'regular' && tableVisible} onClick={() => selectTab('regular')} />
-              <LoadCard index={1} tone={TAB_TONE.overload} label="Overload" unit={isP ? 'units' : 'hours'} value={olVal.toFixed(2)}
+              <LoadCard index={2} tone={TAB_TONE.overload} label="Overload" unit={isP ? 'units' : 'hours'} value={olVal.toFixed(2)}
                 active={effectiveTab === 'overload' && tableVisible}
                 onClick={() => selectTab('overload')} />
               {hasPraiseSection && (
-                <LoadCard index={2} tone={TAB_TONE.praise} label="Praise Load" unit={`${isP ? 'units' : 'hours'} · ${praiseCount} item${praiseCount !== 1 ? 's' : ''}`}
+                <LoadCard index={3} tone={TAB_TONE.praise} label="Praise Load" unit={`${isP ? 'units' : 'hours'} · ${praiseCount} item${praiseCount !== 1 ? 's' : ''}`}
                   value={praiseTotal.toFixed(2)}
                   active={effectiveTab === 'praise' && tableVisible} onClick={() => selectTab('praise')} />
               )}
-              <LoadCard index={3} tone={TAB_TONE.total} label={isP ? 'Total Units' : 'Total Hours'}
-                unit={`${isP ? 'units' : 'hours'} · ${distinctSubjects} subject${distinctSubjects !== 1 ? 's' : ''}`}
-                value={modalTotal.toFixed(2)}
-                active={effectiveTab === 'total' && tableVisible} onClick={() => selectTab('total')} />
             </div>
 
             {/* ── Printable area ────────────────────────────────────── */}
@@ -955,14 +976,13 @@ export default function InstructorWorkloadClient() {
                 </div>
               </div>
 
-              {/* Tab navigation — Regular always; Actual Load / Overload / Praise only with data (same colours as the cards) */}
+              {/* Tab navigation (same order and colours as the cards) — Workload always; Actual Load / Overload / Praise only with data */}
               <div className="flex flex-wrap items-center gap-2 mb-1">
                 {([
+                  { key: 'actual', label: 'Actual Load', count: actualCount, show: hasActualSection },
                   { key: 'regular', label: 'Workload', count: regularPrintLoads.length, show: true },
-                  { key: 'actual', label: 'Actual Load', count: workload.loads.length, show: hasActualSection },
                   { key: 'overload', label: 'Overload', count: overloadCount, show: hasOverloadSection || effectiveTab === 'overload' },
                   { key: 'praise', label: 'Praise Load', count: praiseCount, show: hasPraiseSection },
-                  { key: 'total', label: isP ? 'Total Units' : 'Total Hours', count: distinctSubjects, show: effectiveTab === 'total' },
                 ] as const).filter(t => t.show).map(t => {
                   const on = effectiveTab === t.key;
                   const c = TAB_TONE[t.key];
@@ -1043,19 +1063,6 @@ export default function InstructorWorkloadClient() {
                         </p>
                       </div>
                     )
-                  )}
-                  {effectiveTab === 'total' && (
-                    <TotalBreakdown
-                      unit={isP ? 'units' : 'hours'}
-                      rows={[
-                        { key: 'regular', label: isP ? 'Regular Load' : 'Regular Hours', count: regularPrintLoads.length, value: modalRegVal },
-                        { key: 'overload', label: 'Overload', count: overloadCount, value: olVal },
-                        ...(hasPraiseSection ? [{ key: 'praise' as const, label: 'Praise Load', count: praiseCount, value: praiseTotal }] : []),
-                      ]}
-                      total={modalTotal}
-                      subjects={distinctSubjects}
-                      onOpen={selectTab}
-                    />
                   )}
                   {effectiveTab === 'praise' && (
                     <OfficialWorkloadFormTable

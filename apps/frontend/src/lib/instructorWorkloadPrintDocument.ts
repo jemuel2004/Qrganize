@@ -266,7 +266,14 @@ function computeRegularRowValues(
         ? parseFloat(((totalStored / (totalStored + splitOvU)) * totalCurrH).toFixed(2))
         : totalCurrH);
   }
+  // Contractual loads are kept in hours: a split part's units are those hours in work units
+  if (!isP && isSplitLoad) displayWU = hoursToUnits(displayHours, row.type);
   return { displayWU, displayHours };
+}
+
+/** Work units of `hours` of one component — Lecture 1 : 1, Laboratory × 0.75. */
+export function hoursToUnits(hours: number, type: 'lec' | 'lab'): number {
+  return type === 'lab' ? hours * 0.75 : hours;
 }
 
 /** One Lec/Lab line of the Actual Load form, at its full value. */
@@ -400,20 +407,21 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
           : (parseFloat(String(load.split_overload_hours)) || 0) > 0.001);
         const oc = (load.overload_component || 'full') as 'lec' | 'lab' | 'full';
         if (isSplit && hasBoth && oc !== 'full' && row.type !== oc) continue;
+        // Units column = work units for everyone (Contractual subjects are kept in hours)
         let wu = hasBoth
           ? (row.type === 'lec' ? lec : lab * 0.75)
-          : (isP ? parseFloat(String(load.units)) || 0 : parseFloat(String(load.hours)) || 0);
+          : (isP ? parseFloat(String(load.units)) || 0 : calcWorkloadUnits(lec, lab));
         let hrs = row.hours;
         if (isSplit) {
-          wu = isP
+          const part = isP
             ? (parseFloat(String(load.split_overload_units)) || 0)
             : (parseFloat(String(load.split_overload_hours)) || 0);
-          hrs = isP ? (oc === 'lab' ? Math.max(0, Math.round(wu / 0.75)) : wu) : wu;
+          hrs = isP ? (oc === 'lab' ? Math.max(0, Math.round(part / 0.75)) : part) : part;
+          wu = isP ? part : hoursToUnits(part, row.type);
         }
         if (isP ? wu < 0.001 : hrs < 0.001) continue;
-        totalRegularWU += isP ? wu : 0;
+        totalRegularWU += wu;
         totalRegularHours += hrs;
-        if (!isP) totalRegularWU += hrs;
         const adjustedRow: SplitRow = { ...row, wu, hours: hrs };
         const pr: PRow = { load, row: adjustedRow, startTime, endTime };
         const slotId = matchOfficialSlot(dayPat, startTime, endTime, groups);
@@ -429,7 +437,7 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
     /* Actual Load: every subject of the term on one form, each at its full Lec/Lab value
        (Regular, Overload and Praise alike — no split between documents). */
     for (const { row, startTime, endTime, dayPattern } of actualLoadLines(loads, isP)) {
-      totalRegularWU += isP ? row.wu : row.hours;
+      totalRegularWU += row.wu;
       totalRegularHours += row.hours;
       const pr: PRow = { load: row.load, row, startTime, endTime };
       const slotId = matchOfficialSlot(dayPattern, startTime, endTime, groups);
@@ -457,14 +465,15 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
         let wu: number;
         let hrs: number;
         if (isPart) {
-          wu = partVal;
+          // Contractual parts are kept in hours — their units are those hours in work units
+          wu = isP ? partVal : hoursToUnits(partVal, row.type);
           hrs = !isP ? partVal : (row.type === 'lab' ? lab : lec);
         } else {
           wu = hasBoth ? (row.type === 'lec' ? lec : lab * 0.75) : calcWorkloadUnits(lec, lab);
           hrs = hasBoth ? (row.type === 'lec' ? lec : lab) : lec + lab;
         }
         if (isP ? wu < 0.001 : hrs < 0.001) continue;
-        praiseSubjectWU += isP ? wu : hrs;
+        praiseSubjectWU += wu;
         praiseSubjectHours += hrs;
         const startTime = row.type === 'lec' ? (load.lec_start_time ?? load.start_time) : (load.lab_start_time ?? load.start_time);
         const endTime = row.type === 'lec' ? (load.lec_end_time ?? load.end_time) : (load.lab_end_time ?? load.end_time);
@@ -490,7 +499,8 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
     const { displayWU, displayHours } = documentKind === 'regular'
       ? computeRegularRowValues(load, row, isP)
       : { displayWU: row.wu, displayHours: row.hours };
-    const wu = isP ? (displayWU % 1 === 0 ? displayWU.toFixed(0) : displayWU.toFixed(2)) : '';
+    // Units under Units and hours under Hours for every faculty (as on screen)
+    const wu = displayWU % 1 === 0 ? displayWU.toFixed(0) : displayWU.toFixed(2);
     const hrs = displayHours % 1 === 0 ? displayHours.toFixed(0) : displayHours.toFixed(2);
     return {
       kind: 'load',
@@ -562,22 +572,22 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
   const specialAssignmentUnitsTotal = specialAssignmentDeds.reduce((s, d) => s + Number(d.deducted_units), 0);
   // Total No. of Units = actual teaching + Designation credit + Special
   // Assignment credit — every visible row above added together, so the
-  // printed total always matches what's actually shown on the form.
-  const netTotal = isP
-    ? totalRegularWU + designationUnitsTotal + specialAssignmentUnitsTotal
-    : totalRegularHours;
+  // printed total always matches what's actually shown on the form. It is
+  // units for everyone; the hours total goes under Hours beside it.
+  const netTotal = totalRegularWU + designationUnitsTotal + specialAssignmentUnitsTotal;
   // No. of Preparation: the same subject (code + title) taught to several blocks counts once
   const distinctSubjects = mergeSameSubjects(loads).length;
 
   const row = (bold: boolean, cells: WorkloadFormCell[]): WorkloadFormSummaryRow => ({ bold, cells });
 
   /* Label spans TIME/DAY + Subject Code (colspan 2) so print matches the on-screen form width.
-     Remaining cells keep Description / Course / Students / Units / Hours / Room alignment. */
+     Remaining cells keep Description / Course / Students / Units / Hours / Room alignment.
+     Totals are written with two decimals (28.25, 32.00), as on the official form. */
   const noOfUnitsRow = row(true, [
     { text: 'No. of Units', labelPad: true, colspan: 2 },
     {}, {}, {},
     { text: totalRegularWU.toFixed(2), center: true },
-    { text: String(Math.round(totalRegularHours)), center: true },
+    { text: totalRegularHours.toFixed(2), center: true },
     {},
   ]);
 
@@ -609,7 +619,8 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
     { text: documentKind === 'deload' ? 'Actual Load' : 'Regular Load', center: true },
     {}, {},
     { text: netTotal.toFixed(2), center: true },
-    {}, {},
+    { text: totalRegularHours.toFixed(2), center: true },
+    {},
   ]);
 
   const praiseUnitsTotal = praiseSubjectWU + praiseArr.reduce(
@@ -649,7 +660,7 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
         { text: 'No. of Units', labelPad: true, colspan: 2 },
         {}, {}, {},
         hasTeaching ? { text: praiseSubjectWU.toFixed(2), center: true } : {},
-        hasTeaching ? { text: String(Math.round(praiseSubjectHours)), center: true } : {},
+        hasTeaching ? { text: praiseSubjectHours.toFixed(2), center: true } : {},
         {},
       ]),
       ...(research.length > 0 ? research.map(p => recordRow('Add: Research/Extension', p)) : [recordRow('Add: Research/Extension')]),
@@ -664,13 +675,14 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
         { text: 'Praise Load', center: true },
         {}, {},
         { text: praiseUnitsTotal.toFixed(2), center: true },
-        {}, {},
+        hasTeaching ? { text: praiseSubjectHours.toFixed(2), center: true } : {},
+        {},
       ]),
     ];
   } else {
     /* Overload: same row skeleton as Regular; only values + load label differ. */
     const loadLabel = 'Overload';
-    const unitsVal = isP ? totalRegularWU : totalRegularHours;
+    const unitsVal = totalRegularWU;
     const hoursVal = totalRegularHours;
     const prepCount = distinctSubjects;
     summary = [
@@ -678,7 +690,7 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
         { text: 'No. of Units', labelPad: true, colspan: 2 },
         {}, {}, {},
         { text: unitsVal.toFixed(2), center: true },
-        { text: String(Math.round(hoursVal)), center: true },
+        { text: hoursVal.toFixed(2), center: true },
         {},
       ]),
       // Same row format as the Regular form — Designation / Special Assignment left blank
@@ -700,7 +712,8 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
         { text: loadLabel, center: true },
         {}, {},
         { text: unitsVal.toFixed(2), center: true },
-        {}, {},
+        { text: hoursVal.toFixed(2), center: true },
+        {},
       ]),
     ];
   }

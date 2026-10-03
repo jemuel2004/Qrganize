@@ -323,6 +323,11 @@ export function formatOfficialNumber(n: number): string {
   return Math.abs(n % 1) < 0.001 ? String(Math.round(n)) : n.toFixed(2);
 }
 
+/** Summary totals (No. of Units, Total No. of Units): always two decimals — 28.25, 32.00 — as on the official form. */
+export function formatOfficialTotal(n: number): string {
+  return Number.isFinite(n) ? n.toFixed(2) : '';
+}
+
 /**
  * Official form TIME/DAY cell — uses saved DB start/end (24h → 12h with AM/PM).
  * Example: 13:00–16:00 → "1:00 PM–4:00 PM"; 11:00–13:00 → "11:00 AM–1:00 PM".

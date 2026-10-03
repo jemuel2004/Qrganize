@@ -861,7 +861,7 @@ export default function FacultySchedulesClient({
                     <EmploymentBadge status={viewFaculty.empStatus} />
                   </div>
                 </div>
-                {/* Quiet header actions: Print menu (Regular / Actual Load / Overload / Praise) · Close */}
+                {/* Quiet header actions: Print menu (Actual Load / Regular / Overload / Praise) · Close */}
                 <div className="sm:ml-4 flex items-center gap-2 sm:gap-1 sm:flex-shrink-0">
                   <WorkloadPrintMenu
                     key={`excel-${viewFaculty.id}`}

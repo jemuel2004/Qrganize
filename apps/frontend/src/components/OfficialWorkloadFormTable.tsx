@@ -41,6 +41,8 @@ export type OfficialFormSummary = {
   researchExtension?: { key: string; description: string; units: string; action?: React.ReactNode }[];
   preparations: string;
   totalUnitsText: string;
+  /** Hours total, under Hours on the Total No. of Units line (units stay under Units). */
+  totalHoursText?: string;
   /** Label in the Total row Description cell (default: Regular Load). */
   totalDescription?: string;
 };
@@ -537,6 +539,7 @@ export default function OfficialWorkloadFormTable({
                   label="Total No. of Units"
                   description={totalDescription}
                   units={summary.totalUnitsText}
+                  hours={summary.totalHoursText}
                   showActions={showActions}
                   emphasizeNumbers
                   emphasizeDescription
@@ -583,6 +586,7 @@ export default function OfficialWorkloadFormTable({
                   label="Total No. of Units"
                   description={totalDescription}
                   units={summary.totalUnitsText}
+                  hours={summary.totalHoursText}
                   showActions={showActions}
                   emphasizeNumbers
                   emphasizeDescription
@@ -615,6 +619,7 @@ export default function OfficialWorkloadFormTable({
                   label="Total No. of Units"
                   description={totalDescription}
                   units={summary.totalUnitsText}
+                  hours={summary.totalHoursText}
                   showActions={showActions}
                   emphasizeNumbers
                   emphasizeDescription

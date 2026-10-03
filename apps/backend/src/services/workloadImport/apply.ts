@@ -757,47 +757,54 @@ const uniqueMessages = (list: ScheduleConflict[]) => [...new Set(list.map(c => c
  * right type is used — never one that another class's own form gives it at
  * that time, and never one used then by a class on the forms that wasn't
  * imported. A blank room on the form stays blank.
+ *
+ * The Lecture and Laboratory of one class written in the same room stay
+ * together: that room when it suits and is free for both, else one free room
+ * that suits both (a laboratory). Only when no room fits both are the parts
+ * placed one by one.
  */
 async function assignRooms(ctx: PlacementContext, tasks: RoomTask[], report: ImportReport): Promise<void> {
   const desires = tasks.map((t, i) => ({ i, roomId: ctx.roomIdOf(t.wanted), sessions: t.sessions }));
   const done = new Set<number>();
   const touched = new Set<number>();
-  for (let i = 0; i < tasks.length; i++) {
-    const task = tasks[i];
+  /** Another class's own form gives it this room at an overlapping time (and it is not placed yet) */
+  const reserved = (roomId: number, sessions: RoomTask['sessions']) => desires.some(d => !done.has(d.i) && d.roomId === roomId
+    && d.sessions.some(x => sessions.some(s => s.day === x.day && x.start < s.end && x.end > s.start)));
+  const place = async (task: RoomTask, roomId: number) => { await setRoom(ctx, task, roomId); touched.add(task.msId); };
+  /** Kept as written while the forms also put an unimported class there at that time — worth a look */
+  const noteOutsideUse = (task: RoomTask, roomId: number, name: string) => {
+    const outside = externalRoomUse(ctx, roomId, task.sessions);
+    const noteKey = `${task.cls.id}|${roomId}`;
+    if (outside && !ctx.roomNotesGiven.has(noteKey)) {
+      ctx.roomNotesGiven.add(noteKey);
+      report.issues.push({ level: 'review', topic: 'Room', faculty: task.cls.facultyLabel,
+        message: `${task.cls.subject.code} ${task.cls.programCode} ${task.cls.year}${task.cls.block} (${task.cls.facultyLabel}) keeps ${name} as written on its form; the forms also put ${outside} there at that time.` });
+    }
+  };
+
+  /** One part: the form's room when valid and free, else the first free valid room */
+  async function placeOne(task: RoomTask, wanted: number) {
     const { cls, comp } = task;
-    const wanted = ctx.roomIdOf(task.wanted);
-    done.add(i);
-    if (wanted == null) continue; // blank on the form
     const name = ctx.rooms.get(wanted)?.name ?? task.wanted?.excelText ?? '';
     const problem = roomProblem(ctx, cls, comp, wanted);
     let taken: ScheduleConflict | undefined;
     if (!problem) {
       taken = (await roomConflicts(ctx, task, wanted))[0];
       if (!taken) {
-        await setRoom(ctx, task, wanted);
-        touched.add(task.msId);
-        const outside = externalRoomUse(ctx, wanted, task.sessions);
-        const noteKey = `${cls.id}|${wanted}`;
-        if (outside && !ctx.roomNotesGiven.has(noteKey)) {
-          ctx.roomNotesGiven.add(noteKey);
-          report.issues.push({ level: 'review', topic: 'Room', faculty: cls.facultyLabel,
-            message: `${cls.subject.code} ${cls.programCode} ${cls.year}${cls.block} (${cls.facultyLabel}) keeps ${name} as written on its form; the forms also put ${outside} there at that time.` });
-        }
-        continue;
+        await place(task, wanted);
+        noteOutsideUse(task, wanted, name);
+        return;
       }
       report.conflicts.roomDetected++;
     }
-    const reserved = (roomId: number) => desires.some(d => !done.has(d.i) && d.roomId === roomId
-      && d.sessions.some(x => task.sessions.some(s => s.day === x.day && x.start < s.end && x.end > s.start)));
     let alt: RoomInfo | null = null;
     for (const room of alternativeRooms(ctx, cls, comp, wanted)) {
-      if (reserved(room.id) || externalRoomUse(ctx, room.id, task.sessions)) continue;
+      if (reserved(room.id, task.sessions) || externalRoomUse(ctx, room.id, task.sessions)) continue;
       if ((await roomConflicts(ctx, task, room.id)).length === 0) { alt = room; break; }
     }
     const reason = problem ?? taken!.message;
     if (alt) {
-      await setRoom(ctx, task, alt.id);
-      touched.add(task.msId);
+      await place(task, alt.id);
       task.outcome.roomNotes.push(`${name} → ${alt.name}: ${reason}`);
       if (taken) report.conflicts.roomResolved++;
     } else {
@@ -805,6 +812,62 @@ async function assignRooms(ctx: PlacementContext, tasks: RoomTask[], report: Imp
       report.issues.push({ level: 'review', topic: 'Room', faculty: cls.facultyLabel,
         message: `${cls.subject.code} ${cls.programCode} ${cls.year}${cls.block} ${comp.type === 'lec' ? 'Lecture' : 'Laboratory'} ${describeSessions(task.sessions)}: ${name} can't be used (${reason}) and no other valid room is free — left without a room.` });
     }
+  }
+
+  /** Lecture + Laboratory written in the same room: one room for both, or false when none fits both */
+  async function placeTogether(parts: RoomTask[], wanted: number): Promise<boolean> {
+    const { cls } = parts[0];
+    const sessions = parts.flatMap(p => p.sessions);
+    const suitsAll = (roomId: number) => parts.every(p => !roomProblem(ctx, cls, p.comp, roomId));
+    const firstClash = async (roomId: number) => {
+      for (const p of parts) {
+        const clash = (await roomConflicts(ctx, p, roomId))[0];
+        if (clash) return clash;
+      }
+      return undefined;
+    };
+    const name = ctx.rooms.get(wanted)?.name ?? parts[0].wanted?.excelText ?? '';
+    const problem = parts.map(p => roomProblem(ctx, cls, p.comp, wanted)).find(Boolean) ?? null;
+    const taken = problem ? undefined : await firstClash(wanted);
+    if (!problem && !taken) {
+      for (const p of parts) { await place(p, wanted); noteOutsideUse(p, wanted, name); }
+      return true;
+    }
+    // One free room that suits both parts — the kind the Laboratory needs
+    const lab = parts.find(p => p.comp.type === 'lab') ?? parts[0];
+    for (const room of alternativeRooms(ctx, cls, lab.comp, wanted)) {
+      if (!suitsAll(room.id) || reserved(room.id, sessions) || externalRoomUse(ctx, room.id, sessions)) continue;
+      if (await firstClash(room.id)) continue;
+      const reason = problem ?? taken!.message;
+      for (const p of parts) {
+        await place(p, room.id);
+        p.outcome.roomNotes.push(`${name} → ${room.name}: ${reason}; kept in one room with its ${p.comp.type === 'lec' ? 'Laboratory' : 'Lecture'}`);
+      }
+      if (taken) { report.conflicts.roomDetected++; report.conflicts.roomResolved++; }
+      return true;
+    }
+    return false;
+  }
+
+  for (let i = 0; i < tasks.length; i++) {
+    if (done.has(i)) continue;
+    const task = tasks[i];
+    done.add(i);
+    const wanted = ctx.roomIdOf(task.wanted);
+    if (wanted == null) continue; // blank on the form
+    // The class's other part written in the same room → they are meant to share it
+    const partners: number[] = [];
+    tasks.forEach((t, j) => {
+      if (!done.has(j) && t.msId === task.msId && t.comp.type !== task.comp.type && ctx.roomIdOf(t.wanted) === wanted) partners.push(j);
+    });
+    if (partners.length) {
+      for (const j of partners) done.add(j);
+      const parts = [task, ...partners.map(j => tasks[j])];
+      if (await placeTogether(parts, wanted)) continue;
+      for (const p of parts) await placeOne(p, wanted);
+      continue;
+    }
+    await placeOne(task, wanted);
   }
   // Room names on the outcome, and the class's main room for the workload pages
   for (const task of tasks) {

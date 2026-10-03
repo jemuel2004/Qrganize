@@ -83,7 +83,7 @@ type Look = 'soft' | 'primary' | 'modal';
 
 /**
  * "Print" (or "Excel") button that first asks which official form to make —
- * Regular Load, Actual Load, Overload or Praise Load — then prints it (or, with
+ * Actual Load, Regular Load, Overload or Praise Load — then prints it (or, with
  * `mode="excel"`, downloads the same form as a formatted .xlsx). Forms with no
  * subjects are shown but can't be picked.
  *
@@ -173,8 +173,8 @@ export default function WorkloadPrintMenu({
 
   const { counts } = printLoadSets(workload, semester, academicYear);
   const options: { kind: PrintKind; label: string; count: number; dot: string }[] = [
-    { kind: 'regular',  label: 'Regular Load', count: counts.regular,  dot: 'var(--load-regular)' },
     { kind: 'deload',   label: 'Actual Load',  count: counts.deload,   dot: 'var(--load-actual)' },
+    { kind: 'regular',  label: 'Regular Load', count: counts.regular,  dot: 'var(--load-regular)' },
     { kind: 'overload', label: 'Overload',     count: counts.overload, dot: 'var(--load-overload)' },
     { kind: 'praise',   label: 'Praise Load',  count: counts.praise,   dot: 'var(--load-praise)' },
   ];

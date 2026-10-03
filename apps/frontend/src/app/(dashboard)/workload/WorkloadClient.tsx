@@ -19,13 +19,15 @@ import {
   loadDayPatterns,
   matchOfficialSlot,
   formatOfficialNumber,
+  formatOfficialTotal,
   formatOfficialTimeRange,
   occupiedRangeFromScheduleTimes,
 } from '@/lib/officialWorkloadSlots';
 import { useDayCombinations } from '@/lib/dayCombinations';
 import { LOAD_INK, LOAD_TONE } from '@/lib/loadTone';
 import {
-  actualLoadLines, designationFooterLines, designationRowText, isResearchExtensionType, type PrintDocumentResult,
+  actualLoadLines, designationFooterLines, designationRowText, hoursToUnits, isResearchExtensionType,
+  type PrintDocumentResult,
 } from '@/lib/instructorWorkloadPrintDocument';
 import WorkloadPrintMenu, { type WorkloadPrintData } from '@/components/WorkloadPrintMenu';
 import { openWorkloadPrintableVersion } from '@/lib/openPrintHtmlDocument';
@@ -332,6 +334,8 @@ function computeRegularRowValues(
         ? parseFloat(((totalStored / (totalStored + splitOvU)) * totalCurrH).toFixed(2))
         : totalCurrH);
   }
+  // Contractual loads are kept in hours: a split part's units are those hours in work units
+  if (!isP && isSplitLoad) displayWU = hoursToUnits(displayHours, row.type);
   return { displayWU, displayHours };
 }
 
@@ -544,10 +548,10 @@ export default function WorkloadPage({
 
   const [instructorPanelCollapsed, setInstructorPanelCollapsed] = useState(false);
   const [workloadModalOpen, setWorkloadModalOpen] = useState(false);
-  const [workloadModalTab, setWorkloadModalTab] = useState<WorkloadModalTab>('regular');
+  const [workloadModalTab, setWorkloadModalTab] = useState<WorkloadModalTab>('actual');
   /** Slide direction for the form's tab content: 1 = moving right (Workload → Overload), -1 = left */
   const [modalTabDir, setModalTabDir] = useState<1 | -1>(1);
-  const MODAL_TAB_ORDER = { regular: 0, actual: 1, overload: 2, praise: 3 } as const;
+  const MODAL_TAB_ORDER = { actual: 0, regular: 1, overload: 2, praise: 3 } as const;
   function switchModalTab(next: WorkloadModalTab, current: WorkloadModalTab) {
     if (next === current) return;
     setModalTabDir(MODAL_TAB_ORDER[next] > MODAL_TAB_ORDER[current] ? 1 : -1);
@@ -2126,7 +2130,7 @@ export default function WorkloadPage({
             onClick={() => {
               if (!selectedFaculty) return;
               setWorkloadModalOpen(true);
-              setWorkloadModalTab('regular');
+              setWorkloadModalTab('actual'); // first section; Workload when there are no subjects
             }}
             className={[
               'inline-flex items-center justify-center gap-2 px-4 min-h-10 rounded-xl text-sm font-semibold transition-colors',
@@ -3568,16 +3572,20 @@ export default function WorkloadPage({
 
         /* Official Overload rows — same table component as Regular Load */
         const officialOverloadRows: OfficialFormRow[] = [];
+        /** Work units on the Overload lines — the form's units total for Contractual (kept in hours) */
+        let overloadRowsWU = 0;
         const seenOverloadMs = new Set<number>();
         for (const list of Object.values(overloadGrouped)) {
           for (const { load, row } of list) {
                             const lec2 = parseFloat(String(load.lecture_hours)) || 0;
                             const lab2 = parseFloat(String(load.laboratory_hours)) || 0;
                             const hasBoth2 = lec2 > 0 && lab2 > 0;
+                            // Units column = work units for everyone (Contractual subjects are kept in hours)
                             const olWU = hasBoth2
                               ? (row.type === 'lec' ? lec2 : lab2 * 0.75)
-                              : (isP ? parseFloat(String(load.units)) || 0 : parseFloat(String(load.hours)) || 0);
+                              : (isP ? parseFloat(String(load.units)) || 0 : lec2 + lab2 * 0.75);
                             const olHrs = row.hours;
+            overloadRowsWU += olWU;
             const isFirstOfSubject = !seenOverloadMs.has(load.ms_id);
             seenOverloadMs.add(load.ms_id);
             officialOverloadRows.push(toOfficialRow(load, row, olWU, olHrs, isFirstOfSubject ? (
@@ -3635,7 +3643,9 @@ export default function WorkloadPage({
                               return total > 0.001 ? parseFloat(((ovU / total) * totalCurrH).toFixed(2)) : 0;
                             })();
           for (const row of rows) {
-            const splitRow = toOfficialRow(load, row, olV, olHours, (
+            const rowWU = isP ? olV : hoursToUnits(olHours, row.type);
+            overloadRowsWU += rowWU;
+            const splitRow = toOfficialRow(load, row, rowWU, olHours, (
                                     <button
                                       type="button"
                                       title="Return overload portion to Regular Load"
@@ -3650,18 +3660,23 @@ export default function WorkloadPage({
           }
         }
 
+        // Units under Units, hours under Hours — Contractual overloads are stored in hours only
+        const overloadUnits = isP ? olVal : overloadRowsWU;
         const officialOverloadSummary = {
-          unitsText: formatOfficialNumber(olVal),
-          hoursText: formatOfficialNumber(overloadContactHours),
+          unitsText: formatOfficialTotal(overloadUnits),
+          hoursText: formatOfficialTotal(overloadContactHours),
           designation: '',
           // Same row format as the Regular form — Designation / Special Assignment left blank
           designationLines: [{ key: 'designation-blank', label: 'Designation', description: '', units: '' }],
           specialAssignments: [] as { key: string; description: string; units: string }[],
           preparations: String(mergeSameSubjects([...overloadPrintLoads, ...splitPrintLoads]).length),
-          totalUnitsText: formatOfficialNumber(olVal),
+          totalUnitsText: formatOfficialTotal(overloadUnits),
+          totalHoursText: formatOfficialTotal(overloadContactHours),
           totalDescription: 'Overload',
         };
 
+        /** Work units on the Praise lines — the form's units for Contractual (kept in hours) */
+        let praiseRowsWU = 0;
         const officialPraiseRows: OfficialFormRow[] = [
           ...(() => {
             const seenPraiseMs = new Set<number>();
@@ -3672,7 +3687,8 @@ export default function WorkloadPage({
                 const hasBoth2 = lec2 > 0 && lab2 > 0;
                 const wu = hasBoth2
                   ? (row.type === 'lec' ? lec2 : lab2 * 0.75)
-                  : (isP ? parseFloat(String(load.units)) || 0 : parseFloat(String(load.hours)) || 0);
+                  : (isP ? parseFloat(String(load.units)) || 0 : lec2 + lab2 * 0.75);
+                praiseRowsWU += wu;
                 const isFirstOfSubject = !seenPraiseMs.has(load.ms_id);
                 seenPraiseMs.add(load.ms_id);
                 const base = toOfficialRow(load, row, wu, row.hours, isFirstOfSubject ? (
@@ -3703,7 +3719,9 @@ export default function WorkloadPage({
               const lec2 = parseFloat(String(load.lecture_hours)) || 0;
               const lab2 = parseFloat(String(load.laboratory_hours)) || 0;
               const hrs = !isP ? val : row.type === 'lab' ? lab2 : lec2;
-              const base = toOfficialRow(load, row, val, hrs, (
+              const rowWU = isP ? val : hoursToUnits(hrs, row.type);
+              praiseRowsWU += rowWU;
+              const base = toOfficialRow(load, row, rowWU, hrs, (
                 <div className="flex items-center justify-center gap-0.5 flex-wrap">
                   <button
                     type="button"
@@ -3760,7 +3778,9 @@ export default function WorkloadPage({
           const oc = l.overload_component;
           return sum + (parseFloat(String(oc === 'lab' ? l.laboratory_hours : l.lecture_hours)) || 0);
         }, 0);
-        const praiseUnitsSum = praiseSubjectVal + (workload.praise ?? []).reduce(
+        /* Units under Units, hours under Hours — Contractual praise subjects are stored in hours only */
+        const praiseTeachingUnits = isP ? praiseSubjectVal : praiseRowsWU;
+        const praiseUnitsSum = praiseTeachingUnits + (workload.praise ?? []).reduce(
           (sum: number, p: { equivalent_units?: unknown }) => sum + (parseFloat(String(p.equivalent_units)) || 0),
           0,
         );
@@ -3768,13 +3788,14 @@ export default function WorkloadPage({
         const praiseTeaching = praiseSubjectVal > 0.001;
         const praisePreparations = mergeSameSubjects([...praiseSubjectLoads, ...praiseSplitLoads]).length;
         const officialPraiseSummary = {
-          unitsText: praiseTeaching ? formatOfficialNumber(praiseSubjectVal) : '',
-          hoursText: praiseTeaching ? formatOfficialNumber(praiseSubjectHours) : '',
+          unitsText: praiseTeaching ? formatOfficialTotal(praiseTeachingUnits) : '',
+          hoursText: praiseTeaching ? formatOfficialTotal(praiseSubjectHours) : '',
           designation: '',
           researchExtension: praiseRecords.filter(p => isResearchExtensionType(p.praise_type)).map(praiseRecordLine),
           specialAssignments: praiseRecords.filter(p => !isResearchExtensionType(p.praise_type)).map(praiseRecordLine),
           preparations: praiseTeaching && praisePreparations > 0 ? String(praisePreparations) : '',
-          totalUnitsText: formatOfficialNumber(praiseUnitsSum),
+          totalUnitsText: formatOfficialTotal(praiseUnitsSum),
+          totalHoursText: praiseTeaching ? formatOfficialTotal(praiseSubjectHours) : '',
           totalDescription: 'Praise Load',
         };
 
@@ -3797,8 +3818,8 @@ export default function WorkloadPage({
         const designationText = designationRowText(designationDeductions);
 
         const officialRegularSummary = {
-          unitsText: formatOfficialNumber(totalRegularWU),
-          hoursText: formatOfficialNumber(totalRegularHours),
+          unitsText: formatOfficialTotal(totalRegularWU),
+          hoursText: formatOfficialTotal(totalRegularHours),
           designation: designationText,
           designationUnitsText: designationUnitsTotal > 0 ? formatOfficialNumber(designationUnitsTotal) : undefined,
           // One line per deduction, labelled by type (same as print)
@@ -3815,11 +3836,9 @@ export default function WorkloadPage({
           // Total No. of Units = actual teaching + Designation credit + Special
           // Assignment credit — every visible row above added together, so the
           // printed total always matches what's actually shown on the form.
-          totalUnitsText: formatOfficialNumber(
-            isP
-              ? totalRegularWU + designationUnitsTotal + specialAssignmentUnitsTotal
-              : totalRegularHours
-          ),
+          // Units for everyone (no deductions for Contractual); hours go under Hours.
+          totalUnitsText: formatOfficialTotal(totalRegularWU + designationUnitsTotal + specialAssignmentUnitsTotal),
+          totalHoursText: formatOfficialTotal(totalRegularHours),
         };
 
         /* Actual Load: every subject of the term at its full Lec/Lab value — the same
@@ -3829,13 +3848,16 @@ export default function WorkloadPage({
           ({ ...toOfficialRow(row.load, row, row.wu, row.hours), key: `${row.key}-actual` }));
         const actualWU = actualLines.reduce((sum, l) => sum + l.row.wu, 0);
         const actualHours = actualLines.reduce((sum, l) => sum + l.row.hours, 0);
+        /** The form's Total No. of Units (Actual Load): teaching + deloading */
+        const actualTotalUnits = actualWU + designationUnitsTotal + specialAssignmentUnitsTotal;
+        /** The Actual Load card's number — units for Permanent, hours for Contractual (like the other cards) */
+        const actualTotal = isP ? actualTotalUnits : actualHours;
         const officialActualSummary = {
           ...officialRegularSummary,
-          unitsText: formatOfficialNumber(actualWU),
-          hoursText: formatOfficialNumber(actualHours),
-          totalUnitsText: formatOfficialNumber(
-            isP ? actualWU + designationUnitsTotal + specialAssignmentUnitsTotal : actualHours
-          ),
+          unitsText: formatOfficialTotal(actualWU),
+          hoursText: formatOfficialTotal(actualHours),
+          totalUnitsText: formatOfficialTotal(actualTotalUnits),
+          totalHoursText: formatOfficialTotal(actualHours),
           totalDescription: 'Actual Load',
         };
 
@@ -3900,7 +3922,7 @@ export default function WorkloadPage({
                   <div><span className="font-semibold">Semester:</span> {listSemester}</div>
                   <div><span className="font-semibold">A.Y.:</span> {listYear}</div>
                         </div>
-                {/* Print → choose the form first (Regular / Actual Load / Overload / Praise) */}
+                {/* Print → choose the form first (Actual Load / Regular / Overload / Praise) */}
                 <WorkloadPrintMenu
                   data={printData}
                   semester={listSemester}
@@ -3946,8 +3968,8 @@ export default function WorkloadPage({
               const regOverBy = modalRegVal - Number(s.regular_load_limit || 0);
               const regExceeded = regOverBy > 0.001;
               const regOverShown = (isP ? shownUnitsOver(modalRegVal, Number(s.regular_load_limit || 0)) : regOverBy).toFixed(2);
-              /* Each card opens its section below (Workload / Overload / Praise Load) */
-              const cardButton = (key: 'regular' | 'overload' | 'praise', enabled: boolean) => ({
+              /* Each card opens its section below (Actual Load / Workload / Overload / Praise Load) */
+              const cardButton = (key: WorkloadModalTab, enabled: boolean) => ({
                 type: 'button' as const,
                 disabled: !enabled,
                 onClick: () => switchModalTab(key, effectiveModalTab),
@@ -3958,7 +3980,7 @@ export default function WorkloadPage({
               });
               const cardState = 'w-full text-left transition-[border-color,box-shadow] duration-300 enabled:cursor-pointer disabled:cursor-default';
               /* Each card wears its load colour: top strip, number, and border when open */
-              const cardStyle = (key: 'regular' | 'overload' | 'praise') => effectiveModalTab === key
+              const cardStyle = (key: WorkloadModalTab) => effectiveModalTab === key
                 ? { borderColor: LOAD_TONE[key], boxShadow: `0 0 0 3px ${LOAD_TONE[key]}26` }
                 : undefined;
               const strip = (color: string) => (
@@ -3966,7 +3988,30 @@ export default function WorkloadPage({
               );
               return (
                 <>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
+                  <motion.button
+                    {...cardButton('actual', hasActualSection)}
+                    className={`${card} ${cardState}`}
+                    style={cardStyle('actual')}
+                    title={hasActualSection ? 'Show Actual Load' : undefined}
+                  >
+                    {/* Theme-aware navy — plain navy is lost on the dark theme */}
+                    {strip('var(--load-actual)')}
+                    <div className={labelCls}>Actual Load</div>
+                    <div className={valueCls} style={{ color: LOAD_INK.actual }}>
+                      {actualTotal.toFixed(2)}
+                      <span className={mutedCls}>{unitLabel}</span>
+                    </div>
+                    <div className="mt-1.5 text-sm font-semibold text-slate-500">
+                      {termLoads.length} subject{termLoads.length !== 1 ? 's' : ''}
+                    </div>
+                    {/* With deloading the form's total is teaching + deloading — show how it adds up */}
+                    {designationUnitsTotal + specialAssignmentUnitsTotal > 0.001 && (
+                      <div className="mt-0.5 text-xs text-slate-500">
+                        {actualWU.toFixed(2)} teaching + {(designationUnitsTotal + specialAssignmentUnitsTotal).toFixed(2)} deloading
+                      </div>
+                    )}
+                  </motion.button>
                   <motion.button
                     {...cardButton('regular', true)}
                     className={`${regExceeded ? 'qr-flag-pulse relative overflow-hidden border-2 border-red-400 rounded-xl p-5 min-w-0' : card} ${cardState}`}
@@ -4055,8 +4100,8 @@ export default function WorkloadPage({
             {/* Tab pills — one highlight slides to the chosen tab */}
             <div className="flex flex-wrap gap-2 mb-4" role="tablist" aria-label="Workload sections">
               {([
-                { key: 'regular' as const, label: 'Workload', count: regularPrintLoads.length, color: LOAD_INK.regular, show: true },
                 { key: 'actual' as const, label: 'Actual Load', count: termLoads.length, color: LOAD_INK.actual, show: hasActualSection },
+                { key: 'regular' as const, label: 'Workload', count: regularPrintLoads.length, color: LOAD_INK.regular, show: true },
                 { key: 'overload' as const, label: 'Overload', count: overloadPrintLoads.length + splitPrintLoads.length, color: LOAD_INK.overload, show: hasOverloadSection },
                 { key: 'praise' as const, label: 'Praise Load', count: (workload?.praise ?? []).length + praiseSubjectLoads.length + praiseSplitLoads.length, color: LOAD_INK.praise, show: hasPraiseSection },
               ]).filter(t => t.show).map(t => {
@@ -4120,17 +4165,6 @@ export default function WorkloadPage({
                 transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
                 className="min-w-0 max-w-full"
               >
-              {/* -- REGULAR LOAD TABLE -- */}
-              <div style={{ display: effectiveModalTab === 'regular' ? '' : 'none' }} className="min-w-0 max-w-full">
-                <OfficialWorkloadFormTable
-                  rows={officialRegularRows}
-                  summary={officialRegularSummary}
-                  showActions
-                  variant="regular"
-                  groups={formGroups}
-                />
-              </div>{/* end regular tab */}
-
               {/* -- ACTUAL LOAD TABLE (every subject of the term; read-only) -- */}
               {hasActualSection && (
                 <div style={{ display: effectiveModalTab === 'actual' ? '' : 'none' }} className="min-w-0 max-w-full">
@@ -4142,6 +4176,17 @@ export default function WorkloadPage({
                   />
                 </div>
               )}
+
+              {/* -- REGULAR LOAD TABLE -- */}
+              <div style={{ display: effectiveModalTab === 'regular' ? '' : 'none' }} className="min-w-0 max-w-full">
+                <OfficialWorkloadFormTable
+                  rows={officialRegularRows}
+                  summary={officialRegularSummary}
+                  showActions
+                  variant="regular"
+                  groups={formGroups}
+                />
+              </div>{/* end regular tab */}
 
               {/* -- OVERLOAD TABLE (same official form as Regular Load) -- */}
               {hasOverloadSection && (

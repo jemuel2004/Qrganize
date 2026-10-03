@@ -1932,14 +1932,12 @@ html.light {
   --load-actual:   #0B2A5B;
   --donut-track:   #EEF2F8;
 }
-/* Navy load tabs (Actual Load, Total) on dark: give the pill a visible edge, and keep
-   the count navy on its white badge (dark mode turns inline navy text light) */
-html:not(.light) [data-load-tab="actual"],
-html:not(.light) [data-load-tab="total"] {
+/* Navy Actual Load tab on dark: give the pill a visible edge, and keep the count
+   navy on its white badge (dark mode turns inline navy text light) */
+html:not(.light) [data-load-tab="actual"] {
   border-color: color-mix(in srgb, var(--load-actual) 55%, transparent) !important;
 }
-html:not(.light) span[data-load-badge="actual"],
-html:not(.light) span[data-load-badge="total"] {
+html:not(.light) span[data-load-badge="actual"] {
   color: #0B2A5B !important;
 }
 /* Panel + hovered legend row */
