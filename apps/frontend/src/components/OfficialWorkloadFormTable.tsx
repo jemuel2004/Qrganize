@@ -45,7 +45,8 @@ export type OfficialFormSummary = {
   totalDescription?: string;
 };
 
-export type OfficialTableVariant = 'regular' | 'overload' | 'praise';
+/** 'actual' = Actual Load: every subject of the term, with the Regular form's summary lines. */
+export type OfficialTableVariant = 'regular' | 'actual' | 'overload' | 'praise';
 
 const cellBase = 'border border-[#E2E8F0] print:border-black px-1.5 py-[6px] text-sm text-[#0B2A5B] print:text-black leading-snug align-middle';
 const cell = `${cellBase} text-center`;
@@ -233,7 +234,8 @@ export default function OfficialWorkloadFormTable({
 }) {
   const reduceMotion = useReducedMotion();
   const colCount = showActions ? 9 : 8;
-  const needsClassification = variant !== 'overload' && variant !== 'praise';
+  const needsClassification = variant === 'regular';
+  const sectionName = variant === 'praise' ? 'Praise Load' : variant === 'actual' ? 'Actual Load' : 'Overload';
   const bySlot = new Map<string, OfficialFormRow[]>();
   const unmatched: OfficialFormRow[] = [];
   for (const row of rows) {
@@ -254,7 +256,7 @@ export default function OfficialWorkloadFormTable({
 
   const totalDescription =
     summary?.totalDescription
-    ?? (variant === 'overload' ? 'Overload' : variant === 'praise' ? 'Praise Load' : 'Regular Load');
+    ?? (variant === 'regular' ? 'Regular Load' : sectionName);
 
   /** Occupied intervals per official section — used to suppress redundant empty template rows. */
   const occupiedByGroup = new Map<string, OccupiedTimeRange[]>();
@@ -349,14 +351,16 @@ export default function OfficialWorkloadFormTable({
                   <span className="text-[15px] font-bold text-[#0B2A5B]">
                     {needsClassification
                       ? 'Other — Needs Classification'
-                      : `${variant === 'praise' ? 'Praise Load' : 'Overload'} — No Time Slot Yet`}
+                      : `${sectionName} — No Time Slot Yet`}
                   </span>
                   <p className="text-xs text-[#64748B] mt-0.5">
                     {needsClassification
                       ? 'Not yet assigned to Workload, Overload, or Praise Load.'
                       : variant === 'praise'
                         ? 'Already in Praise Load. Subjects appear in their time slot once scheduled in Scheduling.'
-                        : 'Already in Overload. Appears in its time slot once scheduled in Scheduling.'}
+                        : variant === 'actual'
+                          ? 'Subjects appear in their time slot once scheduled in Scheduling.'
+                          : 'Already in Overload. Appears in its time slot once scheduled in Scheduling.'}
                   </p>
                 </div>
                 <span className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
@@ -489,7 +493,8 @@ export default function OfficialWorkloadFormTable({
               );
             })}
 
-            {summary && variant === 'regular' && (
+            {/* Actual Load uses the Regular form's lines (as on the printed form) */}
+            {summary && (variant === 'regular' || variant === 'actual') && (
               <>
                 <SummaryRow
                   label="No. of Units"

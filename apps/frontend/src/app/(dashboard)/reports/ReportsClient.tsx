@@ -30,7 +30,7 @@ import { useSchoolYear } from '@/context/SchoolYearContext';
 import { useToast } from '@/context/ToastContext';
 import { useRealtime } from '@/context/RealtimeContext';
 import { CURRICULUM_VERSIONS, DEFAULT_CURRICULUM_VERSION, curriculumVersionLabel, type CurriculumVersion } from '@shared/curriculumVersion';
-import { WorkloadPrintMenu } from '../faculty-schedules/FacultySchedulesClient';
+import WorkloadPrintMenu from '@/components/WorkloadPrintMenu';
 import { downloadCurriculumExcel, groupCurriculums, printCurriculum, type CurriculumRowLike } from '../program/curriculum/curriculumReport';
 import { downloadQrExcel, printRooms, type RoomQR } from '../qr-generator/qrReport';
 import { downloadClassProgramExcel, fetchClassProgram, loadClassProgramDocSettings } from '../program/class-program/classProgramReport';
@@ -603,7 +603,7 @@ export default function ReportsClient() {
             </span>
             <div className="min-w-0">
               <h2 className="text-lg font-bold text-[#0B2A5B]">Faculty Workload Form</h2>
-              <p className="text-sm text-[#64748B] mt-0.5">Regular Load, Overload or Praise Load · Print or Excel</p>
+              <p className="text-sm text-[#64748B] mt-0.5">Regular Load, Actual Load, Overload or Praise Load · Print or Excel</p>
             </div>
           </div>
 

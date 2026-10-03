@@ -7,14 +7,9 @@ import { useSchoolYear } from '@/context/SchoolYearContext';
 import { useRealtime } from '@/context/RealtimeContext';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
-import { AlertTriangle, CalendarDays, ChevronDown, Download, Eye, FileSpreadsheet, Loader2, Printer, Trash2, X } from 'lucide-react';
+import { AlertTriangle, CalendarDays, Eye, Loader2, Trash2, X } from 'lucide-react';
 import Modal from '@/components/ui/Modal';
-import {
-  buildWorkloadFormModel,
-  printRegularLoadDocument,
-  type PrintDeduction, type PrintFaculty, type PrintPraise, type PrintWorkloadLoad,
-} from '@/lib/instructorWorkloadPrintDocument';
-import type { WorkloadDocumentKind } from '@/lib/workloadPrintStorage';
+import WorkloadPrintMenu from '@/components/WorkloadPrintMenu';
 import { SearchInput } from '@/components/ui/SearchFilter';
 import FriendlySelect from '@/components/ui/FriendlySelect';
 import CountFilterTabs, { type CountFilterOption } from '@/components/ui/CountFilterTabs';
@@ -25,7 +20,6 @@ import { EmploymentBadge } from '@/components/ui/EmploymentBadge';
 import { Skeleton, TableSkeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import { byPosition } from '@/lib/positionRank';
-import { fetchDayCombinations } from '@/lib/dayCombinations';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -116,282 +110,6 @@ function rowValue(row: FacultyScheduleRow): number {
   }
   const h = (row.hours !== null && Number(row.hours) > 0) ? Number(row.hours) : row.total_hours;
   return h ?? 0;
-}
-
-/* ── Print menu ─────────────────────────────────────────────────────────── */
-
-type PrintKind = WorkloadDocumentKind;
-interface WorkloadPrintData {
-  faculty: PrintFaculty;
-  loads: (PrintWorkloadLoad & { semester?: string; academic_year?: string })[];
-  praise: PrintPraise[];
-  deductions: PrintDeduction[];
-}
-
-async function fetchWorkloadPrintData(facultyId: number, semester: string, academicYear: string): Promise<WorkloadPrintData> {
-  const qs = new URLSearchParams();
-  if (semester) qs.set('semester', semester);
-  if (academicYear) qs.set('academic_year', academicYear);
-  const res = await fetch(`/api/workload/${facultyId}?${qs}`);
-  const d = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(d.error || 'Unable to load workload.');
-  return { faculty: d.faculty, loads: d.loads ?? [], praise: d.praise ?? [], deductions: d.deductions ?? [] };
-}
-
-function termLoadsOf(data: WorkloadPrintData | null, semester: string, academicYear: string) {
-  return (data?.loads ?? []).filter(l =>
-    (!semester || !l.semester || l.semester === semester) &&
-    (!academicYear || !l.academic_year || l.academic_year === academicYear));
-}
-
-/** Same load selection as the Faculty Workload page's print, per official form. */
-function printLoadSets(data: WorkloadPrintData | null, semester: string, academicYear: string) {
-  const isP = data?.faculty.employment_status === 'Permanent';
-  const termLoads = termLoadsOf(data, semester, academicYear);
-  const isSplit = (l: PrintWorkloadLoad) => l.load_category === 'Regular' && (
-    isP ? (Number(l.split_overload_units) || 0) > 0.001 : (Number(l.split_overload_hours) || 0) > 0.001);
-  const overloadLoads = termLoads.filter(l => l.load_category === 'Overload');
-  const splitLoads    = termLoads.filter(l => isSplit(l) && !l.split_is_praise);
-  // Praise: whole subjects + a lone Lec/Lab portion moved to Praise
-  const praiseLoads   = termLoads.filter(l => l.load_category === 'Praise' || (isSplit(l) && l.split_is_praise));
-  return {
-    termLoads,
-    counts: {
-      regular:  termLoads.filter(l => l.load_category === 'Regular').length,
-      overload: overloadLoads.length + splitLoads.length,
-      praise:   praiseLoads.length + (data?.praise.length ?? 0),
-      // Actual Load: every load — Regular + Overload + Praise (a split subject counts in both)
-      deload:   termLoads.length + termLoads.filter(isSplit).length,
-    } satisfies Record<PrintKind, number>,
-    loadsFor: (kind: PrintKind) =>
-      kind === 'overload' ? [...overloadLoads, ...splitLoads]
-        : kind === 'praise' ? praiseLoads
-        : termLoads, // Regular (the form drops Overload rows itself) and Actual Load (every schedule)
-  };
-}
-
-/** Input for one official form — Actual Load is every schedule of the faculty on one form. */
-function printDocInput(kind: PrintKind, data: WorkloadPrintData, semester: string, academicYear: string) {
-  return {
-    faculty: data.faculty,
-    loads: printLoadSets(data, semester, academicYear).loadsFor(kind),
-    praise: kind === 'praise' ? data.praise : [],
-    deductions: kind === 'regular' || kind === 'deload' ? data.deductions : [],
-    semester,
-    academicYear,
-    documentKind: kind,
-  };
-}
-
-/**
- * Print / Excel menu for the Schedule Details header. On open it fetches the
- * instructor's workload for the term and lets the user pick Regular Load,
- * Overload, or Praise Load — using the same official form (and load selection)
- * as the Faculty Workload page. `mode="excel"` downloads that same form as a
- * formatted .xlsx instead of printing it.
- */
-export function WorkloadPrintMenu({ facultyId, semester, academicYear, mode = 'print', phoneStretch = false }: {
-  facultyId: number; semester: string; academicYear: string;
-  mode?: 'print' | 'excel';
-  /** Phones: fill half the row, and open the menu toward the side that has room */
-  phoneStretch?: boolean;
-}) {
-  const isExcel = mode === 'excel';
-  const toast = useToast();
-  const reduceMotion = useReducedMotion();
-  const ease = [0.4, 0, 0.2, 1] as const;
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(false);
-  const [data, setData] = useState<WorkloadPrintData | null>(null);
-  const [loadingData, setLoadingData] = useState(false);
-  const [error, setError] = useState('');
-  const [printing, setPrinting] = useState<PrintKind | null>(null);
-
-  // Close on outside click
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [open]);
-
-  async function fetchWorkload() {
-    setLoadingData(true);
-    setError('');
-    try {
-      setData(await fetchWorkloadPrintData(facultyId, semester, academicYear));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to load workload.');
-    } finally {
-      setLoadingData(false);
-    }
-  }
-
-  function toggle() {
-    const next = !open;
-    setOpen(next);
-    if (next && !data && !loadingData) fetchWorkload();
-  }
-
-  // Live updates: this faculty's loads may have changed — a closed menu reads
-  // them again on the next open, an open one refreshes its counts now.
-  useRealtime(['workload', 'schedule'], () => {
-    if (!open) { setData(null); return; }
-    if (loadingData) return;
-    return fetchWorkloadPrintData(facultyId, semester, academicYear).then(setData).catch(() => {});
-  });
-
-  const { counts } = printLoadSets(data, semester, academicYear);
-  const options: { kind: PrintKind; label: string; count: number; dot: string }[] = [
-    { kind: 'regular',  label: 'Regular Load', count: counts.regular,  dot: 'var(--load-regular)' },
-    { kind: 'overload', label: 'Overload',     count: counts.overload, dot: 'var(--load-overload)' },
-    { kind: 'praise',   label: 'Praise Load',  count: counts.praise,   dot: 'var(--load-praise)' },
-    { kind: 'deload',   label: 'Actual Load',  count: counts.deload,   dot: '#0B2A5B' },
-  ];
-
-  async function handlePrint(kind: PrintKind) {
-    if (!data) return;
-    setPrinting(kind);
-    setError('');
-    const docInput = printDocInput(kind, data, semester, academicYear);
-    if (isExcel) {
-      // Same official form as Print, as a spreadsheet
-      try {
-        const { buildWorkloadFormWorkbook } = await import('@shared/workloadFormExport');
-        const png = (path: string) => fetch(path).then(r => (r.ok ? r.arrayBuffer() : null)).catch(() => null);
-        const [logo, iso, bagong] = await Promise.all([
-          png('/nemlogo/NEMSU-logo.png'),
-          png('/nemlogo/ISO-UKAS.png'),
-          png('/nemlogo/BAGONG-PILIPINAS-LOGO.png'),
-        ]);
-        const { combinations: dayCombinations } = await fetchDayCombinations(semester, academicYear);
-        const buffer = await buildWorkloadFormWorkbook(
-          buildWorkloadFormModel({ ...docInput, dayCombinations }),
-          logo ? { buffer: logo, extension: 'png' } : undefined,
-          // visibleHeight: how much of each square PNG the mark fills, so both print at the same height
-          [{ b: iso, visibleHeight: 0.57 }, { b: bagong, visibleHeight: 0.74 }]
-            .filter((l): l is { b: ArrayBuffer; visibleHeight: number } => !!l.b)
-            .map(l => ({ buffer: l.b, extension: 'png' as const, visibleHeight: l.visibleHeight })),
-        );
-        const label = options.find(o => o.kind === kind)?.label ?? 'Workload';
-        const url = URL.createObjectURL(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `Faculty_Workload_${label.replace(/\s+/g, '_')}_${data.faculty.name.replace(/[^A-Za-z0-9]+/g, '_')}_${semester.replace(/\s+/g, '_')}_${academicYear}.xlsx`;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-        setOpen(false);
-        toast.success(`${label} downloaded as Excel.`);
-      } catch {
-        setError('Could not create the Excel file. Please try again.');
-      } finally {
-        setPrinting(null);
-      }
-      return;
-    }
-    try {
-      const result = await printRegularLoadDocument({
-        ...docInput,
-        printablePath: '/workload/print',
-      });
-      if (!result.ok) {
-        setError('Printing is not supported directly in this browser. Try Chrome or Safari.');
-      } else {
-        setOpen(false);
-      }
-    } finally {
-      setPrinting(null);
-    }
-  }
-
-  return (
-    <div ref={wrapRef} className={`relative ${phoneStretch ? 'flex-1 sm:flex-none' : ''}`} onKeyDown={e => { if (e.key === 'Escape' && open) { e.stopPropagation(); setOpen(false); } }}>
-      <motion.button
-        type="button"
-        onClick={toggle}
-        whileTap={reduceMotion ? undefined : { scale: 0.95 }}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title={isExcel ? 'Download workload as Excel' : 'Print workload'}
-        className={`group inline-flex items-center justify-center gap-1.5 ${phoneStretch ? 'w-full sm:w-auto h-11 sm:h-9 text-[15px] sm:text-[13px]' : 'h-9 text-[13px]'} px-3 rounded-lg border font-semibold transition-colors ${
-          isExcel
-            // Excel's own green
-            ? open ? 'bg-[#107C41] border-[#107C41] text-white' : 'bg-[#E9F5EE] border-[#B7DFC6] text-[#107C41] hover:bg-[#D5EDDF] hover:border-[#107C41]'
-            // Print in the system's royal blue
-            : open ? 'bg-[#1D5BD6] border-[#1D5BD6] text-white' : 'bg-[#EFF6FF] border-[#BFDBFE] text-[#1D5BD6] hover:bg-[#DBEAFE] hover:border-[#1D5BD6]'
-        }`}
-      >
-        {isExcel
-          ? <FileSpreadsheet className="w-4 h-4 transition-transform duration-200 group-hover:translate-y-px" />
-          : <Printer className="w-4 h-4 transition-transform duration-200 group-hover:-translate-y-px" />}
-        {isExcel ? 'Excel' : 'Print'}
-        <motion.span animate={{ rotate: open ? 180 : 0 }} transition={{ duration: reduceMotion ? 0 : 0.2, ease }} className="inline-flex">
-          <ChevronDown className="w-3.5 h-3.5" />
-        </motion.span>
-      </motion.button>
-
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            role="menu"
-            initial={reduceMotion ? false : { opacity: 0, y: -6, scale: 0.97 }}
-            animate={{ opacity: 1, y: 0, scale: 1, transition: { duration: reduceMotion ? 0 : 0.2, ease } }}
-            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -6, scale: 0.97, transition: { duration: 0.15, ease } }}
-            style={{ transformOrigin: phoneStretch && isExcel ? 'top left' : 'top right' }}
-            className={`absolute ${phoneStretch && isExcel ? 'left-0 sm:left-auto sm:right-0' : 'right-0'} top-full mt-2 z-20 w-64 max-w-[calc(100vw-2rem)] bg-white border border-[#E2E8F0] rounded-xl shadow-[0_16px_40px_-12px_rgba(11,42,91,0.35)] p-1.5`}
-          >
-            <p className="px-2.5 pt-1.5 pb-2 text-[10px] font-bold uppercase tracking-widest text-[#94A3B8]">
-              {isExcel ? 'Download official form (Excel)' : 'Print official form'}
-            </p>
-            {loadingData ? (
-              <div className="flex items-center gap-2 px-2.5 py-3 text-[13px] text-[#64748B]">
-                <Loader2 className="w-4 h-4 animate-spin text-[#1D5BD6]" /> Loading workload…
-              </div>
-            ) : !data ? (
-              <div className="px-2.5 py-2 space-y-2">
-                <p className="text-[12px] text-red-700">{error || 'Unable to load workload.'}</p>
-                <button type="button" onClick={fetchWorkload} className="text-[12px] font-semibold text-[#1D5BD6] hover:underline">
-                  Try again
-                </button>
-              </div>
-            ) : (
-              <>
-                {options.map((o, i) => {
-                  const empty = o.count === 0;
-                  return (
-                    <motion.button
-                      key={o.kind}
-                      type="button"
-                      role="menuitem"
-                      disabled={empty || printing !== null}
-                      onClick={() => handlePrint(o.kind)}
-                      initial={reduceMotion ? false : { opacity: 0, x: 6 }}
-                      animate={{ opacity: 1, x: 0, transition: { duration: reduceMotion ? 0 : 0.2, ease, delay: reduceMotion ? 0 : 0.04 * i } }}
-                      className="group w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left text-[13px] transition-colors enabled:hover:bg-[#F4F7FC] disabled:cursor-not-allowed"
-                    >
-                      <span className="w-2.5 h-2.5 rounded-[3px] flex-shrink-0" style={{ backgroundColor: o.dot, opacity: empty ? 0.35 : 1 }} aria-hidden="true" />
-                      <span className={`font-semibold ${empty ? 'text-[#94A3B8]' : 'text-[#0B2A5B]'}`}>{o.label}</span>
-                      <span className="ml-auto text-[11px] tabular-nums text-[#94A3B8]">
-                        {empty ? 'None' : `${o.count} item${o.count === 1 ? '' : 's'}`}
-                      </span>
-                      {printing === o.kind
-                        ? <Loader2 className={`w-3.5 h-3.5 animate-spin ${isExcel ? 'text-[#107C41]' : 'text-[#1D5BD6]'}`} />
-                        : isExcel
-                          ? <Download className={`w-3.5 h-3.5 transition-colors ${empty ? 'text-[#CBD5E1]' : 'text-[#94A3B8] group-hover:text-[#107C41]'}`} />
-                          : <Printer className={`w-3.5 h-3.5 transition-colors ${empty ? 'text-[#CBD5E1]' : 'text-[#94A3B8] group-hover:text-[#1D5BD6]'}`} />}
-                    </motion.button>
-                  );
-                })}
-                {error && <p className="px-2.5 pt-1.5 pb-1 text-[12px] text-red-700">{error}</p>}
-              </>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
 }
 
 /* ── Sub-components ─────────────────────────────────────────────────────── */
@@ -1143,7 +861,7 @@ export default function FacultySchedulesClient({
                     <EmploymentBadge status={viewFaculty.empStatus} />
                   </div>
                 </div>
-                {/* Quiet header actions: Print menu (Regular / Overload / Praise / Actual Load) · Close */}
+                {/* Quiet header actions: Print menu (Regular / Actual Load / Overload / Praise) · Close */}
                 <div className="sm:ml-4 flex items-center gap-2 sm:gap-1 sm:flex-shrink-0">
                   <WorkloadPrintMenu
                     key={`excel-${viewFaculty.id}`}

@@ -24,7 +24,10 @@ import {
 } from '@/lib/officialWorkloadSlots';
 import { useDayCombinations } from '@/lib/dayCombinations';
 import { LOAD_INK, LOAD_TONE } from '@/lib/loadTone';
-import { designationFooterLines, designationRowText, isResearchExtensionType, printRegularLoadDocument } from '@/lib/instructorWorkloadPrintDocument';
+import {
+  actualLoadLines, designationFooterLines, designationRowText, isResearchExtensionType, type PrintDocumentResult,
+} from '@/lib/instructorWorkloadPrintDocument';
+import WorkloadPrintMenu, { type WorkloadPrintData } from '@/components/WorkloadPrintMenu';
 import { openWorkloadPrintableVersion } from '@/lib/openPrintHtmlDocument';
 import { coerceSubjectCategory } from '@shared/subjectCategory';
 import {
@@ -242,6 +245,9 @@ interface SplitRow {
   description: string;
   room_name: string | null;
 }
+
+/** Sections of the Faculty Workload form — Actual Load is every subject of the term on one form */
+type WorkloadModalTab = 'regular' | 'actual' | 'overload' | 'praise';
 
 function splitLoad(load: WorkloadLoad, isPermanent = false): SplitRow[] {
   const lec     = parseFloat(String(load.lecture_hours))  || 0;
@@ -538,11 +544,11 @@ export default function WorkloadPage({
 
   const [instructorPanelCollapsed, setInstructorPanelCollapsed] = useState(false);
   const [workloadModalOpen, setWorkloadModalOpen] = useState(false);
-  const [workloadModalTab, setWorkloadModalTab] = useState<'regular' | 'overload' | 'praise'>('regular');
+  const [workloadModalTab, setWorkloadModalTab] = useState<WorkloadModalTab>('regular');
   /** Slide direction for the form's tab content: 1 = moving right (Workload → Overload), -1 = left */
   const [modalTabDir, setModalTabDir] = useState<1 | -1>(1);
-  const MODAL_TAB_ORDER = { regular: 0, overload: 1, praise: 2 } as const;
-  function switchModalTab(next: 'regular' | 'overload' | 'praise', current: 'regular' | 'overload' | 'praise') {
+  const MODAL_TAB_ORDER = { regular: 0, actual: 1, overload: 2, praise: 3 } as const;
+  function switchModalTab(next: WorkloadModalTab, current: WorkloadModalTab) {
     if (next === current) return;
     setModalTabDir(MODAL_TAB_ORDER[next] > MODAL_TAB_ORDER[current] ? 1 : -1);
     setWorkloadModalTab(next);
@@ -861,7 +867,7 @@ export default function WorkloadPage({
    * fall back to Regular Load. If it still has records, stay on that section.
    */
   function syncWorkloadModalTab(opts: {
-    current: 'regular' | 'overload' | 'praise';
+    current: WorkloadModalTab;
     overloadCount: number;
     praiseCount: number;
   }) {
@@ -3341,10 +3347,12 @@ export default function WorkloadPage({
         const praiseSplitLoads   = termLoads.filter(l => isSplitRegular(l) && l.split_is_praise);
         const hasOverloadSection = overloadPrintLoads.length > 0 || splitPrintLoads.length > 0;
         const hasPraiseSection = (workload.praise ?? []).length > 0 || praiseSubjectLoads.length > 0 || praiseSplitLoads.length > 0;
+        const hasActualSection = termLoads.length > 0;
         /* Never leave the active section pointing at a hidden empty tab. */
-        const effectiveModalTab: 'regular' | 'overload' | 'praise' =
+        const effectiveModalTab: WorkloadModalTab =
           (workloadModalTab === 'overload' && !hasOverloadSection)
           || (workloadModalTab === 'praise' && !hasPraiseSection)
+          || (workloadModalTab === 'actual' && !hasActualSection)
             ? 'regular'
             : workloadModalTab;
         /* Regular load totals — computed after grouped is built below */
@@ -3814,25 +3822,34 @@ export default function WorkloadPage({
           ),
         };
 
-        async function handlePrint() {
-          if (!selectedFaculty || !workload) return;
+        /* Actual Load: every subject of the term at its full Lec/Lab value — the same
+           lines as the printed Actual Load form, with the Regular form's summary lines. */
+        const actualLines = actualLoadLines(termLoads, isP);
+        const officialActualRows: OfficialFormRow[] = actualLines.map(({ row }) =>
+          ({ ...toOfficialRow(row.load, row, row.wu, row.hours), key: `${row.key}-actual` }));
+        const actualWU = actualLines.reduce((sum, l) => sum + l.row.wu, 0);
+        const actualHours = actualLines.reduce((sum, l) => sum + l.row.hours, 0);
+        const officialActualSummary = {
+          ...officialRegularSummary,
+          unitsText: formatOfficialNumber(actualWU),
+          hoursText: formatOfficialNumber(actualHours),
+          totalUnitsText: formatOfficialNumber(
+            isP ? actualWU + designationUnitsTotal + specialAssignmentUnitsTotal : actualHours
+          ),
+          totalDescription: 'Actual Load',
+        };
+
+        /* Print menu: the whole term's workload — each official form picks its own subjects */
+        const printData: WorkloadPrintData = {
+          faculty: selectedFaculty,
+          loads: termLoads,
+          praise: workload.praise ?? [],
+          deductions: workload.deductions ?? [],
+        };
+
+        function handlePrinted(result: PrintDocumentResult) {
           setPrintError('');
           setPrintOfferFallback(false);
-          const kind = effectiveModalTab;
-          const result = await printRegularLoadDocument({
-            faculty: selectedFaculty,
-            loads: kind === 'overload'
-              ? [...overloadPrintLoads, ...splitPrintLoads]
-              : kind === 'praise'
-                ? [...praiseSubjectLoads, ...praiseSplitLoads]
-                : (workload.loads ?? []),
-            praise: kind === 'praise' ? (workload.praise ?? []) : [],
-            deductions: kind === 'regular' ? (workload.deductions ?? []) : [],
-            semester: listSemester,
-            academicYear: listYear,
-            documentKind: kind,
-            printablePath: '/workload/print',
-          });
           if (!result.ok) {
             setPrintError(
               'Printing is not supported directly in this browser. Open the printable version, or use Chrome / Safari.',
@@ -3883,13 +3900,15 @@ export default function WorkloadPage({
                   <div><span className="font-semibold">Semester:</span> {listSemester}</div>
                   <div><span className="font-semibold">A.Y.:</span> {listYear}</div>
                         </div>
-                <button
-                  type="button"
-                  onClick={handlePrint}
-                  className="inline-flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 text-white px-4 min-h-11 rounded-xl text-sm font-medium transition w-full sm:w-auto"
-                >
-                  Print {effectiveModalTab === 'regular' ? 'Regular Load' : effectiveModalTab === 'overload' ? 'Overload' : 'Praise Load'}
-                </button>
+                {/* Print → choose the form first (Regular / Actual Load / Overload / Praise) */}
+                <WorkloadPrintMenu
+                  data={printData}
+                  semester={listSemester}
+                  academicYear={listYear}
+                  look="modal"
+                  printablePath="/workload/print"
+                  onPrinted={handlePrinted}
+                />
                         </div>
                       </div>
             {(printError || printOfferFallback) ? (
@@ -4037,6 +4056,7 @@ export default function WorkloadPage({
             <div className="flex flex-wrap gap-2 mb-4" role="tablist" aria-label="Workload sections">
               {([
                 { key: 'regular' as const, label: 'Workload', count: regularPrintLoads.length, color: LOAD_INK.regular, show: true },
+                { key: 'actual' as const, label: 'Actual Load', count: termLoads.length, color: LOAD_INK.actual, show: hasActualSection },
                 { key: 'overload' as const, label: 'Overload', count: overloadPrintLoads.length + splitPrintLoads.length, color: LOAD_INK.overload, show: hasOverloadSection },
                 { key: 'praise' as const, label: 'Praise Load', count: (workload?.praise ?? []).length + praiseSubjectLoads.length + praiseSplitLoads.length, color: LOAD_INK.praise, show: hasPraiseSection },
               ]).filter(t => t.show).map(t => {
@@ -4110,6 +4130,18 @@ export default function WorkloadPage({
                   groups={formGroups}
                 />
               </div>{/* end regular tab */}
+
+              {/* -- ACTUAL LOAD TABLE (every subject of the term; read-only) -- */}
+              {hasActualSection && (
+                <div style={{ display: effectiveModalTab === 'actual' ? '' : 'none' }} className="min-w-0 max-w-full">
+                  <OfficialWorkloadFormTable
+                    rows={officialActualRows}
+                    summary={officialActualSummary}
+                    variant="actual"
+                    groups={formGroups}
+                  />
+                </div>
+              )}
 
               {/* -- OVERLOAD TABLE (same official form as Regular Load) -- */}
               {hasOverloadSection && (

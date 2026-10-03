@@ -8,12 +8,15 @@ import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import { RefreshButton } from '@/app/(dashboard)/room-utilization/shared';
 import {
-  AlertTriangle, Printer, ChevronDown, ChevronRight,
+  AlertTriangle, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import OfficialWorkloadFormTable, { type OfficialFormRow } from '@/components/OfficialWorkloadFormTable';
+import WorkloadPrintMenu from '@/components/WorkloadPrintMenu';
 import { buildOfficialGroups, loadDayPatterns, matchOfficialSlot, formatOfficialNumber, formatOfficialTimeRange, occupiedRangeFromScheduleTimes } from '@/lib/officialWorkloadSlots';
 import { useDayCombinations } from '@/lib/dayCombinations';
-import { designationFooterLines, designationRowText, isResearchExtensionType, printRegularLoadDocument } from '@/lib/instructorWorkloadPrintDocument';
+import {
+  actualLoadLines, designationFooterLines, designationRowText, isResearchExtensionType, type PrintDocumentResult,
+} from '@/lib/instructorWorkloadPrintDocument';
 import { openWorkloadPrintableVersion } from '@/lib/openPrintHtmlDocument';
 import { formatLoadCap, regularUnitsCap, shownUnitsCap, shownUnitsOver } from '@shared/regularLoad';
 import { useWorkloadPolicy } from '@/hooks/useWorkloadPolicy';
@@ -221,10 +224,8 @@ const TAB_TONE = LOAD_TONE;
 type WorkloadTab = keyof typeof TAB_TONE;
 
 /** Summary card tinted in its load colour (Regular blue · Overload orange · Praise gold · Total navy) */
-function LoadCard({ tone, label, unit, value, of, note, index, onClick, active = false, onPrint }: {
+function LoadCard({ tone, label, unit, value, of, note, index, onClick, active = false }: {
   tone: string; label: string; unit: string; value: string; of?: number | string; note?: string; index: number;
-  /** Arrow shortcut: prints this load straight away */
-  onPrint?: () => void;
   /** Opens this load's table below */
   onClick?: () => void;
   active?: boolean;
@@ -240,7 +241,7 @@ function LoadCard({ tone, label, unit, value, of, note, index, onClick, active =
       animate={{ opacity: 1, y: 0, transition: { duration: 0.4, ease: [0.4, 0, 0.2, 1], delay: index * 0.06 } }}
       whileHover={reduceMotion || !onClick ? undefined : { y: -3, boxShadow: `0 14px 28px -16px ${tone}99` }}
       whileTap={reduceMotion || !onClick ? undefined : { scale: 0.98 }}
-      className={`qr-stat-tint relative overflow-hidden rounded-2xl border-2 p-4 sm:p-5 ${onPrint ? 'pr-16 sm:pr-[4.5rem]' : ''} text-center w-full focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${onClick ? 'cursor-pointer' : ''}`}
+      className={`qr-stat-tint relative overflow-hidden rounded-2xl border-2 p-4 sm:p-5 text-center w-full focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${onClick ? 'cursor-pointer' : ''}`}
       style={{
         background: `linear-gradient(160deg, ${tone}${active ? '26' : '14'} 0%, #FFFFFF 75%)`,
         borderColor: active ? tone : `${tone}40`,
@@ -248,20 +249,6 @@ function LoadCard({ tone, label, unit, value, of, note, index, onClick, active =
       }}
     >
       <span aria-hidden className="absolute inset-x-0 top-0 h-1" style={{ backgroundColor: tone }} />
-      {onPrint && (
-        <motion.button
-          type="button"
-          onClick={e => { e.stopPropagation(); onPrint(); }}
-          whileHover={reduceMotion ? undefined : { scale: 1.08 }}
-          whileTap={reduceMotion ? undefined : { scale: 0.92 }}
-          title={`Print ${label}`}
-          aria-label={`Print ${label}`}
-          className="absolute top-1/2 -translate-y-1/2 right-3 sm:right-4 w-10 h-10 rounded-xl flex items-center justify-center shadow-[0_6px_14px_-6px_rgba(11,42,91,0.5)]"
-          style={{ backgroundColor: tone, color: '#FFFFFF' }}
-        >
-          <ChevronRight className="w-5 h-5" />
-        </motion.button>
-      )}
       <div className="text-2xl sm:text-3xl font-black mb-1.5 tabular-nums" style={{ color: tone }}>
         {value}
         {of != null && <span className="text-base sm:text-lg font-bold text-[#94A3B8]"> / {of}</span>}
@@ -414,9 +401,9 @@ export default function InstructorWorkloadClient() {
 
   const hasOverloadSection = overloadPrintLoads.length > 0 || splitPrintLoads.length > 0;
   const hasPraiseSection = (workload?.praise ?? []).length > 0 || praiseSubjectLoads.length > 0 || praiseSplitLoads.length > 0;
-  const effectiveTab: WorkloadTab = activeTab === 'praise' && !hasPraiseSection ? 'regular' : activeTab;
-  /** What the Print button prints — the Total summary has no form of its own, so it prints the Regular Load. */
-  const printTab: 'regular' | 'overload' | 'praise' = effectiveTab === 'total' ? 'regular' : effectiveTab;
+  const hasActualSection = (workload?.loads.length ?? 0) > 0;
+  const effectiveTab: WorkloadTab =
+    (activeTab === 'praise' && !hasPraiseSection) || (activeTab === 'actual' && !hasActualSection) ? 'regular' : activeTab;
 
   useEffect(() => {
     if (activeTab !== effectiveTab) setActiveTab(effectiveTab);
@@ -759,26 +746,40 @@ export default function InstructorWorkloadClient() {
     totalDescription: 'Praise Load',
   };
 
-  /* ── Print (official NEMSU template — same for Regular / Overload / Praise) ── */
-  async function handlePrint(which?: 'regular' | 'overload' | 'praise') {
-    if (!workload) return;
+  /* Actual Load: every subject of the term at its full Lec/Lab value — the same lines
+     as the printed Actual Load form, with the Regular form's summary lines. */
+  const actualLines = actualLoadLines(workload?.loads ?? [], isP);
+  const officialActualRows: OfficialFormRow[] = actualLines.map(({ row, startTime, endTime, dayPattern }) => {
+    const occupied = occupiedRangeFromScheduleTimes(startTime, endTime);
+    return {
+      key: `${row.key}-actual`,
+      slotId: matchOfficialSlot(dayPattern, startTime, endTime, formGroups),
+      timeLabel: formatOfficialTimeRange(startTime, endTime),
+      rangeStartMin: occupied?.startMin,
+      rangeEndMin: occupied?.endMin,
+      subjectCode: row.load.subject_code,
+      description: row.description,
+      course: `${row.load.program_code} ${extractYearNum(row.load.year_level)}${row.load.block_name}`,
+      students: row.load.number_of_students > 0 ? String(row.load.number_of_students) : '',
+      units: formatOfficialNumber(row.wu),
+      hours: formatOfficialNumber(row.hours),
+      room: row.room_name || '',
+    };
+  });
+  const actualWU = actualLines.reduce((sum, l) => sum + l.row.wu, 0);
+  const actualHours = actualLines.reduce((sum, l) => sum + l.row.hours, 0);
+  const officialActualSummary = {
+    ...officialRegularSummary,
+    unitsText: formatOfficialNumber(actualWU),
+    hoursText: formatOfficialNumber(actualHours),
+    totalUnitsText: formatOfficialNumber(isP ? actualWU + totalDeductionUnits : actualHours),
+    totalDescription: 'Actual Load',
+  };
+
+  /* ── Print: the menu asks which official form first (Regular / Actual Load / Overload / Praise) ── */
+  function handlePrinted(result: PrintDocumentResult) {
     setPrintError('');
     setPrintOfferFallback(false);
-    const kind = which ?? printTab;
-    const result = await printRegularLoadDocument({
-      faculty: workload.faculty,
-      loads: kind === 'overload'
-        ? [...overloadPrintLoads, ...splitPrintLoads]
-        : kind === 'praise'
-          ? [...praiseSubjectLoads, ...praiseSplitLoads]
-          : (workload.loads ?? []),
-      praise: kind === 'praise' ? (workload.praise ?? []) : (kind === 'regular' ? (workload.praise ?? []) : []),
-      deductions: kind === 'regular' ? (workload.deductions ?? []) : [],
-      semester,
-      academicYear,
-      documentKind: kind,
-      printablePath: '/instructor/workload/print',
-    });
     if (!result.ok) {
       setPrintError(
         'Printing is not supported directly in this browser. Open the printable version, or use Chrome / Safari.',
@@ -818,16 +819,14 @@ export default function InstructorWorkloadClient() {
         <div className="flex flex-wrap items-center justify-end gap-2.5">
           <RefreshButton onRefresh={() => fetchWorkload()} loading={loading} />
           {workload && (
-            <motion.button
-              type="button"
-              onClick={() => handlePrint()}
-              whileTap={{ scale: 0.97 }}
-              className="h-11 inline-flex items-center justify-center gap-2 px-4 rounded-xl text-[15px] font-semibold bg-[#1D5BD6] hover:bg-[#164BB5] transition-colors shadow-lg shadow-[#1D5BD6]/20"
-              style={{ color: '#FFFFFF' }}
-            >
-              <Printer className="w-4 h-4" />
-              Print {printTab === 'regular' ? 'Regular Load' : printTab === 'overload' ? 'Overload' : 'Praise Load'}
-            </motion.button>
+            <WorkloadPrintMenu
+              data={{ faculty: workload.faculty, loads: workload.loads, praise: workload.praise, deductions: workload.deductions }}
+              semester={semester}
+              academicYear={academicYear}
+              look="primary"
+              printablePath="/instructor/workload/print"
+              onPrinted={handlePrinted}
+            />
           )}
         </div>
       </div>
@@ -925,17 +924,14 @@ export default function InstructorWorkloadClient() {
               <LoadCard index={0} tone={TAB_TONE.regular} label={isP ? 'Regular Load' : 'Regular Hours'} unit={isP ? 'units' : 'hours'}
                 value={modalRegVal.toFixed(2)} of={regLimitShown}
                 note={modalIsExceeded ? `Exceeded by ${regOverShown.toFixed(2)}` : undefined}
-                active={effectiveTab === 'regular' && tableVisible} onClick={() => selectTab('regular')}
-                onPrint={() => handlePrint('regular')} />
+                active={effectiveTab === 'regular' && tableVisible} onClick={() => selectTab('regular')} />
               <LoadCard index={1} tone={TAB_TONE.overload} label="Overload" unit={isP ? 'units' : 'hours'} value={olVal.toFixed(2)}
                 active={effectiveTab === 'overload' && tableVisible}
-                onClick={() => selectTab('overload')}
-                onPrint={hasOverloadSection ? () => handlePrint('overload') : undefined} />
+                onClick={() => selectTab('overload')} />
               {hasPraiseSection && (
                 <LoadCard index={2} tone={TAB_TONE.praise} label="Praise Load" unit={`${isP ? 'units' : 'hours'} · ${praiseCount} item${praiseCount !== 1 ? 's' : ''}`}
                   value={praiseTotal.toFixed(2)}
-                  active={effectiveTab === 'praise' && tableVisible} onClick={() => selectTab('praise')}
-                  onPrint={() => handlePrint('praise')} />
+                  active={effectiveTab === 'praise' && tableVisible} onClick={() => selectTab('praise')} />
               )}
               <LoadCard index={3} tone={TAB_TONE.total} label={isP ? 'Total Units' : 'Total Hours'}
                 unit={`${isP ? 'units' : 'hours'} · ${distinctSubjects} subject${distinctSubjects !== 1 ? 's' : ''}`}
@@ -959,10 +955,11 @@ export default function InstructorWorkloadClient() {
                 </div>
               </div>
 
-              {/* Tab navigation — Regular always; Overload/Praise only with data (same colours as the cards) */}
+              {/* Tab navigation — Regular always; Actual Load / Overload / Praise only with data (same colours as the cards) */}
               <div className="flex flex-wrap items-center gap-2 mb-1">
                 {([
                   { key: 'regular', label: 'Workload', count: regularPrintLoads.length, show: true },
+                  { key: 'actual', label: 'Actual Load', count: workload.loads.length, show: hasActualSection },
                   { key: 'overload', label: 'Overload', count: overloadCount, show: hasOverloadSection || effectiveTab === 'overload' },
                   { key: 'praise', label: 'Praise Load', count: praiseCount, show: hasPraiseSection },
                   { key: 'total', label: isP ? 'Total Units' : 'Total Hours', count: distinctSubjects, show: effectiveTab === 'total' },
@@ -973,6 +970,7 @@ export default function InstructorWorkloadClient() {
                     <motion.button
                       key={t.key}
                       type="button"
+                      data-load-tab={t.key}
                       onClick={() => selectTab(t.key)}
                       whileTap={{ scale: 0.96 }}
                       whileHover={on ? undefined : { y: -2 }}
@@ -982,6 +980,7 @@ export default function InstructorWorkloadClient() {
                     >
                       {t.label}
                       <span className="min-w-6 h-6 px-1.5 rounded-full text-[12px] font-bold inline-flex items-center justify-center"
+                        data-load-badge={on ? undefined : t.key}
                         style={on ? { backgroundColor: 'rgba(255,255,255,0.25)', color: '#FFFFFF' } : { backgroundColor: '#FFFFFF', color: c }}>
                         {t.count}
                       </span>
@@ -1019,6 +1018,14 @@ export default function InstructorWorkloadClient() {
                         groups={formGroups}
                       />
                     )
+                  )}
+                  {effectiveTab === 'actual' && (
+                    <OfficialWorkloadFormTable
+                      rows={officialActualRows}
+                      summary={officialActualSummary}
+                      variant="actual"
+                      groups={formGroups}
+                    />
                   )}
                   {effectiveTab === 'overload' && (
                     hasOverloadSection ? (

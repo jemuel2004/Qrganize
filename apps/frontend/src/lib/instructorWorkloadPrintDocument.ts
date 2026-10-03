@@ -269,6 +269,41 @@ function computeRegularRowValues(
   return { displayWU, displayHours };
 }
 
+/** One Lec/Lab line of the Actual Load form, at its full value. */
+export type ActualLoadLine<L extends PrintWorkloadLoad = PrintWorkloadLoad> = {
+  row: Omit<SplitRow, 'load'> & { load: L };
+  startTime: string | null;
+  endTime: string | null;
+  dayPattern: string | null;
+};
+
+/**
+ * Actual Load: every subject of the term (Regular, Overload and Praise alike), each
+ * Lec/Lab at its full value — no split between forms. Shared by the print/Excel form
+ * and the on-screen Actual Load section, so both always show the same lines.
+ */
+export function actualLoadLines<L extends PrintWorkloadLoad>(loads: L[], isP: boolean): ActualLoadLine<L>[] {
+  const lines: ActualLoadLine<L>[] = [];
+  for (const load of loads) {
+    const lec = parseFloat(String(load.lecture_hours)) || 0;
+    const lab = parseFloat(String(load.laboratory_hours)) || 0;
+    const hasBoth = lec > 0 && lab > 0;
+    for (const row of splitLoad(load, isP)) {
+      const wu = hasBoth ? (row.type === 'lec' ? lec : lab * 0.75) : calcWorkloadUnits(lec, lab);
+      const hours = hasBoth ? (row.type === 'lec' ? lec : lab) : lec + lab;
+      if (isP ? wu < 0.001 : hours < 0.001) continue;
+      const isLec = row.type === 'lec';
+      lines.push({
+        row: { ...row, load, wu, hours },
+        startTime: isLec ? (load.lec_start_time ?? load.start_time) : (load.lab_start_time ?? load.start_time),
+        endTime: isLec ? (load.lec_end_time ?? load.end_time) : (load.lab_end_time ?? load.end_time),
+        dayPattern: isLec ? (load.lec_day_pattern ?? load.day_pattern) : (load.lab_day_pattern ?? load.day_pattern),
+      });
+    }
+  }
+  return lines;
+}
+
 function escHtml(s: string | null | undefined): string {
   return escapePrintHtml(s);
 }
@@ -316,7 +351,8 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
   let praiseSubjectHours = 0;
 
   if (documentKind === 'regular') {
-    const regularLoads = loads.filter(l => l.load_category !== 'Overload');
+    // Regular subjects only, as on screen — Overload and Praise have their own forms
+    const regularLoads = loads.filter(l => l.load_category === 'Regular');
     for (const load of regularLoads) {
       for (const row of splitLoad(load, isP)) {
         const startTime = row.type === 'lec'
@@ -357,9 +393,11 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
         const lec = parseFloat(String(load.lecture_hours)) || 0;
         const lab = parseFloat(String(load.laboratory_hours)) || 0;
         const hasBoth = lec > 0 && lab > 0;
-        const isSplit = isP
+        // Only a Regular subject is split; a whole Overload subject also has an overload
+        // amount (its full value), which must not be put on each of its Lec and Lab lines.
+        const isSplit = load.load_category === 'Regular' && (isP
           ? (parseFloat(String(load.split_overload_units)) || 0) > 0.001
-          : (parseFloat(String(load.split_overload_hours)) || 0) > 0.001;
+          : (parseFloat(String(load.split_overload_hours)) || 0) > 0.001);
         const oc = (load.overload_component || 'full') as 'lec' | 'lab' | 'full';
         if (isSplit && hasBoth && oc !== 'full' && row.type !== oc) continue;
         let wu = hasBoth
@@ -390,27 +428,16 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
   } else if (documentKind === 'deload') {
     /* Actual Load: every subject of the term on one form, each at its full Lec/Lab value
        (Regular, Overload and Praise alike — no split between documents). */
-    for (const load of loads) {
-      const lec = parseFloat(String(load.lecture_hours)) || 0;
-      const lab = parseFloat(String(load.laboratory_hours)) || 0;
-      const hasBoth = lec > 0 && lab > 0;
-      for (const row of splitLoad(load, isP)) {
-        const wu = hasBoth ? (row.type === 'lec' ? lec : lab * 0.75) : calcWorkloadUnits(lec, lab);
-        const hrs = hasBoth ? (row.type === 'lec' ? lec : lab) : lec + lab;
-        if (isP ? wu < 0.001 : hrs < 0.001) continue;
-        totalRegularWU += isP ? wu : hrs;
-        totalRegularHours += hrs;
-        const startTime = row.type === 'lec' ? (load.lec_start_time ?? load.start_time) : (load.lab_start_time ?? load.start_time);
-        const endTime = row.type === 'lec' ? (load.lec_end_time ?? load.end_time) : (load.lab_end_time ?? load.end_time);
-        const dayPat = row.type === 'lec' ? (load.lec_day_pattern ?? load.day_pattern) : (load.lab_day_pattern ?? load.day_pattern);
-        const pr: PRow = { load, row: { ...row, wu, hours: hrs }, startTime, endTime };
-        const slotId = matchOfficialSlot(dayPat, startTime, endTime, groups);
-        if (slotId) {
-          if (!placed[slotId]) placed[slotId] = [];
-          placed[slotId].push(pr);
-        } else {
-          unmatchedPrint.push(pr);
-        }
+    for (const { row, startTime, endTime, dayPattern } of actualLoadLines(loads, isP)) {
+      totalRegularWU += isP ? row.wu : row.hours;
+      totalRegularHours += row.hours;
+      const pr: PRow = { load: row.load, row, startTime, endTime };
+      const slotId = matchOfficialSlot(dayPattern, startTime, endTime, groups);
+      if (slotId) {
+        if (!placed[slotId]) placed[slotId] = [];
+        placed[slotId].push(pr);
+      } else {
+        unmatchedPrint.push(pr);
       }
     }
   } else if (documentKind === 'praise') {

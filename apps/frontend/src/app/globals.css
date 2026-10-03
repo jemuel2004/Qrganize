@@ -1922,13 +1922,25 @@ html:not(.light) select.qr-ms-field:disabled { background-color: var(--surface) 
   --load-regular:  #4F86EE;
   --load-overload: #D24428;
   --load-praise:   #AF9230;
+  --load-actual:   #8FA8DA; /* Actual Load (every subject): navy is lost on dark — pale navy-blue here */
   --donut-track:   rgba(148, 163, 184, 0.18);
 }
 html.light {
   --load-regular:  #1D5BD6;
   --load-overload: #DC4A0A;
   --load-praise:   #C99A06;
+  --load-actual:   #0B2A5B;
   --donut-track:   #EEF2F8;
+}
+/* Navy load tabs (Actual Load, Total) on dark: give the pill a visible edge, and keep
+   the count navy on its white badge (dark mode turns inline navy text light) */
+html:not(.light) [data-load-tab="actual"],
+html:not(.light) [data-load-tab="total"] {
+  border-color: color-mix(in srgb, var(--load-actual) 55%, transparent) !important;
+}
+html:not(.light) span[data-load-badge="actual"],
+html:not(.light) span[data-load-badge="total"] {
+  color: #0B2A5B !important;
 }
 /* Panel + hovered legend row */
 .qr-donut-panel {
