@@ -64,6 +64,9 @@ export interface WorkloadFormModel {
     approved: WorkloadFormSignatory;
   };
   footer: { address: string; phone: string; website: string };
+  /** The form's totals as numbers — what its No. of Units / Total No. of Units lines print:
+   *  teaching units, units with deloading or Praise records, and hours. */
+  totals?: { teachingUnits: number; units: number; hours: number };
 }
 
 const FONT = 'Arial';

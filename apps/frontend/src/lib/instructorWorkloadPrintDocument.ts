@@ -638,7 +638,9 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
   ]));
 
   let summary: WorkloadFormSummaryRow[];
+  let totals: NonNullable<WorkloadFormModel['totals']>;
   if (documentKind === 'regular' || documentKind === 'deload') {
+    totals = { teachingUnits: totalRegularWU, units: netTotal, hours: totalRegularHours };
     /* Keep Regular summary identical to the approved official form (Actual Load reuses it). */
     summary = [noOfUnitsRow, ...designationRows, ...specialRows, noOfPrepRow, totalUnitsRow];
   } else if (documentKind === 'praise') {
@@ -652,6 +654,7 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
       p ? { text: fmtN(parseFloat(String(p.equivalent_units)) || 0), center: true, bold: true } : {},
       {}, {},
     ]);
+    totals = { teachingUnits: praiseSubjectWU, units: praiseUnitsTotal, hours: praiseSubjectHours };
     const research = praiseArr.filter(p => isResearchExtensionType(p.praise_type));
     const special = praiseArr.filter(p => !isResearchExtensionType(p.praise_type));
     const hasTeaching = praiseSubjectWU > 0.001;
@@ -685,6 +688,7 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
     const unitsVal = totalRegularWU;
     const hoursVal = totalRegularHours;
     const prepCount = distinctSubjects;
+    totals = { teachingUnits: unitsVal, units: unitsVal, hours: hoursVal };
     summary = [
       row(true, [
         { text: 'No. of Units', labelPad: true, colspan: 2 },
@@ -751,6 +755,7 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
       phone: DEFAULT_FOOTER_CONFIG.phone,
       website: DEFAULT_FOOTER_CONFIG.website,
     },
+    totals,
   };
 }
 

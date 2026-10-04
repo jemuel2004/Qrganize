@@ -7,7 +7,7 @@ import { useSchoolYear } from '@/context/SchoolYearContext';
 import { useRealtime } from '@/context/RealtimeContext';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
-import { AlertTriangle, CalendarDays, Eye, Loader2, Trash2, X } from 'lucide-react';
+import { AlertTriangle, CalendarDays, Eye, Loader2, Printer, Trash2, X } from 'lucide-react';
 import Modal from '@/components/ui/Modal';
 import WorkloadPrintMenu from '@/components/WorkloadPrintMenu';
 import { SearchInput } from '@/components/ui/SearchFilter';
@@ -20,6 +20,7 @@ import { EmploymentBadge } from '@/components/ui/EmploymentBadge';
 import { Skeleton, TableSkeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import { byPosition } from '@/lib/positionRank';
+import { printWorkloadSummary } from '@/lib/workloadSummaryPrint';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -474,6 +475,28 @@ export default function FacultySchedulesClient({
 
   const visibleGroups = useMemo(() => groups.filter(matchesSearch), [groups, matchesSearch]);
 
+  /* Print Summary — the Summary of Faculty Workload for the term: every faculty with
+     subjects, Permanent then Contractual, each line from their own official forms. */
+  const [summaryProgress, setSummaryProgress] = useState<{ done: number; total: number } | null>(null);
+  async function printSummary() {
+    if (summaryProgress) return;
+    const ids = allGroups.map(g => g.facultyId);
+    if (ids.length === 0) { toast.info('No faculty have subjects this term yet.'); return; }
+    setSummaryProgress({ done: 0, total: ids.length });
+    try {
+      const result = await printWorkloadSummary({
+        facultyIds: ids, semester: globalSemester, academicYear: globalYear,
+        onProgress: (done, total) => setSummaryProgress({ done, total }),
+      });
+      if (!result.ok) toast.error('Could not open the print window. Allow pop-ups for this site and try again.');
+      else if (result.method === 'download') toast.info('The summary was downloaded — open the file to print it.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not prepare the summary. Please try again.');
+    } finally {
+      setSummaryProgress(null);
+    }
+  }
+
   /* Employment Type buttons count every faculty matching the search, whichever
      type is chosen — picking Permanent never turns Contractual into 0. */
   const typeCounts = useMemo(() => {
@@ -584,6 +607,23 @@ export default function FacultySchedulesClient({
         <BackButton />
         <div className="mt-4 sm:mt-7 mb-4">
           <WatermarkTitle>Faculty Schedule</WatermarkTitle>
+        </div>
+        <div className="flex justify-end">
+          <motion.button
+            type="button"
+            onClick={() => { void printSummary(); }}
+            disabled={!!summaryProgress}
+            whileHover={reduceMotion || summaryProgress ? undefined : { y: -1 }}
+            whileTap={reduceMotion || summaryProgress ? undefined : { scale: 0.96 }}
+            title="Print the Summary of Faculty Workload for this term"
+            className="group inline-flex items-center justify-center gap-2 h-11 px-4 rounded-xl text-[15px] font-semibold bg-[#1D5BD6] hover:bg-[#164BB5] shadow-lg shadow-[#1D5BD6]/20 transition-colors disabled:cursor-wait disabled:opacity-90"
+            // White set inline — the light-mode rule repaints `text-white` as dark ink
+            style={{ color: '#FFFFFF' }}
+          >
+            {summaryProgress
+              ? <><Loader2 className="w-4 h-4 animate-spin" /> Preparing… {summaryProgress.done} of {summaryProgress.total}</>
+              : <><Printer className="w-4 h-4 transition-transform duration-200 group-hover:-translate-y-px" /> Print Summary</>}
+          </motion.button>
         </div>
       </div>
 
