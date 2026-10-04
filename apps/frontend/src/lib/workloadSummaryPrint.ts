@@ -174,7 +174,6 @@ table.sum { width: 100%; border-collapse: collapse; font-size: 7.5pt; table-layo
 .sum .ed { font-size: 6.8pt; text-align: center; }
 .sum .ps { font-size: 6.8pt; text-align: center; }
 .sum .n { text-align: center; }
-.note { font-size: 7pt; margin-top: 4px; }
 
 .sigs { margin-top: 26px; page-break-inside: avoid; }
 .sig-row { display: flex; justify-content: space-between; gap: 40px; }
@@ -230,7 +229,6 @@ table.sum { width: 100%; border-collapse: collapse; font-size: 7.5pt; table-layo
       ${sectionHtml('CONTRACTUAL', contractual)}
     </tbody>
   </table>
-  ${contractual.length > 0 ? '<p class="note">Permanent faculty in units; Contractual faculty in hours.</p>' : ''}
 
   <div class="sigs">
     <div class="sig-row">
