@@ -151,7 +151,9 @@ body { font-family: Arial, sans-serif; font-size: 8pt; color: #000; background: 
 /* Logos close beside the text, the whole group centred — as on the reference */
 .lh { display: flex; align-items: center; justify-content: center; gap: 14px; }
 .lh .logo { width: 74px; height: 74px; object-fit: contain; flex-shrink: 0; }
-.lh .iso { height: 60px; width: auto; object-fit: contain; flex-shrink: 0; }
+/* ISO-UKAS.png is square with empty space above and below the marks (they fill
+   499×294 of 500×500): crop to the marks and size them ~80% of the seal's height */
+.lh .iso { width: 102px; height: 60px; object-fit: cover; object-position: 50% 54%; flex-shrink: 0; }
 .lh-text { text-align: center; line-height: 1.3; }
 .lh-rep { font-size: 8pt; }
 .lh-univ { font-size: 11.5pt; font-weight: bold; }
