@@ -5,6 +5,19 @@ import type { ReactNode } from 'react';
 
 const EASE = [0.16, 1, 0.3, 1] as const;
 
+/**
+ * Cards that rise in one after another when a page's content (re)appears
+ * after its skeleton. Spread onto a motion element: order 0, 1, 2…
+ */
+export function revealProps(order: number, reduceMotion: boolean | null) {
+  if (reduceMotion) return {};
+  return {
+    initial: { opacity: 0, y: 10 },
+    animate: { opacity: 1, y: 0 },
+    transition: { duration: 0.35, ease: EASE, delay: 0.04 + order * 0.07 },
+  };
+}
+
 function mergeClassName(...parts: Array<string | undefined | false>) {
   return parts.filter(Boolean).join(' ') || undefined;
 }

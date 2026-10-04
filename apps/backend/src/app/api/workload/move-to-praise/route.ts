@@ -5,6 +5,7 @@ import { syncWorkloadMonitoringNotifications } from '@/services/workloadMonitori
 import { canAccessMasterSchedule } from '@/services/programScope';
 import { ensurePraiseSplitColumn } from '@/services/praiseSplit';
 import { withAudit } from '@/services/audit';
+import { canHaveOverloadOrPraise, OVERLOAD_PRAISE_PERMANENT_ONLY } from '@shared/regularLoad';
 
 /**
  * Reclassify Overload subject(s) as Praise Load.
@@ -51,6 +52,9 @@ async function POST_handler(req: NextRequest) {
     );
     if (facultyResult.rows.length === 0) {
       return NextResponse.json({ error: 'Faculty not found' }, { status: 404 });
+    }
+    if (!canHaveOverloadOrPraise(facultyResult.rows[0].employment_status)) {
+      return NextResponse.json({ error: OVERLOAD_PRAISE_PERMANENT_ONLY }, { status: 400 });
     }
 
     const loads = await query(
@@ -133,6 +137,9 @@ async function movePraiseComponent(
   );
   if (facultyResult.rows.length === 0) {
     return NextResponse.json({ error: 'Faculty not found' }, { status: 404 });
+  }
+  if (!canHaveOverloadOrPraise(facultyResult.rows[0].employment_status)) {
+    return NextResponse.json({ error: OVERLOAD_PRAISE_PERMANENT_ONLY }, { status: 400 });
   }
   const isPermanent = facultyResult.rows[0].employment_status === 'Permanent';
 

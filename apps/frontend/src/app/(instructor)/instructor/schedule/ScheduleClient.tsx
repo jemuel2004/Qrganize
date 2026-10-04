@@ -4,14 +4,15 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
 import { useRealtime } from '@/context/RealtimeContext';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
-import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
+import { PageLoadTransition, revealProps } from '@/components/ui/PageLoadTransition';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
-import { RefreshButton } from '@/app/(dashboard)/room-utilization/shared';
+import { RefreshButton } from '@/components/ui/RefreshButton';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { ChevronDown } from 'lucide-react';
 import { dayTone } from '@/lib/dayTones';
-import { TableSkeleton } from '@/components/ui/skeletons';
+import { Skeleton } from '@/components/ui/skeletons';
+import { useToast } from '@/context/ToastContext';
 import {
   CalendarDays, MapPin, Users, Clock,
   QrCode, CheckCircle2, AlertTriangle, XCircle, Timer,
@@ -261,6 +262,35 @@ function DayClassRow({
   );
 }
 
+/** Same shape as the page — day buttons, then the day's card (with its list when open) */
+function ScheduleSkeleton({ days, rows }: { days: number; rows: number }) {
+  return (
+    <div>
+      <div
+        className="grid grid-cols-3 sm:grid-cols-[repeat(var(--day-cols),minmax(0,1fr))] gap-x-2 gap-y-3 sm:gap-3 mb-5 pt-2"
+        style={{ ['--day-cols' as string]: days }}
+      >
+        {Array.from({ length: days }, (_, i) => <Skeleton key={i} className="h-12 rounded-xl" />)}
+      </div>
+      <div className="bg-white rounded-2xl border-2 border-[#E2E8F0] overflow-hidden mb-5">
+        <div className="p-5 lg:px-6 lg:py-6 flex items-center gap-3.5">
+          <Skeleton className="w-11 h-11 rounded-xl flex-shrink-0" />
+          <div className="flex-1 min-w-0 space-y-2">
+            <Skeleton className="h-3 w-28 rounded" />
+            <Skeleton className="h-6 w-10 rounded" />
+          </div>
+          <Skeleton className="h-4 w-24 rounded" />
+        </div>
+        {rows > 0 && (
+          <div className="border-t border-[#EEF2F8] p-4 space-y-3">
+            {Array.from({ length: rows }, (_, i) => <Skeleton key={i} className="h-[144px] sm:h-[110px] rounded-2xl" />)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ── Main Page Component ─────────────────────────────────────────────────── */
 export default function ScheduleClient() {
   const [schedules, setSchedules] = useState<Schedule[]>([]);
@@ -274,9 +304,11 @@ export default function ScheduleClient() {
   );
   // The class list stays folded until the day card is clicked
   const [listOpen, setListOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const reduceMotion = useReducedMotion();
+  const toast = useToast();
 
-  const load = useCallback((silent = false) => {
+  const load = useCallback((silent = false): Promise<boolean> => {
     if (!silent) { setLoading(true); setError(''); }
     return fetch('/api/instructor/my-schedule')
       .then(r => r.ok ? r.json() : Promise.reject(r))
@@ -285,8 +317,10 @@ export default function ScheduleClient() {
         setOccupancy(d.room_occupancy ?? {});
         setRequests(d.room_requests ?? {});
         setNow(new Date());
+        setError('');
+        return true;
       })
-      .catch(() => { if (!silent) setError('Failed to load schedule. Please try again.'); })
+      .catch(() => { if (!silent) setError('Failed to load schedule. Please try again.'); return false; })
       .finally(() => { if (!silent) setLoading(false); });
   }, []);
 
@@ -298,7 +332,16 @@ export default function ScheduleClient() {
   // Fallback for time-based changes (the current class, live room status)
   useVisibilityAwareInterval(() => load(true), 60_000);
 
-  const showSkeleton = useMinLoading(loading && schedules.length === 0 && !error, PAGE_SKELETON_MIN_MS);
+  // Refresh button: the schedule reloads behind the skeleton, then fades back in
+  const refreshAll = useCallback(async () => {
+    setRefreshing(true);
+    const ok = await load(true);
+    setRefreshing(false);
+    if (!ok) toast.error('Could not refresh your schedule. Check your connection and try again.');
+    return ok;
+  }, [load, toast]);
+
+  const showSkeleton = useMinLoading((loading && schedules.length === 0 && !error) || refreshing, PAGE_SKELETON_MIN_MS);
 
   const todayName = now.toLocaleDateString('en-US', { weekday: 'long' });
   const selectableDays = useMemo(() => buildSelectableDays(schedules), [schedules]);
@@ -360,7 +403,7 @@ export default function ScheduleClient() {
           <WatermarkTitle>My Schedule</WatermarkTitle>
         </div>
         <div className="flex justify-end">
-          <RefreshButton onRefresh={() => load()} loading={loading} />
+          <RefreshButton overlay={false} onRefresh={refreshAll} loading={refreshing || showSkeleton} />
         </div>
       </div>
 
@@ -370,87 +413,113 @@ export default function ScheduleClient() {
         </div>
       )}
 
-      {!loading && schedules.length > 0 && (
-        <div
-          className="grid grid-cols-3 sm:grid-cols-[repeat(var(--day-cols),minmax(0,1fr))] gap-x-2 gap-y-3 sm:gap-3 mb-5 pt-2"
-          style={{ ['--day-cols' as string]: Math.max(5, selectableDays.length) }}
-        >
-          {selectableDays.map(day => {
-            const active = day === selectedDay;
-            const isToday = day === todayName;
-            const t = dayTone(day);
-            const n = countByDay[day] ?? 0;
-            return (
-              <motion.button
-                key={day}
-                type="button"
-                onClick={() => { if (day !== selectedDay) { setSelectedDay(day); setListOpen(false); } }}
-                whileTap={reduceMotion ? undefined : { scale: 0.96 }}
-                whileHover={reduceMotion || active ? undefined : { y: -2 }}
-                animate={{
-                  backgroundColor: active ? t.bar : t.bg,
-                  borderColor: active ? t.bar : t.border,
-                  color: active ? '#FFFFFF' : t.text,
-                }}
-                transition={{ duration: reduceMotion ? 0 : 0.25 }}
-                aria-label={`${day}, ${n} class${n !== 1 ? 'es' : ''}${isToday ? ', today' : ''}`}
-                className="relative inline-flex items-center justify-center gap-1.5 sm:gap-2 px-2 sm:px-3 h-12 rounded-xl text-[15px] font-bold border-2 w-full min-w-0"
-              >
-                {/* Phones: short names so name + count always fit on one line */}
-                <span className="sm:hidden">{day.slice(0, 3)}</span>
-                <span className="hidden sm:inline truncate">{day}</span>
-                <span
-                  className="min-w-6 h-6 px-1.5 rounded-full text-[12px] font-bold inline-flex items-center justify-center tabular-nums"
-                  style={active ? { backgroundColor: 'rgba(255,255,255,0.25)', color: '#FFFFFF' } : { backgroundColor: '#FFFFFF', color: t.text }}
-                >
-                  {n}
-                </span>
-                {/* Sits on the top edge, so it never crowds the name or count */}
-                {isToday && (
-                  <span
-                    className="absolute -top-2.5 left-1/2 -translate-x-1/2 px-1.5 py-px rounded-md text-[10px] font-bold uppercase tracking-wide leading-tight whitespace-nowrap border"
-                    style={{ backgroundColor: '#FFFFFF', color: t.text, borderColor: t.border }}
+      <PageLoadTransition
+        showSkeleton={showSkeleton}
+        skeleton={<ScheduleSkeleton days={Math.max(5, selectableDays.length)} rows={listOpen ? dayClasses.length : 0} />}
+      >
+      {schedules.length > 0 ? (
+        <>
+          <motion.div {...revealProps(0, reduceMotion)}>
+            <div
+              className="grid grid-cols-3 sm:grid-cols-[repeat(var(--day-cols),minmax(0,1fr))] gap-x-2 gap-y-3 sm:gap-3 mb-5 pt-2"
+              style={{ ['--day-cols' as string]: Math.max(5, selectableDays.length) }}
+            >
+              {selectableDays.map(day => {
+                const active = day === selectedDay;
+                const isToday = day === todayName;
+                const t = dayTone(day);
+                const n = countByDay[day] ?? 0;
+                return (
+                  <motion.button
+                    key={day}
+                    type="button"
+                    onClick={() => { if (day !== selectedDay) { setSelectedDay(day); setListOpen(false); } }}
+                    whileTap={reduceMotion ? undefined : { scale: 0.96 }}
+                    whileHover={reduceMotion || active ? undefined : { y: -2 }}
+                    animate={{
+                      backgroundColor: active ? t.bar : t.bg,
+                      borderColor: active ? t.bar : t.border,
+                      color: active ? '#FFFFFF' : t.text,
+                    }}
+                    transition={{ duration: reduceMotion ? 0 : 0.25 }}
+                    aria-label={`${day}, ${n} class${n !== 1 ? 'es' : ''}${isToday ? ', today' : ''}`}
+                    className="relative inline-flex items-center justify-center gap-1.5 sm:gap-2 px-2 sm:px-3 h-12 rounded-xl text-[15px] font-bold border-2 w-full min-w-0"
                   >
-                    Today
-                  </span>
-                )}
-              </motion.button>
-            );
-          })}
-        </div>
-      )}
+                    {/* Phones: short names so name + count always fit on one line */}
+                    <span className="sm:hidden">{day.slice(0, 3)}</span>
+                    <span className="hidden sm:inline truncate">{day}</span>
+                    <span
+                      className="min-w-6 h-6 px-1.5 rounded-full text-[12px] font-bold inline-flex items-center justify-center tabular-nums"
+                      style={active ? { backgroundColor: 'rgba(255,255,255,0.25)', color: '#FFFFFF' } : { backgroundColor: '#FFFFFF', color: t.text }}
+                    >
+                      {n}
+                    </span>
+                    {/* Sits on the top edge, so it never crowds the name or count */}
+                    {isToday && (
+                      <span
+                        className="absolute -top-2.5 left-1/2 -translate-x-1/2 px-1.5 py-px rounded-md text-[10px] font-bold uppercase tracking-wide leading-tight whitespace-nowrap border"
+                        style={{ backgroundColor: '#FFFFFF', color: t.text, borderColor: t.border }}
+                      >
+                        Today
+                      </span>
+                    )}
+                  </motion.button>
+                );
+              })}
+            </div>
+          </motion.div>
 
-      {!loading && schedules.length > 0 && (
-        <div className={`grid gap-4 mb-5 ${isViewingToday ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
-          <div className="bg-white rounded-2xl border-2 shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden self-start" style={{ borderColor: tone.border }}>
+          {/* One full-width card for every day, so nothing jumps when the day changes */}
+          <motion.div
+            {...revealProps(1, reduceMotion)}
+            className="bg-white rounded-2xl border-2 shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden mb-5 transition-colors duration-300"
+            style={{ borderColor: tone.border }}
+          >
             <button
               type="button"
               onClick={() => dayClasses.length > 0 && setListOpen(o => !o)}
               aria-expanded={listOpen}
               className={`w-full p-5 lg:px-6 lg:py-6 flex items-center gap-3.5 text-left transition-[background-color,transform] duration-200 ${dayClasses.length > 0 ? 'hover:bg-[#F8FAFC] active:scale-[0.995] cursor-pointer' : 'cursor-default'}`}
             >
-              <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0" style={{ backgroundColor: tone.bg }}>
-                <CalendarDays className="w-5 h-5" style={{ color: tone.bar }} />
+              <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors duration-300" style={{ backgroundColor: tone.bg }}>
+                <CalendarDays className="w-5 h-5 transition-colors duration-300" style={{ color: tone.bar }} />
               </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-xs font-bold uppercase tracking-wide mb-1" style={{ color: tone.text }}>
-                  {classCountLabel}
-                </div>
-                <div className="text-2xl font-bold tabular-nums leading-none text-[#0B2A5B]">
-                  {dayClasses.length}
-                </div>
-              </div>
-              {dayClasses.length === 0 && (
-                <span className="text-[14px] text-[#94A3B8]">No classes this day</span>
-              )}
-              {dayClasses.length > 0 && (
-                <span className="inline-flex items-center gap-1.5 text-[14px] font-semibold" style={{ color: tone.text }}>
-                  {listOpen ? 'Hide' : 'View classes'}
-                  <motion.span animate={{ rotate: listOpen ? 180 : 0 }} transition={{ duration: reduceMotion ? 0 : 0.3 }}>
-                    <ChevronDown className="w-5 h-5" />
-                  </motion.span>
-                </span>
-              )}
+              {/* Another day picked: its numbers fade in where the old ones were */}
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.div
+                  key={selectedDay}
+                  initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0, transition: { duration: 0.2, ease: [0.16, 1, 0.3, 1] } }}
+                  exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4, transition: { duration: 0.12 } }}
+                  className="flex-1 min-w-0 flex items-center gap-3.5"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-bold uppercase tracking-wide mb-1" style={{ color: tone.text }}>
+                      {classCountLabel}
+                    </div>
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      <span className="text-2xl font-bold tabular-nums leading-none text-[#0B2A5B]">
+                        {dayClasses.length}
+                      </span>
+                      {availableCount > 0 && (
+                        <span className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border text-[13px] font-semibold bg-emerald-50 text-emerald-700 border-emerald-200">
+                          <QrCode className="w-4 h-4" /> {availableCount} ready to scan
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {dayClasses.length === 0 ? (
+                    <span className="text-[14px] text-[#94A3B8]">No classes this day</span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 text-[14px] font-semibold flex-shrink-0" style={{ color: tone.text }}>
+                      {listOpen ? 'Hide' : 'View classes'}
+                      <motion.span animate={{ rotate: listOpen ? 180 : 0 }} transition={{ duration: reduceMotion ? 0 : 0.3 }}>
+                        <ChevronDown className="w-5 h-5" />
+                      </motion.span>
+                    </span>
+                  )}
+                </motion.div>
+              </AnimatePresence>
             </button>
             <AnimatePresence initial={false}>
               {listOpen && dayClasses.length > 0 && (
@@ -482,31 +551,10 @@ export default function ScheduleClient() {
                 </motion.div>
               )}
             </AnimatePresence>
-          </div>
-          {isViewingToday && (
-            <div className="bg-white rounded-2xl border-2 border-[#E2E8F0] shadow-[0_1px_3px_rgba(0,0,0,0.06)] p-5 lg:px-6 lg:py-6 flex items-center gap-3.5 self-start">
-              <div className="w-10 h-10 rounded-xl bg-[#EFF6FF] flex items-center justify-center flex-shrink-0">
-                <QrCode className="w-5 h-5 text-[#1D5BD6]" />
-              </div>
-              <div>
-                <div className="text-xs font-semibold text-[#64748B] uppercase tracking-wide mb-1">
-                  Scan Available
-                </div>
-                <div className="text-2xl font-bold tabular-nums leading-none text-[#0B2A5B]">
-                  {availableCount}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      <PageLoadTransition
-        showSkeleton={showSkeleton}
-        skeleton={<TableSkeleton rows={6} cols={4} />}
-      >
-      {schedules.length === 0 ? (
-        <div className="bg-white border border-[#E2E8F0] rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.06)] p-12 flex flex-col items-center gap-4 text-center">
+          </motion.div>
+        </>
+      ) : !error ? (
+        <motion.div {...revealProps(0, reduceMotion)} className="bg-white border border-[#E2E8F0] rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.06)] p-12 flex flex-col items-center gap-4 text-center">
           <div className="w-14 h-14 rounded-2xl bg-[#EFF6FF] border border-[#BFDBFE] flex items-center justify-center">
             <CalendarDays className="w-7 h-7 text-[#1D5BD6]" />
           </div>
@@ -516,7 +564,7 @@ export default function ScheduleClient() {
               Your schedule will appear here once the administrator assigns you subjects.
             </p>
           </div>
-        </div>
+        </motion.div>
       ) : null}
       </PageLoadTransition>
       </div>

@@ -857,6 +857,10 @@ export function buildCategoryPlan(
   const unit = isPermanent ? 'units' : 'hours';
   const describe = (cat: LoadCategory) => portions.filter(p => p.category === cat).map(p => componentLabel(p.component)).join(' + ');
 
+  // Only Permanent faculty carry Overload or Praise Load
+  if (!isPermanent && (O > 0 || P > 0)) {
+    return { problem: `the forms put ${describe(O > 0 ? 'Overload' : 'Praise')} in ${O > 0 ? 'Overload' : 'Praise Load'}, but Contractual faculty carry Regular Load only` };
+  }
   if (O > 0 && P > 0) {
     return { problem: `the forms put ${describe('Overload')} in Overload and ${describe('Praise')} in Praise${R > 0 ? ` and ${describe('Regular')} in Regular` : ''} — QRganize lets a subject be split Regular + Overload or Regular + Praise only, never Overload + Praise` };
   }

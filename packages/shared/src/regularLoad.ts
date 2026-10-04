@@ -2,8 +2,9 @@
  * Faculty workload limits.
  *
  * Permanent faculty carry a Regular Load in workload units (lecture hours +
- * 0.75 × laboratory hours) and may add Overload up to a cap per term.
- * Contractual faculty carry a Regular Load in contact hours.
+ * 0.75 × laboratory hours) and may add Overload up to a cap per term, and
+ * Praise Load. Contractual faculty carry a Regular Load in contact hours —
+ * Regular only, never Overload or Praise Load.
  *
  * The limits are department policy, set in Settings → Workload Limits
  * (defaults: 18 units, 6 units, 30 hours). Everything here takes the policy
@@ -110,6 +111,14 @@ export function computeRegularLoadStatus(currentLoad: number, limit: number, per
   if (isRegularLoadComplete(limit - currentLoad, permanent)) return 'Regular load complete';
   return 'Has remaining load';
 }
+
+/** Only Permanent faculty may carry Overload or Praise Load; Contractual faculty carry Regular Load only. */
+export function canHaveOverloadOrPraise(employmentStatus: unknown): boolean {
+  return employmentStatus === 'Permanent';
+}
+
+export const OVERLOAD_PRAISE_PERMANENT_ONLY =
+  'Only Permanent faculty can have Overload or Praise Load — Contractual faculty carry Regular Load only.';
 
 /* ── Reading and checking policies ────────────────────────────────────────── */
 

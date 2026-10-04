@@ -7,7 +7,7 @@ import { useRealtime } from '@/context/RealtimeContext';
 import { useToast } from '@/context/ToastContext';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
-import { RefreshButton } from '@/app/(dashboard)/room-utilization/shared';
+import { RefreshButton } from '@/components/ui/RefreshButton';
 import {
   AlertTriangle, ChevronDown,
 } from 'lucide-react';
@@ -23,7 +23,7 @@ import {
   type PrintDocumentResult,
 } from '@/lib/instructorWorkloadPrintDocument';
 import { openWorkloadPrintableVersion } from '@/lib/openPrintHtmlDocument';
-import { formatLoadCap, regularUnitsCap, shownUnitsCap, shownUnitsOver } from '@shared/regularLoad';
+import { canHaveOverloadOrPraise, formatLoadCap, regularUnitsCap, shownUnitsCap, shownUnitsOver } from '@shared/regularLoad';
 import { useWorkloadPolicy } from '@/hooks/useWorkloadPolicy';
 import { LOAD_TONE } from '@/lib/loadTone';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
@@ -934,11 +934,14 @@ export default function InstructorWorkloadClient() {
         const overloadCount = overloadPrintLoads.length + splitPrintLoads.length;
         const praiseCount = (workload.praise ?? []).length + praiseSubjectLoads.length + praiseSplitLoads.length;
         const actualCount = workload.loads.length;
+        // Contractual faculty carry Regular Load only — no Overload card unless there is something in it
+        const showOverloadCard = canHaveOverloadOrPraise(workload.faculty?.employment_status) || hasOverloadSection;
+        const cardCount = 2 + Number(showOverloadCard) + Number(hasPraiseSection);
 
         return (
           <>
             {/* ── Summary cards: Actual Load · Regular · Overload · Praise (if any) — click to open that table ── */}
-            <div className={`grid grid-cols-2 gap-3 sm:gap-4 mb-5 ${hasPraiseSection ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
+            <div className={`grid grid-cols-2 gap-3 sm:gap-4 mb-5 ${cardCount === 4 ? 'lg:grid-cols-4' : cardCount === 3 ? 'lg:grid-cols-3' : ''}`}>
               <LoadCard index={0} tone={TAB_TONE.actual} edgeColor="var(--load-actual)" label="Actual Load"
                 unit={`${isP ? 'units' : 'hours'} · ${actualCount} subject${actualCount !== 1 ? 's' : ''}`}
                 // With deloading the form's total is teaching + deloading — show how it adds up
@@ -950,11 +953,13 @@ export default function InstructorWorkloadClient() {
                 value={modalRegVal.toFixed(2)} of={regLimitShown}
                 note={modalIsExceeded ? `Exceeded by ${regOverShown.toFixed(2)}` : undefined}
                 active={effectiveTab === 'regular' && tableVisible} onClick={() => selectTab('regular')} />
-              <LoadCard index={2} tone={TAB_TONE.overload} label="Overload" unit={isP ? 'units' : 'hours'} value={olVal.toFixed(2)}
-                active={effectiveTab === 'overload' && tableVisible}
-                onClick={() => selectTab('overload')} />
+              {showOverloadCard && (
+                <LoadCard index={2} tone={TAB_TONE.overload} label="Overload" unit={isP ? 'units' : 'hours'} value={olVal.toFixed(2)}
+                  active={effectiveTab === 'overload' && tableVisible}
+                  onClick={() => selectTab('overload')} />
+              )}
               {hasPraiseSection && (
-                <LoadCard index={3} tone={TAB_TONE.praise} label="Praise Load" unit={`${isP ? 'units' : 'hours'} · ${praiseCount} item${praiseCount !== 1 ? 's' : ''}`}
+                <LoadCard index={showOverloadCard ? 3 : 2} tone={TAB_TONE.praise} label="Praise Load" unit={`${isP ? 'units' : 'hours'} · ${praiseCount} item${praiseCount !== 1 ? 's' : ''}`}
                   value={praiseTotal.toFixed(2)}
                   active={effectiveTab === 'praise' && tableVisible} onClick={() => selectTab('praise')} />
               )}

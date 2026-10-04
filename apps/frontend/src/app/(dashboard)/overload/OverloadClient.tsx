@@ -8,6 +8,7 @@ import { useSchoolYear } from '@/context/SchoolYearContext';
 import { useRealtime } from '@/context/RealtimeContext';
 import { useToast } from '@/context/ToastContext';
 import Modal from '@/components/ui/Modal';
+import { canHaveOverloadOrPraise } from '@shared/regularLoad';
 
 interface Faculty {
   id: number;
@@ -120,10 +121,11 @@ export default function OverloadClient() {
     setReturnConfirm(null);
   }
 
-  const filteredFaculty = facultyList.filter(f =>
+  // Only Permanent faculty can have Overload
+  const filteredFaculty = facultyList.filter(f => canHaveOverloadOrPraise(f.employment_status) && (
     f.name.toLowerCase().includes(facultySearch.toLowerCase()) ||
     f.employee_id.toLowerCase().includes(facultySearch.toLowerCase())
-  );
+  ));
 
   const isPermanent = selectedFaculty?.employment_status === 'Permanent';
   const overloadLabel = isPermanent ? 'Units' : 'Hours';

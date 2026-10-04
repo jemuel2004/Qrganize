@@ -1,9 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import { BookOpen, CalendarDays, Check, ChevronDown, Monitor, RefreshCw } from 'lucide-react';
+import { BookOpen, CalendarDays, ChevronDown, Monitor } from 'lucide-react';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
 import { useRealtime } from '@/context/RealtimeContext';
 
@@ -211,90 +210,8 @@ export function useApplyingDate(loading: boolean, onDone: () => void) {
   return [applying, start, success] as const;
 }
 
-/* ─── Refresh button: spinner while loading → brief "Updated ✓" ─────────── */
+/* ─── Refresh button — shared with the faculty dashboard ─────────────────── */
 
-const MIN_SPIN_MS = 700; // keep the spinner visible long enough to register
-
-export function RefreshButton({ onRefresh, loading, className = '' }: {
-  onRefresh: () => void; loading: boolean; className?: string;
-}) {
-  const reduceMotion = useReducedMotion();
-  const [phase, setPhase] = useState<'idle' | 'spinning' | 'done'>('idle');
-  const startedAt = useRef(0);
-  const [mounted, setMounted] = useState(false); // portal only after hydration
-  useEffect(() => { setMounted(true); }, []);
-
-  // Finish once the load is over AND the minimum spin time has passed
-  useEffect(() => {
-    if (phase !== 'spinning' || loading) return;
-    const wait = Math.max(0, MIN_SPIN_MS - (Date.now() - startedAt.current));
-    const t1 = window.setTimeout(() => setPhase('done'), wait);
-    return () => window.clearTimeout(t1);
-  }, [phase, loading]);
-  useEffect(() => {
-    if (phase !== 'done') return;
-    const t = window.setTimeout(() => setPhase('idle'), 1200);
-    return () => window.clearTimeout(t);
-  }, [phase]);
-
-  const busy = phase === 'spinning';
-  return (
-    <>
-    {/* Centred loading card while refreshing (same look as Scheduling's "Going back…") */}
-    {mounted && createPortal(
-      <AnimatePresence>
-        {busy && (
-          <motion.div
-            key="refresh-overlay"
-            initial={reduceMotion ? false : { opacity: 0 }}
-            animate={{ opacity: 1, transition: { duration: 0.25, ease: EASE } }}
-            exit={{ opacity: 0, transition: { duration: 0.25, ease: EASE } }}
-            className="fixed inset-x-0 bottom-0 top-[72px] z-30 flex items-center justify-center"
-            style={{ backgroundColor: 'rgba(11, 42, 91, 0.08)' }}
-            role="status"
-            aria-live="polite"
-          >
-            <motion.div
-              initial={reduceMotion ? false : { opacity: 0, scale: 0.94, y: 6 }}
-              animate={{ opacity: 1, scale: 1, y: 0, transition: { duration: 0.3, ease: EASE } }}
-              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, transition: { duration: 0.2 } }}
-              className="flex items-center gap-3 px-5 py-3.5 rounded-2xl bg-white border border-[#E2E8F0] shadow-[0_12px_32px_-12px_rgba(11,42,91,0.35)]"
-            >
-              <div className="w-6 h-6 border-[3px] border-[#DBE5F4] border-t-[#1D5BD6] rounded-full animate-spin" aria-hidden="true" />
-              <p className="text-sm font-semibold text-[#0B2A5B]">Refreshing…</p>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>,
-      document.body,
-    )}
-    <motion.button
-      type="button"
-      onClick={() => { if (busy) return; startedAt.current = Date.now(); setPhase('spinning'); onRefresh(); }}
-      disabled={busy}
-      aria-busy={busy}
-      whileTap={reduceMotion || busy ? undefined : { scale: 0.97 }}
-      className={`h-[42px] inline-flex items-center justify-center gap-2 px-5 rounded-xl text-sm font-semibold transition-colors duration-300 disabled:cursor-wait ${
-        phase === 'done' ? 'bg-emerald-600' : 'bg-[#1D5BD6] hover:bg-[#164BB5]'
-      } shadow-[0_10px_22px_-12px_rgba(29,91,214,0.9)] ${className}`}
-      style={WHITE}
-    >
-      <AnimatePresence mode="wait" initial={false}>
-        <motion.span
-          key={phase}
-          initial={reduceMotion ? false : { opacity: 0, y: 4 }}
-          animate={{ opacity: 1, y: 0, transition: { duration: 0.2, ease: EASE } }}
-          exit={{ opacity: 0, y: -4, transition: { duration: 0.15 } }}
-          className="inline-flex items-center gap-2"
-        >
-          {phase === 'done'
-            ? <><Check className="w-4 h-4" style={WHITE} /> Updated</>
-            : <><RefreshCw className={`w-4 h-4 ${busy ? 'animate-spin' : ''}`} style={WHITE} /> {busy ? 'Refreshing…' : 'Refresh'}</>}
-        </motion.span>
-      </AnimatePresence>
-    </motion.button>
-    </>
-  );
-}
+export { RefreshButton } from '@/components/ui/RefreshButton';
 
 export { AnimatePresence, motion };

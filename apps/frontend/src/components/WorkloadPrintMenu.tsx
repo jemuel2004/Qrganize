@@ -12,6 +12,7 @@ import {
 } from '@/lib/instructorWorkloadPrintDocument';
 import type { WorkloadDocumentKind } from '@/lib/workloadPrintStorage';
 import { fetchDayCombinations } from '@/lib/dayCombinations';
+import { canHaveOverloadOrPraise } from '@shared/regularLoad';
 
 type PrintKind = WorkloadDocumentKind;
 
@@ -172,12 +173,14 @@ export default function WorkloadPrintMenu({
   });
 
   const { counts } = printLoadSets(workload, semester, academicYear);
-  const options: { kind: PrintKind; label: string; count: number; dot: string }[] = [
+  // Contractual faculty carry Regular Load only — their menu has no Overload / Praise Load forms
+  const regularOnly = !!workload && !canHaveOverloadOrPraise(workload.faculty.employment_status);
+  const options: { kind: PrintKind; label: string; count: number; dot: string }[] = ([
     { kind: 'deload',   label: 'Actual Load',  count: counts.deload,   dot: 'var(--load-actual)' },
     { kind: 'regular',  label: 'Regular Load', count: counts.regular,  dot: 'var(--load-regular)' },
     { kind: 'overload', label: 'Overload',     count: counts.overload, dot: 'var(--load-overload)' },
     { kind: 'praise',   label: 'Praise Load',  count: counts.praise,   dot: 'var(--load-praise)' },
-  ];
+  ] as const).filter(o => !regularOnly || o.count > 0 || (o.kind !== 'overload' && o.kind !== 'praise'));
 
   async function handlePrint(kind: PrintKind) {
     if (!workload) return;

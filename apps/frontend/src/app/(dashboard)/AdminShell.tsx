@@ -114,7 +114,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
         </header>
 
         <main
-          className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden dashboard-main-scroll flex flex-col bg-[var(--background)]"
+          className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable] dashboard-main-scroll flex flex-col bg-[var(--background)]"
           data-app-scroll
         >
           {children}

@@ -107,4 +107,13 @@ test('load categories are stored the way Faculty Workload stores them', () => {
   // Contractual loads are in hours
   const contractual = buildCategoryPlan([r('regular', { kind: 'both' })], s, false).plan!;
   assert.equal(contractual.loadValue, 5);
+
+  // Contractual faculty carry Regular Load only — their Overload / Praise rows are reported, not stored
+  for (const role of ['overload', 'praise'] as const) {
+    const whole = buildCategoryPlan([r(role, { kind: 'both' })], s, false);
+    assert.equal(whole.plan, undefined);
+    assert.match(whole.problem ?? '', /Contractual faculty carry Regular Load only/);
+    const part = buildCategoryPlan([r('regular', { kind: 'lec' }, 'a'), r(role, { kind: 'lab' }, 'b')], s, false);
+    assert.equal(part.plan, undefined);
+  }
 });

@@ -102,7 +102,7 @@ export default function ToastContainer({
               {/* Text */}
               <div className="flex-1 min-w-0">
                 <p className={`text-xs font-bold uppercase tracking-wider mb-0.5 ${c.title}`}>
-                  {c.label}
+                  {item.title ?? c.label}
                 </p>
                 <p className={`text-sm leading-snug break-words ${c.message}`}>
                   {item.message}

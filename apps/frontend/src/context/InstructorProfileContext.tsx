@@ -17,6 +17,8 @@ interface ProfileState {
   facultyId: number | null;
   hasCustomPhoto: boolean;
   updatePicUrl: (url: string | null, options?: { custom?: boolean }) => void;
+  /** Re-read the name and photo (the dashboard's Refresh button) */
+  refresh: () => Promise<void>;
 }
 
 const InstructorProfileContext = createContext<ProfileState>({
@@ -25,6 +27,7 @@ const InstructorProfileContext = createContext<ProfileState>({
   facultyId: null,
   hasCustomPhoto: false,
   updatePicUrl: () => {},
+  refresh: async () => {},
 });
 
 export function useInstructorProfile() {
@@ -81,9 +84,11 @@ export function InstructorProfileProvider({ children }: { children: React.ReactN
     if (typeof options?.custom === 'boolean') setHasCustomPhoto(options.custom);
   }, []);
 
+  const refresh = useCallback(() => load(), [load]);
+
   const value = useMemo(
-    () => ({ name, picUrl, facultyId, hasCustomPhoto, updatePicUrl }),
-    [name, picUrl, facultyId, hasCustomPhoto, updatePicUrl]
+    () => ({ name, picUrl, facultyId, hasCustomPhoto, updatePicUrl, refresh }),
+    [name, picUrl, facultyId, hasCustomPhoto, updatePicUrl, refresh]
   );
 
   return (

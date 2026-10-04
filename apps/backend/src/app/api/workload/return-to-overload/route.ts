@@ -6,6 +6,7 @@ import { canAccessMasterSchedule } from '@/services/programScope';
 import { ensurePraiseSplitColumn } from '@/services/praiseSplit';
 import { withAudit } from '@/services/audit';
 import { overloadCapError } from '@/services/overloadCap';
+import { canHaveOverloadOrPraise, OVERLOAD_PRAISE_PERMANENT_ONLY } from '@shared/regularLoad';
 
 /**
  * Reclassify Praise Load subject(s) back to Overload.
@@ -45,6 +46,9 @@ async function POST_handler(req: NextRequest) {
     );
     if (facultyResult.rows.length === 0) {
       return NextResponse.json({ error: 'Faculty not found' }, { status: 404 });
+    }
+    if (!canHaveOverloadOrPraise(facultyResult.rows[0].employment_status)) {
+      return NextResponse.json({ error: OVERLOAD_PRAISE_PERMANENT_ONLY }, { status: 400 });
     }
     const isPermanent = facultyResult.rows[0].employment_status === 'Permanent';
 

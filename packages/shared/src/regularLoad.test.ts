@@ -2,13 +2,20 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   DEFAULT_WORKLOAD_POLICY, LOAD_GRACE_UNITS,
-  computeRegularLoadStatus, formatLoadCap, isRegularLoadComplete, maxDeductionUnits,
+  canHaveOverloadOrPraise, computeRegularLoadStatus, formatLoadCap, isRegularLoadComplete, maxDeductionUnits,
   normalizeWorkloadPolicy, overloadUnitsCap, parseWorkloadPolicy, permanentRegularLoadLimit,
   regularLoadLimit, regularUnitsCap, sameWorkloadPolicy, shownUnitsCap, shownUnitsLeft, shownUnitsOver,
   type WorkloadPolicy,
 } from './regularLoad';
 
 const P = DEFAULT_WORKLOAD_POLICY;
+
+test('only Permanent faculty can have Overload or Praise Load', () => {
+  assert.equal(canHaveOverloadOrPraise('Permanent'), true);
+  assert.equal(canHaveOverloadOrPraise('Contractual'), false);
+  assert.equal(canHaveOverloadOrPraise(null), false);
+  assert.equal(canHaveOverloadOrPraise(undefined), false);
+});
 
 test('default caps carry the 0.25 grace and are shown without it', () => {
   assert.equal(regularUnitsCap(P), 18.25);

@@ -5,9 +5,12 @@ import { useInstructorProfile } from '@/context/InstructorProfileContext';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
 import { useRealtime } from '@/context/RealtimeContext';
 import { useToast } from '@/context/ToastContext';
+import { useNotifications } from '@/context/NotificationContext';
+import { motion, useReducedMotion } from 'framer-motion';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
-import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
+import { PageLoadTransition, revealProps } from '@/components/ui/PageLoadTransition';
 import { Skeleton } from '@/components/ui/skeletons';
+import { RefreshButton } from '@/components/ui/RefreshButton';
 import Link from 'next/link';
 import {
   CalendarDays, QrCode, ChevronRight,
@@ -186,8 +189,11 @@ const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Satur
 
 /* ─── Main component ─────────────────────────────────────────────── */
 export default function InstructorDashboard() {
-  const { name, facultyId } = useInstructorProfile();
+  const { name, facultyId, refresh: refreshProfile } = useInstructorProfile();
+  const { refresh: refreshNotifications } = useNotifications();
   const toast = useToast();
+  const reduceMotion = useReducedMotion();
+  const [refreshing, setRefreshing]       = useState(false);
   const [data, setData]                   = useState<DashboardData | null>(null);
   const [loading, setLoading]             = useState(true);
   const [loadError, setLoadError]         = useState(false);
@@ -208,14 +214,15 @@ export default function InstructorDashboard() {
   const [hideGmailNotice, setHideGmailNotice] = useState(true); // hidden until we confirm unverified
   const [userEmail, setUserEmail] = useState('');
 
-  useEffect(() => {
+  const stampDate = useCallback(() => {
     const d = new Date();
     setNowHour(d.getHours());
     setDateStr(d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }));
   }, []);
+  useEffect(() => { stampDate(); }, [stampDate]);
 
-  useEffect(() => {
-    fetch('/api/auth/me')
+  // Google verification notice
+  const loadAccount = useCallback(() => fetch('/api/auth/me', { cache: 'no-store' })
       .then(r => (r.ok ? r.json() : null))
       .then(d => {
         if (d?.user && typeof d.user.google_verified === 'boolean') {
@@ -235,11 +242,10 @@ export default function InstructorDashboard() {
           }
         }
       })
-      .catch(() => {});
-  }, []);
+      .catch(() => {}), []);
+  useEffect(() => { loadAccount(); }, [loadAccount]);
 
-
-  const load = useCallback(async (silent = false) => {
+  const load = useCallback(async (silent = false): Promise<boolean> => {
     if (!silent) {
       setLoading(true);
       setLoadError(false);
@@ -250,8 +256,10 @@ export default function InstructorDashboard() {
       const json: DashboardData = await res.json();
       setData(json);
       setLoadError(false);
+      return true;
     } catch {
       if (!silent) setLoadError(true);
+      return false;
     } finally {
       setLoading(false);
     }
@@ -263,13 +271,10 @@ export default function InstructorDashboard() {
   useRealtime(['schedule', 'workload', 'occupancy', 'room-requests', 'rooms', 'term'], () => load(true), { enabled: !loading });
   useVisibilityAwareInterval(() => load(true), POLL_MS);
 
-  const showSkeleton = useMinLoading(loading && !data, PAGE_SKELETON_MIN_MS);
-
-  async function handleFind(e: React.FormEvent) {
-    e.preventDefault();
+  const runFind = useCallback(async (time: string, day: string) => {
     setFindLoading(true); setFindError(null); setFindSearched(true);
     try {
-      const url = `/api/instructor/rooms/find?time=${encodeURIComponent(findTime)}&day=${encodeURIComponent(findDay)}`;
+      const url = `/api/instructor/rooms/find?time=${encodeURIComponent(time)}&day=${encodeURIComponent(day)}`;
       const res = await fetch(url, { cache: 'no-store' });
       const json = await res.json();
       if (!res.ok) { setFindError(json.error || 'Search failed.'); setFindResults([]); return; }
@@ -278,7 +283,31 @@ export default function InstructorDashboard() {
       setFindError('Connection error. Please try again.');
       setFindResults([]);
     } finally { setFindLoading(false); }
+  }, []);
+
+  function handleFind(e: React.FormEvent) {
+    e.preventDefault();
+    runFind(findTime, findDay);
   }
+
+  // Refresh button: everything on the page (and the bell and name above it)
+  // is fetched again behind the skeleton, then the cards fade back in
+  const refreshAll = useCallback(async () => {
+    setRefreshing(true);
+    stampDate();
+    refreshNotifications();
+    const [ok] = await Promise.all([
+      load(true),
+      loadAccount(),
+      refreshProfile(),
+      findSearched ? runFind(findTime, findDay) : null,
+    ]);
+    setRefreshing(false);
+    if (!ok) toast.error('Could not refresh the dashboard. Check your connection and try again.');
+    return ok;
+  }, [stampDate, refreshNotifications, load, loadAccount, refreshProfile, findSearched, runFind, findTime, findDay, toast]);
+
+  const showSkeleton = useMinLoading((loading && !data) || refreshing, PAGE_SKELETON_MIN_MS);
 
   async function confirmReleaseRoom() {
     if (!facultyId || !data?.my_reservation) return;
@@ -327,26 +356,20 @@ export default function InstructorDashboard() {
             )}
           </div>
 
-          {/* Right — clock + refresh (one aligned row on phones) */}
-          <div className="flex items-center justify-between sm:justify-end gap-4 w-full sm:w-auto">
-            <div className="sm:text-right">
-              <LiveClock />
-              <p className="text-xs font-semibold mt-1 uppercase tracking-wider flex items-center gap-1.5 sm:justify-end" style={{ color: '#C7D6EA' }}>
-                <span aria-hidden className="w-2 h-2 rounded-full bg-emerald-400" />
-                Live
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => load()} disabled={loading}
-              className="w-11 h-11 flex-shrink-0 rounded-xl bg-white/10 hover:bg-white/20 active:bg-white/25 flex items-center justify-center transition-colors"
-              title="Refresh dashboard"
-              aria-label="Refresh dashboard"
-            >
-              <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} style={{ color: '#FFFFFF' }} />
-            </button>
+          {/* Right — live clock */}
+          <div className="sm:text-right">
+            <LiveClock />
+            <p className="text-xs font-semibold mt-1 uppercase tracking-wider flex items-center gap-1.5 sm:justify-end" style={{ color: '#C7D6EA' }}>
+              <span aria-hidden className="w-2 h-2 rounded-full bg-emerald-400" />
+              Live
+            </p>
           </div>
         </div>
+      </div>
+
+      {/* Same Refresh button, colour and place as My Schedule and My Workload */}
+      <div className="flex justify-end">
+        <RefreshButton overlay={false} onRefresh={refreshAll} loading={refreshing || showSkeleton} />
       </div>
 
       {gmailVerified === false && !hideGmailNotice && (
@@ -391,14 +414,14 @@ export default function InstructorDashboard() {
         skeleton={
           <div className="flex flex-col gap-5">
             <div className="rounded-2xl border border-white/10 bg-[#111827] p-4 overflow-hidden">
-              <Skeleton className="h-16 rounded-xl" />
+              <Skeleton className="h-12 rounded-xl" />
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 lg:gap-5">
               {[...Array(3)].map((_, i) => (
-                <div key={i} className="rounded-2xl border border-white/10 bg-[#111827] p-4 space-y-3 overflow-hidden min-h-[16rem]">
-                  <Skeleton className="h-5 w-40 rounded" />
-                  <Skeleton className="h-3 w-24 rounded" />
-                  <Skeleton className="h-40 w-full rounded-xl" />
+                <div key={i} className={`rounded-2xl border border-white/10 bg-[#111827] p-4 flex flex-col gap-3 overflow-hidden h-[min(28rem,calc(100dvh-14rem))] xl:h-[min(36rem,calc(100dvh-16rem))] ${i === 2 ? 'md:col-span-2 xl:col-span-1' : ''}`}>
+                  <Skeleton className="h-5 w-40 rounded flex-shrink-0" />
+                  <Skeleton className="h-3 w-24 rounded flex-shrink-0" />
+                  <Skeleton className="flex-1 w-full rounded-xl" />
                 </div>
               ))}
             </div>
@@ -408,7 +431,7 @@ export default function InstructorDashboard() {
       >
       {/* ══ ACTIVE SESSION CARD ════════════════════════════════════════ */}
       {data?.my_reservation ? (
-        <div className={[
+        <motion.div {...revealProps(0, reduceMotion)} className={[
           'bg-[#111827] rounded-2xl border-2 px-4 sm:px-6 py-4 sm:py-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 sm:gap-6',
           data.my_reservation.status === 'Pending'
             ? 'border-amber-500/40'
@@ -481,9 +504,9 @@ export default function InstructorDashboard() {
               )}
             </div>
           </div>
-        </div>
+        </motion.div>
       ) : data ? (
-        <div className="bg-[#111827] border border-dashed border-white/10 rounded-2xl px-4 sm:px-6 py-4 flex flex-wrap sm:flex-nowrap items-center gap-4">
+        <motion.div {...revealProps(0, reduceMotion)} className="bg-[#111827] border border-dashed border-white/10 rounded-2xl px-4 sm:px-6 py-4 flex flex-wrap sm:flex-nowrap items-center gap-4">
           <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center flex-shrink-0">
             <DoorOpen className="w-5 h-5 text-slate-500" />
           </div>
@@ -495,7 +518,7 @@ export default function InstructorDashboard() {
             className="w-full sm:w-auto justify-center flex-shrink-0 flex items-center gap-2 bg-[#1D5BD6] hover:bg-[#12408F] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-colors shadow-sm shadow-[#1D5BD6]/20">
             <QrCode className="w-4 h-4" /> Scan QR
           </Link>
-        </div>
+        </motion.div>
       ) : null}
 
       {/* ══ MAIN 3-COLUMN BODY ═════════════════════════════════════════ */}
@@ -503,7 +526,7 @@ export default function InstructorDashboard() {
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 lg:gap-5 items-start">
 
           {/* ── Col 1: Available Rooms ───────────────────────────────── */}
-          <div className="bg-[#111827] rounded-2xl border border-white/10 flex flex-col min-w-0 overflow-hidden max-h-[min(28rem,calc(100dvh-14rem))] xl:max-h-[min(36rem,calc(100dvh-16rem))]">
+          <motion.div {...revealProps(1, reduceMotion)} className="bg-[#111827] rounded-2xl border border-white/10 flex flex-col min-w-0 overflow-hidden max-h-[min(28rem,calc(100dvh-14rem))] xl:max-h-[min(36rem,calc(100dvh-16rem))]">
             <DashHeader
               icon={DoorOpen}
               title="Available Rooms"
@@ -534,10 +557,10 @@ export default function InstructorDashboard() {
                 ))}
               </div>
             )}
-          </div>
+          </motion.div>
 
           {/* ── Col 2: Class Schedule ────────────────────────────────── */}
-          <div className="bg-[#111827] rounded-2xl border border-white/10 flex flex-col min-w-0 overflow-hidden max-h-[min(28rem,calc(100dvh-14rem))] xl:max-h-[min(36rem,calc(100dvh-16rem))]">
+          <motion.div {...revealProps(2, reduceMotion)} className="bg-[#111827] rounded-2xl border border-white/10 flex flex-col min-w-0 overflow-hidden max-h-[min(28rem,calc(100dvh-14rem))] xl:max-h-[min(36rem,calc(100dvh-16rem))]">
             <DashHeader
               icon={CalendarDays}
               title="Class Schedule"
@@ -629,10 +652,10 @@ export default function InstructorDashboard() {
                 View full semester schedule <ChevronRight className="w-4 h-4" />
               </Link>
             </div>
-          </div>
+          </motion.div>
 
           {/* ── Col 3: Find Available Rooms ──────────────────────────── */}
-          <div className="bg-[#111827] rounded-2xl border border-white/10 flex flex-col min-w-0 overflow-hidden md:col-span-2 xl:col-span-1 max-h-[min(28rem,calc(100dvh-14rem))] xl:max-h-[min(36rem,calc(100dvh-16rem))]">
+          <motion.div {...revealProps(3, reduceMotion)} className="bg-[#111827] rounded-2xl border border-white/10 flex flex-col min-w-0 overflow-hidden md:col-span-2 xl:col-span-1 max-h-[min(28rem,calc(100dvh-14rem))] xl:max-h-[min(36rem,calc(100dvh-16rem))]">
             <DashHeader
               icon={Search}
               title="Find Available Rooms"
@@ -726,7 +749,7 @@ export default function InstructorDashboard() {
                 Browse all available rooms <ChevronRight className="w-4 h-4" />
               </Link>
             </div>
-          </div>
+          </motion.div>
         </div>
       ) : null}
 

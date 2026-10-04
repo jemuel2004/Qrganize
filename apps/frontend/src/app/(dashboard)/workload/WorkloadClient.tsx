@@ -33,7 +33,7 @@ import WorkloadPrintMenu, { type WorkloadPrintData } from '@/components/Workload
 import { openWorkloadPrintableVersion } from '@/lib/openPrintHtmlDocument';
 import { coerceSubjectCategory } from '@shared/subjectCategory';
 import {
-  LOAD_GRACE_UNITS, overloadUnitsCap, regularUnitsCap,
+  LOAD_GRACE_UNITS, overloadUnitsCap, regularUnitsCap, canHaveOverloadOrPraise,
   formatLoadCap, shownUnitsCap, shownUnitsLeft, shownUnitsOver, isRegularLoadComplete,
 } from '@shared/regularLoad';
 import { useWorkloadPolicy } from '@/hooks/useWorkloadPolicy';
@@ -1674,6 +1674,8 @@ export default function WorkloadPage({
 
   const summary = workload?.summary;
   const isPermanent = selectedFaculty?.employment_status === 'Permanent';
+  /** Only Permanent faculty carry Overload / Praise Load — Contractual: Regular only */
+  const extraLoads = canHaveOverloadOrPraise(selectedFaculty?.employment_status);
   // Teaching units (what goes into the teaching slot)
   const regularVal   = summary ? (isPermanent ? summary.total_regular_units  : summary.total_regular_hours)  : 0;
   // Overload units
@@ -2987,8 +2989,10 @@ export default function WorkloadPage({
                     <AlertTriangle className="w-5 h-5 text-[#DC2626] flex-shrink-0 mt-0.5" />
                     <p className="text-[#0B2A5B] text-sm leading-relaxed">
                       <span className="font-semibold">{selectedFaculty?.name ?? 'This faculty'}</span> will go past the {regularLimitLabel} regular
-                      load by <span className="font-semibold text-[#DC2626]">{overFromRemaining(after, isPermanent).toFixed(2)} {loadUnit}</span>.
-                      You can still assign them, then move any to Overload in View Workload.
+                      load by <span className="font-semibold text-[#DC2626]">{overFromRemaining(after, isPermanent).toFixed(2)} {loadUnit}</span>.{' '}
+                      {extraLoads
+                        ? 'You can still assign them, then move any to Overload in View Workload.'
+                        : 'You can still assign them as Regular Load — Contractual faculty can\'t take Overload.'}
                     </p>
                   </div>
                 )}
@@ -3023,13 +3027,15 @@ export default function WorkloadPage({
           Shown when assigning would exceed the regular load limit (fully or
           partially). Admin must explicitly choose to continue or ignore.
           ------------------------------------------------------------------- */}
-      <Modal open={!!overloadConfirm} onClose={() => { if (continueState !== 'saving') setOverloadConfirm(null); }} title="Overload Warning">
+      <Modal open={!!overloadConfirm} onClose={() => { if (continueState !== 'saving') setOverloadConfirm(null); }} title={extraLoads ? 'Overload Warning' : 'Over the Regular Load'}>
         {continueState === 'success' && overloadConfirm && <AssignSuccess note={continueNote} />}
         <div className="space-y-4">
           <div className="bg-[#FEF2F2] border border-[#FECACA] rounded-xl p-4 flex items-start gap-3">
             <AlertTriangle className="w-5 h-5 text-[#DC2626] flex-shrink-0 mt-0.5" />
             <p className="text-[#0B2A5B] text-sm leading-relaxed">
-              This subject will exceed the regular load limit. You may continue adding it, then manually move a subject to overload using the table below.
+              {extraLoads
+                ? 'This subject will exceed the regular load limit. You may continue adding it, then manually move a subject to overload using the table below.'
+                : 'This subject will exceed the regular load limit. Contractual faculty can\'t take Overload, so it will be added as Regular Load.'}
             </p>
           </div>
           {overloadConfirm && (
@@ -3558,7 +3564,7 @@ export default function WorkloadPage({
             if (isSplitRow && (isP ? displayWU < 0.001 : displayHours < 0.001)) continue;
             officialRegularRows.push(toOfficialRow(load, row, displayWU, displayHours, (
               <div className="flex items-center justify-center gap-0.5 flex-wrap">
-                                  {!isSplitRow && (
+                                  {extraLoads && !isSplitRow && (
                                     <button
                                       type="button"
                                       title="Move to Overload"
@@ -3573,7 +3579,7 @@ export default function WorkloadPage({
                                       Overload
                                     </button>
                                   )}
-                                  {!isSplitRow && (
+                                  {extraLoads && !isSplitRow && (
                                     <button
                                       type="button"
                                       title="Move to Praise Load"
@@ -3632,15 +3638,17 @@ export default function WorkloadPage({
                   <ArrowLeft className="w-3 h-3" />
                   Regular
                 </button>
-                <button
-                  type="button"
-                  title="Move to Praise Load"
-                  onClick={() => requestMoveToPraise(termLoads, [load.ms_id])}
-                  className={actionPraise}
-                >
-                  <ArrowRight className="w-3 h-3" />
-                  Praise
-                </button>
+                {extraLoads && (
+                  <button
+                    type="button"
+                    title="Move to Praise Load"
+                    onClick={() => requestMoveToPraise(termLoads, [load.ms_id])}
+                    className={actionPraise}
+                  >
+                    <ArrowRight className="w-3 h-3" />
+                    Praise
+                  </button>
+                )}
               </div>
             ) : undefined));
           }
@@ -3724,7 +3732,7 @@ export default function WorkloadPage({
                 praiseRowsWU += wu;
                 const isFirstOfSubject = !seenPraiseMs.has(load.ms_id);
                 seenPraiseMs.add(load.ms_id);
-                const base = toOfficialRow(load, row, wu, row.hours, isFirstOfSubject ? (
+                const base = toOfficialRow(load, row, wu, row.hours, isFirstOfSubject && extraLoads ? (
                     <button
                       type="button"
                       title="Return to Overload"
@@ -3765,15 +3773,17 @@ export default function WorkloadPage({
                     <ArrowLeft className="w-3 h-3" />
                     Regular
                   </button>
-                  <button
-                    type="button"
-                    title="Move to Overload"
-                    onClick={() => setReturnToOverloadConfirm({ ids: [load.ms_id], total: val })}
-                    className={actionOverload}
-                  >
-                    <ArrowRight className="w-3 h-3" />
-                    Overload
-                  </button>
+                  {extraLoads && (
+                    <button
+                      type="button"
+                      title="Move to Overload"
+                      onClick={() => setReturnToOverloadConfirm({ ids: [load.ms_id], total: val })}
+                      className={actionOverload}
+                    >
+                      <ArrowRight className="w-3 h-3" />
+                      Overload
+                    </button>
+                  )}
                 </div>
               ));
               return { ...base, key: `${row.key}-split-praise`, description: `${row.description} · Source: Regular` };
@@ -4019,9 +4029,12 @@ export default function WorkloadPage({
               const strip = (color: string) => (
                 <span aria-hidden className="absolute inset-x-0 top-0 h-1" style={{ backgroundColor: color }} />
               );
+              const showOverloadCard = extraLoads || hasOverloadSection;
+              const showPraiseCard = extraLoads || hasPraiseSection;
+              const cardCount = 2 + Number(showOverloadCard) + Number(showPraiseCard);
               return (
                 <>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
+                <div className={`grid grid-cols-1 sm:grid-cols-2 ${cardCount === 4 ? 'lg:grid-cols-4' : cardCount === 3 ? 'lg:grid-cols-3' : ''} gap-4 mb-5`}>
                   <motion.button
                     {...cardButton('actual', hasActualSection)}
                     className={`${card} ${cardState}`}
@@ -4064,6 +4077,7 @@ export default function WorkloadPage({
                       </div>
                     )}
                   </motion.button>
+                  {showOverloadCard && (
                   <motion.button
                     {...cardButton('overload', hasOverloadSection)}
                     className={`${card} ${cardState}`}
@@ -4084,6 +4098,8 @@ export default function WorkloadPage({
                       </div>
                     )}
                   </motion.button>
+                  )}
+                  {showPraiseCard && (
                   <motion.button
                     {...cardButton('praise', hasPraiseSection)}
                     className={`${card} ${cardState}`}
@@ -4097,6 +4113,7 @@ export default function WorkloadPage({
                       <span className={mutedCls}>{unitLabel}</span>
                     </div>
                   </motion.button>
+                  )}
                 </div>
                 {/* Written warning (not only colour/icon) — like a notification */}
                 <AnimatePresence initial={false}>
@@ -4118,8 +4135,10 @@ export default function WorkloadPage({
                           </p>
                           <p className="text-sm text-red-800 mt-1 leading-relaxed">
                             {selectedFaculty?.name ?? 'This faculty member'} has <strong>{regStr} {unitLabel}</strong> of regular load,
-                            which is <strong>{regOverShown} {unitLabel} over</strong> the {limitStr}-{unitLabel === 'units' ? 'unit' : 'hour'} limit.
-                            Move a subject to Overload (or Praise Load), or remove a subject, to bring it back within the limit.
+                            which is <strong>{regOverShown} {unitLabel} over</strong> the {limitStr}-{unitLabel === 'units' ? 'unit' : 'hour'} limit.{' '}
+                            {extraLoads
+                              ? 'Move a subject to Overload (or Praise Load), or remove a subject, to bring it back within the limit.'
+                              : 'Remove a subject to bring it back within the limit.'}
                           </p>
                         </div>
                       </div>

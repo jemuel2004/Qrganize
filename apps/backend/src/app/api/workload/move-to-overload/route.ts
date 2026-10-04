@@ -6,6 +6,7 @@ import { canAccessMasterSchedule } from '@/services/programScope';
 import { ensurePraiseSplitColumn } from '@/services/praiseSplit';
 import { withAudit } from '@/services/audit';
 import { overloadCapError } from '@/services/overloadCap';
+import { canHaveOverloadOrPraise, OVERLOAD_PRAISE_PERMANENT_ONLY } from '@shared/regularLoad';
 
 let schemaReady = false;
 async function ensureSchema() {
@@ -41,6 +42,9 @@ async function POST_handler(req: NextRequest) {
       return NextResponse.json({ error: 'Faculty not found' }, { status: 404 });
     }
     const faculty = facultyResult.rows[0];
+    if (!canHaveOverloadOrPraise(faculty.employment_status)) {
+      return NextResponse.json({ error: OVERLOAD_PRAISE_PERMANENT_ONLY }, { status: 400 });
+    }
     const isPermanent = faculty.employment_status === 'Permanent';
 
     const loadResult = await query(
@@ -199,6 +203,7 @@ async function POST_handler(req: NextRequest) {
       message: `Subject moved to overload (${subjectTotal.toFixed(2)} ${unit}).`,
     });
   } catch (error) {
+    console.error('[POST /api/workload/move-to-overload]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

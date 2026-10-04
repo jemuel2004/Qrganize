@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query, transaction } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
-import { regularLoadLimit as termRegularLoadLimit } from '@shared/regularLoad';
+import {
+  regularLoadLimit as termRegularLoadLimit, canHaveOverloadOrPraise, OVERLOAD_PRAISE_PERMANENT_ONLY,
+} from '@shared/regularLoad';
 import { getWorkloadPolicy } from '@/services/workloadPolicy';
 import { syncWorkloadMonitoringNotifications } from '@/services/workloadMonitoring';
 import { canAccessMasterSchedule, canAccessProgram } from '@/services/programScope';
 import { withAudit } from '@/services/audit';
 import { overloadCapError } from '@/services/overloadCap';
 import { isBlockAssignedToFaculty } from '@/services/facultyBlocks';
+import { createNotification } from '@/services/notifications';
+import { programBlockCode } from '@shared/blockCode';
 
 async function POST_handler(req: NextRequest) {
   try {
@@ -44,11 +48,13 @@ async function POST_handler(req: NextRequest) {
         c.units AS credit_units,
         c.total_hours, c.lecture_hours, c.laboratory_hours,
         c.subject_code, c.subject_name,
-        b.semester, b.academic_year, b.id AS block_id, b.block_name
+        b.semester, b.academic_year, b.id AS block_id, b.block_name, b.year_level,
+        p.code AS program_code
       FROM master_schedule ms
       JOIN block_subjects bs ON ms.block_subject_id = bs.id
       JOIN curriculums c ON bs.curriculum_id = c.id
       JOIN blocks b ON bs.block_id = b.id
+      LEFT JOIN programs p ON p.id = b.program_id
       WHERE ms.id = $1
     `, [master_schedule_id]);
 
@@ -159,6 +165,9 @@ async function POST_handler(req: NextRequest) {
 
     // ── Admin confirmed — assign with the chosen category ────────────────────
     if (assign_category === 'overload') {
+      if (!canHaveOverloadOrPraise(faculty.employment_status)) {
+        return NextResponse.json({ error: OVERLOAD_PRAISE_PERMANENT_ONLY }, { status: 400 });
+      }
       const capError = await overloadCapError({
         facultyId: Number(faculty_id), isPermanent,
         semester: sched.semester, academicYear: sched.academic_year,
@@ -216,6 +225,18 @@ async function POST_handler(req: NextRequest) {
         { status: 409 },
       );
     }
+
+    // Tell the faculty member at once — their bell and open pages update live
+    const classLabel = programBlockCode(sched.program_code, sched.year_level, sched.block_name);
+    await createNotification({
+      recipientId: Number(faculty_id),
+      recipientRole: 'instructor',
+      title: 'New subject assigned',
+      message: `${sched.subject_code} ${sched.subject_name}${classLabel ? ` for ${classLabel}` : ''} was added to your ${category === 'Overload' ? 'overload' : 'regular load'}.`,
+      type: 'workload_updated',
+      relatedModule: 'workload',
+      relatedId: Number(master_schedule_id),
+    });
 
     void syncWorkloadMonitoringNotifications(true);
     if (category === 'Overload') {
