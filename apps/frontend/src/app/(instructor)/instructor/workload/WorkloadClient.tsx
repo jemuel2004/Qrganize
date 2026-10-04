@@ -27,7 +27,7 @@ import { canHaveOverloadOrPraise, formatLoadCap, regularUnitsCap, shownUnitsCap,
 import { useWorkloadPolicy } from '@/hooks/useWorkloadPolicy';
 import { LOAD_TONE } from '@/lib/loadTone';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
-import { CardSkeleton, PageBodySkeleton } from '@/components/ui/skeletons';
+import { Skeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import { mergeSameSubjects } from '@shared/subjectCode';
 
@@ -231,7 +231,7 @@ const TAB_TONE = LOAD_TONE;
 type WorkloadTab = keyof typeof TAB_TONE;
 
 /** Summary card tinted in its load colour (Actual Load navy · Regular blue · Overload orange · Praise gold) */
-function LoadCard({ tone, edgeColor = tone, label, unit, value, of, note, detail, index, onClick, active = false }: {
+function LoadCard({ tone, edgeColor = tone, label, unit, value, of, note, detail, index, onClick, active = false, className = '' }: {
   tone: string; label: string; unit: string; value: string; of?: number | string; note?: string; index: number;
   /** Top strip colour, when it must differ from `tone` (e.g. a theme-aware CSS variable) */
   edgeColor?: string;
@@ -240,19 +240,21 @@ function LoadCard({ tone, edgeColor = tone, label, unit, value, of, note, detail
   /** Opens this load's table below */
   onClick?: () => void;
   active?: boolean;
+  className?: string;
 }) {
   const reduceMotion = useReducedMotion();
   return (
     <motion.div
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
+      aria-pressed={onClick ? active : undefined}
       onClick={onClick}
       onKeyDown={e => { if (onClick && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onClick(); } }}
       initial={reduceMotion ? false : { opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0, transition: { duration: 0.4, ease: [0.4, 0, 0.2, 1], delay: index * 0.06 } }}
       whileHover={reduceMotion || !onClick ? undefined : { y: -3, boxShadow: `0 14px 28px -16px ${tone}99` }}
       whileTap={reduceMotion || !onClick ? undefined : { scale: 0.98 }}
-      className={`qr-stat-tint relative overflow-hidden rounded-2xl border-2 p-4 sm:p-5 text-center w-full focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${onClick ? 'cursor-pointer' : ''}`}
+      className={`qr-stat-tint relative overflow-hidden rounded-2xl border-2 p-4 sm:p-5 text-center w-full min-w-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${onClick ? 'cursor-pointer' : ''} ${className}`}
       style={{
         background: `linear-gradient(160deg, ${tone}${active ? '26' : '14'} 0%, #FFFFFF 75%)`,
         borderColor: active ? tone : `${tone}40`,
@@ -260,6 +262,15 @@ function LoadCard({ tone, edgeColor = tone, label, unit, value, of, note, detail
       }}
     >
       <span aria-hidden className="absolute inset-x-0 top-0 h-1" style={{ backgroundColor: edgeColor }} />
+      {/* The card whose table is open below gets a matching bottom edge */}
+      <motion.span
+        aria-hidden
+        className="absolute inset-x-0 bottom-0 h-1 origin-center"
+        style={{ backgroundColor: edgeColor }}
+        initial={false}
+        animate={{ scaleX: active ? 1 : 0, opacity: active ? 1 : 0 }}
+        transition={{ duration: reduceMotion ? 0 : 0.3, ease: [0.4, 0, 0.2, 1] }}
+      />
       <div className="text-2xl sm:text-3xl font-black mb-1.5 tabular-nums" style={{ color: tone }}>
         {/* A live update eases the new number in, so the change is noticed */}
         <motion.span
@@ -274,7 +285,7 @@ function LoadCard({ tone, edgeColor = tone, label, unit, value, of, note, detail
       </div>
       <div className="text-sm font-bold text-[#0B2A5B]">{label}</div>
       <div className="text-xs mt-0.5 text-[#64748B]">{unit}</div>
-      {detail && <div className="text-xs mt-0.5 text-[#64748B]">{detail}</div>}
+      {detail && <div className="text-xs mt-0.5 text-[#64748B] text-balance">{detail}</div>}
       {note && <div className="text-xs mt-1 font-semibold text-[#DC2626]">{note}</div>}
     </motion.div>
   );
@@ -308,12 +319,21 @@ export default function InstructorWorkloadClient() {
   /** Whether the currently selected workload table is visible. */
   const [tableVisible, setTableVisible] = useState(true);
 
+  /** The heading above the open form — tapping a card brings it into view when it's below the screen */
+  const sectionRef = useRef<HTMLDivElement>(null);
   function selectTab(key: WorkloadTab) {
     setActiveTab(key);
     setTableVisible(true);
+    requestAnimationFrame(() => {
+      const el = sectionRef.current;
+      if (el && el.getBoundingClientRect().top > window.innerHeight - 160) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
   }
 
-  const fetchWorkload = useCallback(async (silent = false) => {
+  /** Resolves false when the workload could not be loaded */
+  const fetchWorkload = useCallback(async (silent = false): Promise<boolean> => {
     if (!silent) {
       setLoading(true);
       setError(null);
@@ -331,7 +351,7 @@ export default function InstructorWorkloadClient() {
         setNoPeriod(true);
         setData(null);
         lastSignature.current = '';
-        return;
+        return true;
       }
       setSemester(sem);
       setAcademicYear(year);
@@ -345,7 +365,7 @@ export default function InstructorWorkloadClient() {
           setNoPeriod(true);
           setData(null);
           lastSignature.current = '';
-          return;
+          return true;
         }
         throw new Error(body.error || `Error ${res.status}`);
       }
@@ -360,14 +380,26 @@ export default function InstructorWorkloadClient() {
         toast.info('Your workload was just updated.');
       }
       lastSignature.current = signature;
+      return true;
     } catch (err) {
       if (!silent) setError(err instanceof Error ? err.message : String(err));
+      return false;
     } finally {
       if (!silent) setLoading(false);
     }
   }, [toast]);
 
   useEffect(() => { fetchWorkload(); }, [fetchWorkload]);
+
+  // Refresh button: the whole page reloads behind the skeleton, then fades back in
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshAll = useCallback(async () => {
+    setRefreshing(true);
+    const ok = await fetchWorkload(true);
+    setRefreshing(false);
+    if (!ok) toast.error('Could not refresh your workload. Check your connection and try again.');
+    return ok;
+  }, [fetchWorkload, toast]);
 
   // Live updates: subjects assigned or moved, schedules, PRAISE or deloading
   // changed, or a new active term — the workload reloads quietly (the open tab
@@ -821,7 +853,7 @@ export default function InstructorWorkloadClient() {
     }
   }
 
-  const showSkeleton = useMinLoading(loading && !data, LOADING_DELAY);
+  const showSkeleton = useMinLoading((loading && !data) || refreshing, LOADING_DELAY);
 
   /* ── Render ─────────────────────────────────────────────────────────────── */
   return (
@@ -829,19 +861,41 @@ export default function InstructorWorkloadClient() {
       {/* Desktop: balanced width, centred (phones/tablets unchanged) */}
       <div className="lg:max-w-6xl lg:mx-auto">
       {/* ── Page header ───────────────────────────────────────────────── */}
-      <div className="mb-5">
+      <div className="mb-4">
         <BackButton />
-        <div className="mt-2 lg:mt-5 mb-4">
+        <div className="mt-2 lg:mt-5">
           <WatermarkTitle>My Workload</WatermarkTitle>
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-2.5">
-          <RefreshButton onRefresh={() => fetchWorkload()} loading={loading} />
+      </div>
+
+      {/* ── Active academic period (Admin-controlled, read-only) + Refresh / Print ── */}
+      <div className="bg-white rounded-2xl border border-[#E2E8F0] shadow-[0_1px_3px_rgba(0,0,0,0.06)] px-4 py-3.5 sm:px-5 mb-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-[#64748B] uppercase tracking-wide">
+            Active academic period
+          </p>
+          <p className="text-[15px] font-bold text-[#0B2A5B] mt-0.5">
+            {semester && academicYear
+              ? `${semester} — A.Y. ${academicYear}`
+              : periodReady
+                ? 'No active academic period is currently configured.'
+                : 'Loading period…'}
+          </p>
+        </div>
+        <div className="flex items-center gap-2.5 w-full sm:w-auto">
+          <RefreshButton
+            overlay={false}
+            onRefresh={refreshAll}
+            loading={refreshing || showSkeleton}
+            className="flex-1 sm:flex-none"
+          />
           {workload && (
             <WorkloadPrintMenu
               data={{ faculty: workload.faculty, loads: workload.loads, praise: workload.praise, deductions: workload.deductions }}
               semester={semester}
               academicYear={academicYear}
               look="primary"
+              phoneStretch
               printablePath="/instructor/workload/print"
               onPrinted={handlePrinted}
             />
@@ -865,31 +919,23 @@ export default function InstructorWorkloadClient() {
         </div>
       ) : null}
 
-      {/* ── Active academic period (Admin-controlled, read-only) ──────── */}
-      <div className="bg-white rounded-lg border border-[#E2E8F0] px-4 py-3 mb-4">
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
-          <div className="min-w-0">
-            <p className="text-xs font-semibold text-[#64748B] uppercase tracking-wide">
-              Active academic period
-            </p>
-            <p className="text-sm font-semibold text-[#0B2A5B] mt-0.5">
-              {semester && academicYear
-                ? `${semester} — A.Y. ${academicYear}`
-                : periodReady
-                  ? 'No active academic period is currently configured.'
-                  : 'Loading period…'}
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* ── Loading ───────────────────────────────────────────────────── */}
+      {/* ── Loading — same shape as the page: load cards, section bar, form ── */}
       <PageLoadTransition
         showSkeleton={showSkeleton}
         skeleton={
-          <div className="space-y-4">
-            <PageBodySkeleton />
-            <CardSkeleton className="min-h-[200px]" />
+          <div>
+            <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 mb-5">
+              <Skeleton className="col-span-2 lg:col-span-1 h-[118px] sm:h-[132px] rounded-2xl" />
+              <Skeleton className="h-[118px] sm:h-[132px] rounded-2xl" />
+              <Skeleton className="h-[118px] sm:h-[132px] rounded-2xl" />
+            </div>
+            <div className="flex items-center justify-between mb-3">
+              <Skeleton className="h-6 w-44 rounded" />
+              <Skeleton className="h-10 w-24 rounded-lg" />
+            </div>
+            <div className="space-y-2.5">
+              {[0, 1, 2].map(i => <Skeleton key={i} className="h-[150px] lg:h-[60px] rounded-xl" />)}
+            </div>
           </div>
         }
       >
@@ -937,13 +983,26 @@ export default function InstructorWorkloadClient() {
         // Contractual faculty carry Regular Load only — no Overload card unless there is something in it
         const showOverloadCard = canHaveOverloadOrPraise(workload.faculty?.employment_status) || hasOverloadSection;
         const cardCount = 2 + Number(showOverloadCard) + Number(hasPraiseSection);
+        const unitWord = isP ? 'units' : 'hours';
+        const plural = (n: number, word: string) => `${n} ${word}${n !== 1 ? 's' : ''}`;
+        const sectionLabel = {
+          actual: 'Actual Load', regular: isP ? 'Regular Load' : 'Regular Hours', overload: 'Overload', praise: 'Praise Load',
+        }[effectiveTab];
+        const sectionCount = {
+          actual: plural(actualCount, 'subject'),
+          regular: plural(regularPrintLoads.length, 'subject'),
+          overload: plural(overloadCount, 'subject'),
+          praise: plural(praiseCount, 'item'),
+        }[effectiveTab];
 
         return (
           <>
-            {/* ── Summary cards: Actual Load · Regular · Overload · Praise (if any) — click to open that table ── */}
+            {/* ── Summary cards: Actual Load · Regular · Overload · Praise (if any) — tap one to open its form below.
+                 Phones: an odd number of cards puts Actual Load across the top, so no card sits alone ── */}
             <div className={`grid grid-cols-2 gap-3 sm:gap-4 mb-5 ${cardCount === 4 ? 'lg:grid-cols-4' : cardCount === 3 ? 'lg:grid-cols-3' : ''}`}>
               <LoadCard index={0} tone={TAB_TONE.actual} edgeColor="var(--load-actual)" label="Actual Load"
-                unit={`${isP ? 'units' : 'hours'} · ${actualCount} subject${actualCount !== 1 ? 's' : ''}`}
+                className={cardCount % 2 === 1 ? 'col-span-2 lg:col-span-1' : ''}
+                unit={`${unitWord} · ${plural(actualCount, 'subject')}`}
                 // With deloading the form's total is teaching + deloading — show how it adds up
                 detail={totalDeductionUnits > 0.001 ? `${actualWU.toFixed(2)} teaching + ${totalDeductionUnits.toFixed(2)} deloading` : undefined}
                 value={actualTotal.toFixed(2)}
@@ -959,7 +1018,7 @@ export default function InstructorWorkloadClient() {
                   onClick={() => selectTab('overload')} />
               )}
               {hasPraiseSection && (
-                <LoadCard index={showOverloadCard ? 3 : 2} tone={TAB_TONE.praise} label="Praise Load" unit={`${isP ? 'units' : 'hours'} · ${praiseCount} item${praiseCount !== 1 ? 's' : ''}`}
+                <LoadCard index={showOverloadCard ? 3 : 2} tone={TAB_TONE.praise} label="Praise Load" unit={`${unitWord} · ${plural(praiseCount, 'item')}`}
                   value={praiseTotal.toFixed(2)}
                   active={effectiveTab === 'praise' && tableVisible} onClick={() => selectTab('praise')} />
               )}
@@ -981,43 +1040,17 @@ export default function InstructorWorkloadClient() {
                 </div>
               </div>
 
-              {/* Tab navigation (same order and colours as the cards) — Workload always; Actual Load / Overload / Praise only with data */}
-              <div className="flex flex-wrap items-center gap-2 mb-1">
-                {([
-                  { key: 'actual', label: 'Actual Load', count: actualCount, show: hasActualSection },
-                  { key: 'regular', label: 'Workload', count: regularPrintLoads.length, show: true },
-                  { key: 'overload', label: 'Overload', count: overloadCount, show: hasOverloadSection || effectiveTab === 'overload' },
-                  { key: 'praise', label: 'Praise Load', count: praiseCount, show: hasPraiseSection },
-                ] as const).filter(t => t.show).map(t => {
-                  const on = effectiveTab === t.key;
-                  const c = TAB_TONE[t.key];
-                  return (
-                    <motion.button
-                      key={t.key}
-                      type="button"
-                      data-load-tab={t.key}
-                      onClick={() => selectTab(t.key)}
-                      whileTap={{ scale: 0.96 }}
-                      whileHover={on ? undefined : { y: -2 }}
-                      animate={{ backgroundColor: on ? c : `${c}14`, borderColor: on ? c : `${c}59`, color: on ? '#FFFFFF' : c }}
-                      transition={{ duration: 0.25 }}
-                      className="inline-flex items-center gap-2 px-4 h-11 rounded-xl text-[15px] font-bold border-2"
-                    >
-                      {t.label}
-                      <span className="min-w-6 h-6 px-1.5 rounded-full text-[12px] font-bold inline-flex items-center justify-center"
-                        data-load-badge={on ? undefined : t.key}
-                        style={on ? { backgroundColor: 'rgba(255,255,255,0.25)', color: '#FFFFFF' } : { backgroundColor: '#FFFFFF', color: c }}>
-                        {t.count}
-                      </span>
-                    </motion.button>
-                  );
-                })}
-
+              {/* What the cards above opened: its name and count, and Hide / Show */}
+              <div ref={sectionRef} className="flex items-center justify-between gap-3 scroll-mt-4">
+                <h2 className="min-w-0 flex items-baseline gap-x-2 flex-wrap">
+                  <span className="text-lg font-bold" style={{ color: TAB_TONE[effectiveTab] }}>{sectionLabel}</span>
+                  <span className="text-sm font-semibold text-[#64748B]">{sectionCount}</span>
+                </h2>
                 <button
                   type="button"
                   aria-expanded={tableVisible}
                   onClick={() => setTableVisible(v => !v)}
-                  className="inline-flex items-center gap-1 ml-auto px-2.5 py-2 text-sm font-semibold text-[#1D5BD6] hover:text-[#2E7DD1] transition-colors"
+                  className="inline-flex items-center gap-1.5 flex-shrink-0 h-10 px-3.5 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] text-sm font-semibold text-[#1D5BD6] hover:bg-[#DBEAFE] hover:border-[#1D5BD6] active:scale-95 transition-all"
                 >
                   <ChevronDown
                     className={`w-4 h-4 transition-transform duration-300 ease-in-out ${tableVisible ? 'rotate-180' : 'rotate-0'}`}
@@ -1027,10 +1060,11 @@ export default function InstructorWorkloadClient() {
               </div>
 
               <WorkloadCollapsible open={tableVisible}>
-                <div className="bg-white border border-[#E2E8F0] rounded-lg overflow-hidden">
+                {/* Phones / tablets: cards on the page background; desktop: the form in a white box */}
+                <div className="lg:bg-white lg:border lg:border-[#E2E8F0] lg:rounded-lg lg:overflow-hidden">
                   {effectiveTab === 'regular' && (
                     regularPrintLoads.length === 0 ? (
-                      <div className="px-4 py-8 text-center">
+                      <div className="px-4 py-8 text-center bg-white border border-[#E2E8F0] rounded-xl lg:border-0 lg:rounded-none">
                         <p className="text-sm font-semibold text-[#0B2A5B]">No regular workload assigned</p>
                         <p className="text-sm text-[#64748B] mt-1">
                           No regular load subjects for the active academic period.
@@ -1041,6 +1075,7 @@ export default function InstructorWorkloadClient() {
                         rows={officialRegularRows}
                         summary={officialRegularSummary}
                         groups={formGroups}
+                        phoneCards
                       />
                     )
                   )}
@@ -1050,6 +1085,7 @@ export default function InstructorWorkloadClient() {
                       summary={officialActualSummary}
                       variant="actual"
                       groups={formGroups}
+                      phoneCards
                     />
                   )}
                   {effectiveTab === 'overload' && (
@@ -1059,9 +1095,10 @@ export default function InstructorWorkloadClient() {
                         summary={officialOverloadSummary}
                         variant="overload"
                         groups={formGroups}
+                        phoneCards
                       />
                     ) : (
-                      <div className="px-4 py-8 text-center">
+                      <div className="px-4 py-8 text-center bg-white border border-[#E2E8F0] rounded-xl lg:border-0 lg:rounded-none">
                         <p className="text-sm font-semibold text-[#0B2A5B]">No overload assigned</p>
                         <p className="text-sm text-[#64748B] mt-1">
                           No overload subjects for the active academic period.
@@ -1075,6 +1112,7 @@ export default function InstructorWorkloadClient() {
                       summary={officialPraiseSummary}
                       variant="praise"
                       groups={formGroups}
+                      phoneCards
                     />
                   )}
                 </div>

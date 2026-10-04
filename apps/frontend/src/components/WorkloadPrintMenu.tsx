@@ -178,7 +178,8 @@ export default function WorkloadPrintMenu({
   }
 
   const triggerLook = look === 'primary'
-    ? `h-11 px-4 gap-2 rounded-xl text-[15px] font-semibold shadow-lg shadow-[#1D5BD6]/20 ${open ? 'bg-[#164BB5]' : 'bg-[#1D5BD6] hover:bg-[#164BB5]'}`
+    // Same height and shadow as the Refresh button beside it
+    ? `h-[42px] px-5 gap-2 rounded-xl text-sm font-semibold shadow-[0_10px_22px_-12px_rgba(29,91,214,0.9)] ${phoneStretch ? 'w-full sm:w-auto' : ''} ${open ? 'bg-[#164BB5]' : 'bg-[#1D5BD6] hover:bg-[#164BB5]'}`
     : look === 'modal'
       ? `w-full sm:w-auto min-h-11 px-4 gap-2 rounded-xl text-sm font-medium text-white ${open ? 'bg-white/20' : 'bg-white/10 hover:bg-white/20'}`
       : `gap-1.5 ${phoneStretch ? 'w-full sm:w-auto h-11 sm:h-9 text-[15px] sm:text-[13px]' : 'h-9 text-[13px]'} px-3 rounded-lg border font-semibold ${

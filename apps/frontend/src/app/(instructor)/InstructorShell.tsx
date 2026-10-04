@@ -15,6 +15,7 @@ import SystemLogo from '@/components/ui/SystemLogo';
 import ErrorBoundary from '@/components/ui/ErrorBoundary';
 import InstructorSidebar, { InstructorMobileNav } from '@/components/layout/InstructorSidebar';
 import { useScrollLock } from '@/hooks/useScrollLock';
+import { useNavTrail } from '@/lib/navTrail';
 
 /**
  * A subject newly assigned to this faculty pops up on whatever page is open
@@ -51,6 +52,8 @@ export default function InstructorShell({ children }: { children: React.ReactNod
   const isWorkloadPrint =
     pathname === '/instructor/workload/print'
     || pathname.startsWith('/instructor/workload/print/');
+  // Back buttons return to the page this tab came from
+  useNavTrail(pathname, '/instructor');
 
   useEffect(() => {
     setMobileOpen(false);
@@ -85,13 +88,13 @@ export default function InstructorShell({ children }: { children: React.ReactNod
               <NewSubjectToasts />
               <div className="flex flex-col h-screen overflow-hidden dashboard-layout-root">
                 <header className="qr-app-header sticky top-0 flex-shrink-0 z-40 bg-[#12408F] isolate no-print">
-                  <div className="h-[72px] flex items-center gap-6 px-4 sm:px-6 min-w-0">
+                  <div className="h-[72px] flex items-center gap-3 sm:gap-6 px-4 sm:px-6 min-w-0">
                     <Link
                       href="/instructor"
                       className="flex items-center gap-2 min-w-0 flex-shrink-0 rounded-md px-1 py-0.5 -ml-1 transition-colors duration-150 hover:bg-white/10 cursor-pointer"
                     >
                       <SystemLogo size={56} />
-                      <span className="text-[16px] font-semibold text-white tracking-tight">
+                      <span className="max-[359px]:hidden text-[16px] font-semibold text-white tracking-tight">
                         QRganize
                       </span>
                       <span className="hidden sm:inline text-[12px] font-medium text-white bg-white/20 rounded-full px-2.5 py-1 leading-none">

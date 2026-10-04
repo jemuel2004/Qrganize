@@ -217,6 +217,114 @@ function SummaryRow({
   );
 }
 
+/** One line of the form's summary as a card shows it (empty lines left out). */
+type CardSummaryLine = {
+  key: string; label: string; description?: string; units?: string; hours?: string; strong?: boolean;
+  /** A plain number on the right (No. of Preparation) */
+  value?: string;
+};
+
+function cardSummaryLines(
+  summary: OfficialFormSummary,
+  variant: OfficialTableVariant,
+  totalDescription: string,
+): CardSummaryLine[] {
+  const lines: CardSummaryLine[] = [{ key: 'units', label: 'No. of Units', units: summary.unitsText, hours: summary.hoursText }];
+  if (variant === 'praise') {
+    for (const r of summary.researchExtension ?? []) lines.push({ key: r.key, label: 'Add: Research/Extension', description: r.description, units: r.units });
+  } else if (variant !== 'overload' || summary.designationLines) {
+    if (summary.designationLines) {
+      for (const l of summary.designationLines) lines.push({ key: l.key, label: l.label, description: l.description, units: l.units });
+    } else {
+      lines.push({ key: 'designation', label: 'Designation', description: summary.designation, units: summary.designationUnitsText });
+    }
+  }
+  if (variant !== 'overload' || summary.designationLines) {
+    for (const sa of summary.specialAssignments) lines.push({ key: sa.key, label: 'Add: Special Assignment', description: sa.description, units: sa.units });
+    lines.push({ key: 'prep', label: 'No. of Preparation', value: summary.preparations });
+  }
+  lines.push({ key: 'total', label: 'Total No. of Units', description: totalDescription, units: summary.totalUnitsText, hours: summary.totalHoursText, strong: true });
+  // A card has no empty template lines — only lines that say something
+  return lines.filter(l => l.strong || l.key === 'units' || !!(l.description || l.units || l.hours || l.value));
+}
+
+/** Phones / small tablets: each class as a card, grouped by day and time of day, then the summary. */
+function FormCards({
+  groups, bySlot, summaryLines,
+}: {
+  groups: OfficialGroup[];
+  bySlot: Map<string, OfficialFormRow[]>;
+  summaryLines: CardSummaryLine[];
+}) {
+  const filled = groups
+    .map(group => ({
+      group,
+      rows: group.slots
+        .flatMap(slot => (bySlot.get(slot.id) ?? []).map(row => ({ row, start: row.rangeStartMin ?? slot.startMin, slotLabel: slot.timeLabel })))
+        .sort((a, b) => a.start - b.start),
+    }))
+    .filter(g => g.rows.length > 0);
+
+  return (
+    <div className="space-y-4">
+      {filled.length === 0 && (
+        <p className="px-4 py-6 text-center text-sm text-[#64748B]">No scheduled classes yet.</p>
+      )}
+      {filled.map(({ group, rows }) => (
+        <section key={group.id} className="space-y-2.5">
+          {/* Same codes as Scheduling (MTh, TF, W), so no capitals */}
+          <h3 className="px-1 text-[13px] font-bold text-[#475569]">
+            {group.label.replace('/', ' · ')}
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {rows.map(({ row, slotLabel }) => {
+              const { title, kind } = splitComponent(row.description);
+              return (
+                <div key={row.key} className="rounded-xl border border-[#E2E8F0] bg-white px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.05)]">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="text-sm font-semibold text-[#0B2A5B] tabular-nums">{row.timeLabel || slotLabel}</p>
+                    <BlockBadge course={row.course} />
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                    <span className="text-base font-bold text-[#0F172A]">{row.subjectCode}</span>
+                    {kind && <ComponentChip kind={kind} />}
+                  </div>
+                  <p className="text-sm text-[#334155] mt-0.5 break-words">{title}</p>
+                  <dl className="mt-2.5 grid grid-cols-3 gap-2 text-center">
+                    {([['Units', row.units], ['Hours', row.hours], ['Room', row.room || '—']] as const).map(([k, v]) => (
+                      <div key={k} className="rounded-lg bg-[#F8FAFC] px-1.5 py-1.5 min-w-0">
+                        <dt className="text-[11px] font-semibold uppercase tracking-wide text-[#64748B]">{k}</dt>
+                        <dd className="text-sm font-bold text-[#0B2A5B] truncate tabular-nums">{v || '—'}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  {row.action && <div className="mt-2.5 flex flex-wrap gap-2">{row.action}</div>}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ))}
+
+      {summaryLines.length > 0 && <dl className="rounded-xl border border-[#E2E8F0] bg-white divide-y divide-[#F1F5F9] overflow-hidden">
+        {summaryLines.map(l => (
+          <div key={l.key} className={`flex items-start justify-between gap-3 px-4 py-2.5 ${l.strong ? 'bg-[#F8FAFC]' : ''}`}>
+            <dt className="min-w-0">
+              <span className={`block text-sm ${l.strong ? 'font-bold text-[#0B2A5B]' : 'font-semibold text-[#334155]'}`}>{l.label}</span>
+              {l.description && <span className="block text-xs text-[#64748B] mt-0.5 break-words">{l.description}</span>}
+            </dt>
+            <dd className={`flex-shrink-0 text-right tabular-nums ${l.strong ? 'text-base font-bold text-[#0B2A5B]' : 'text-sm font-semibold text-[#0B2A5B]'}`}>
+              {l.value ? <span className="block">{l.value}</span> : null}
+              {l.units ? <span className="block">{l.units} <span className="text-xs font-semibold text-[#64748B]">units</span></span> : null}
+              {l.hours ? <span className="block text-xs font-semibold text-[#64748B]">{l.hours} hrs</span> : null}
+            </dd>
+          </div>
+        ))}
+      </dl>}
+    </div>
+  );
+}
+
 export default function OfficialWorkloadFormTable({
   rows,
   summary,
@@ -226,6 +334,8 @@ export default function OfficialWorkloadFormTable({
   showEmptySlots = true,
   /** The semester's day/time groups (buildOfficialGroups) — must match the rows' slotIds */
   groups = OFFICIAL_GROUPS,
+  /** Below lg, show cards instead of the wide (swipe) table — the table still prints */
+  phoneCards = false,
 }: {
   rows: OfficialFormRow[];
   summary?: OfficialFormSummary | null;
@@ -233,6 +343,7 @@ export default function OfficialWorkloadFormTable({
   variant?: OfficialTableVariant;
   showEmptySlots?: boolean;
   groups?: OfficialGroup[];
+  phoneCards?: boolean;
 }) {
   const reduceMotion = useReducedMotion();
   const colCount = showActions ? 9 : 8;
@@ -324,9 +435,11 @@ export default function OfficialWorkloadFormTable({
    */
   return (
     <div className="min-w-0 max-w-full">
-      <p className="lg:hidden no-print text-xs text-slate-500 mb-1.5 leading-snug">
-        Swipe left or right to view all columns
-      </p>
+      {!phoneCards && (
+        <p className="lg:hidden no-print text-xs text-slate-500 mb-1.5 leading-snug">
+          Swipe left or right to view all columns
+        </p>
+      )}
 
       {/* "Other" subjects — not yet classified into Workload/Overload/Praise Load.
           Schedule details (day/time/room) are irrelevant to that decision, so this
@@ -430,7 +543,17 @@ export default function OfficialWorkloadFormTable({
         )}
       </AnimatePresence>
 
-      <div className="bg-white w-full max-w-full min-w-0 overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
+      {phoneCards && (
+        <div className="lg:hidden print:hidden">
+          <FormCards
+            groups={groups}
+            bySlot={bySlot}
+            summaryLines={summary ? cardSummaryLines(summary, variant, totalDescription) : []}
+          />
+        </div>
+      )}
+
+      <div className={`bg-white w-full max-w-full min-w-0 overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch] ${phoneCards ? 'hidden lg:block print:block' : ''}`}>
         <table className={tableClassName}>
           {colgroupEl}
           {theadEl}

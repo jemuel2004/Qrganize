@@ -13,6 +13,7 @@ import SystemLogo from '@/components/ui/SystemLogo';
 import { useScrollLock } from '@/hooks/useScrollLock';
 import { logoHover, logoTap, NAV_DURATION, NAV_EASE } from '@/components/layout/navMotion';
 import { useSchedulingPendingCounts } from '@/hooks/useSchedulingPendingCounts';
+import { useNavTrail } from '@/lib/navTrail';
 
 /**
  * Admin chrome: sticky top navigation + full-width content.
@@ -24,6 +25,8 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
   const [role, setRole] = useState('admin');
   const isWorkloadPrint = pathname === '/workload/print' || pathname.startsWith('/workload/print/');
   const pendingCounts = useSchedulingPendingCounts();
+  // Back buttons return to the page this tab came from
+  useNavTrail(pathname, adminHomeHref(role));
 
   useEffect(() => {
     setMobileOpen(false);
@@ -64,7 +67,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
     <NotificationProvider role={role === 'program_chair' || role === 'department_chair' ? role : 'admin'}>
       <div className="flex flex-col h-screen overflow-hidden dashboard-layout-root">
         <header className="qr-app-header sticky top-0 flex-shrink-0 z-40 bg-[#12408F] isolate no-print">
-          <div className="h-[72px] flex items-center gap-6 px-4 sm:px-6 min-w-0">
+          <div className="h-[72px] flex items-center gap-3 sm:gap-6 px-4 sm:px-6 min-w-0">
             <motion.div
               className="flex-shrink-0"
               whileHover={
@@ -83,7 +86,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
                 className="flex items-center gap-2 min-w-0 flex-shrink-0 rounded-md px-1 py-0.5 -ml-1 transition-colors duration-150 hover:bg-white/10 cursor-pointer"
               >
                 <SystemLogo size={56} />
-                <span className="text-[16px] font-semibold text-white tracking-tight">
+                <span className="max-[359px]:hidden text-[16px] font-semibold text-white tracking-tight">
                   QRganize
                 </span>
               </Link>

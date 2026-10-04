@@ -2,11 +2,13 @@
 
 import { useRouter } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
+import { backTarget } from '@/lib/navTrail';
 
 /**
  * Returns to wherever the user actually came from (router.back()),
  * not a hardcoded route — keeps entry point (Dashboard, a workflow
- * step, another list page, etc.) intact.
+ * step, another list page, etc.) intact. A page opened fresh, with no
+ * earlier page in the app, goes to the home page instead of leaving the app.
  */
 export default function BackButton({
   label = 'Back',
@@ -25,7 +27,11 @@ export default function BackButton({
   return (
     <button
       type="button"
-      onClick={() => router.back()}
+      onClick={() => {
+        const target = backTarget();
+        if (target === 'back') router.back();
+        else router.push(target);
+      }}
       className={`inline-flex items-center gap-2 -ml-2.5 mb-2.5 min-h-10 px-3 py-2 rounded-xl text-[15px] font-semibold transition-colors cursor-pointer ${variantClass} ${className}`}
     >
       <ChevronLeft className="w-5 h-5" /> {label}
