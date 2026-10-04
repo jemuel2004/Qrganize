@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { query, transaction } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import bcrypt from 'bcryptjs';
-import { classifyFacultyPgError, parsePosition, resolveRequiredProgramId } from '@/services/facultyValidation';
+import { classifyFacultyPgError, parsePosition, resolveOptionalProgramId } from '@/services/facultyValidation';
 import { ensureFacultyProfileColumns, resetFacultyProfileColumns } from '@/database/schema-guard';
 import { regularUnitsCap } from '@shared/regularLoad';
 import { getWorkloadPolicy, sqlNumber } from '@/services/workloadPolicy';
@@ -62,12 +62,6 @@ export async function GET(req: NextRequest) {
     sql += ' ORDER BY f.name';
 
     const result = await query(sql, params);
-    const incomplete = result.rows.filter((r: { program_id: number | null }) => r.program_id == null);
-    if (process.env.NODE_ENV !== 'production' && incomplete.length > 0) {
-      console.warn(
-        `[GET /api/faculty] ${incomplete.length} faculty record(s) missing program_id (ids: ${incomplete.map((r: { id: number }) => r.id).join(', ')}). Assign a Program when editing these records.`
-      );
-    }
     return NextResponse.json({ faculty: result.rows });
   } catch (error) {
     console.error('[GET /api/faculty]', error);
@@ -116,10 +110,11 @@ async function POST_handler(req: NextRequest) {
     const pos = parsePosition(position);
     if (!pos.ok)
       return NextResponse.json({ error: pos.error.error, field: pos.error.field }, { status: 400 });
-    const program = await resolveRequiredProgramId(program_id);
+    // Program is optional — a faculty member may belong to no single program
+    const program = await resolveOptionalProgramId(program_id);
     if (!program.ok)
       return NextResponse.json({ error: program.error.error, field: program.error.field }, { status: 400 });
-    if (!(await canAccessProgram(auth, program.id))) {
+    if (program.id != null && !(await canAccessProgram(auth, program.id))) {
       return NextResponse.json(
         { error: 'You can only add faculty to your assigned program.', field: 'program_id' },
         { status: 403 }

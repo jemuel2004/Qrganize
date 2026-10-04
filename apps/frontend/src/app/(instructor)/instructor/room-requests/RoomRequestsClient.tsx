@@ -33,6 +33,8 @@ interface Schedule {
   subject_name: string;
   lecture_hours: number;
   laboratory_hours: number;
+  /** Major subject with a Lecture and a Laboratory — both stay in one laboratory room */
+  one_room?: boolean;
   total_hours: number;
   units: number;
   block_name: string;
@@ -687,10 +689,12 @@ export default function RoomRequestsClient() {
 
   const selectedSchedule = validSchedules.find(s => String(s.id) === selectedScheduleId) ?? null;
   /** Lecture-only subjects may only use lecture rooms, laboratory-only subjects
-   *  only laboratory rooms (same rules as the server) */
+   *  only laboratory rooms, and a Major subject's Lecture + Laboratory share one
+   *  laboratory (same rules as the server) */
   const lectureOnly = !!selectedSchedule && !(parseFloat(String(selectedSchedule.laboratory_hours)) > 0);
   const labOnly = !!selectedSchedule && !(parseFloat(String(selectedSchedule.lecture_hours)) > 0);
-  const lockedGroup: RoomGroup | null = lectureOnly ? 'lab' : labOnly ? 'lec' : null;
+  const oneRoom = selectedSchedule?.one_room === true;
+  const lockedGroup: RoomGroup | null = lectureOnly ? 'lab' : labOnly || oneRoom ? 'lec' : null;
 
   // Check every room against each of the selected class's sessions
   useEffect(() => {
@@ -1022,7 +1026,7 @@ export default function RoomRequestsClient() {
                               <span className="flex-1 min-w-0">
                                 <span className="block text-sm font-semibold text-[color:var(--foreground)]">{label}</span>
                                 {locked
-                                  ? <span className="block text-xs font-medium text-[color:var(--foreground-muted)]">Not allowed for a {key === 'lab' ? 'lecture' : 'laboratory'} subject</span>
+                                  ? <span className="block text-xs font-medium text-[color:var(--foreground-muted)]">{oneRoom ? 'Not allowed — a Major subject keeps its Lecture and Lab in one lab' : `Not allowed for a ${key === 'lab' ? 'lecture' : 'laboratory'} subject`}</span>
                                   : picked && <span className="block text-xs font-medium truncate" style={{ color: fg }}>{picked.room_name}</span>}
                               </span>
                               <motion.span

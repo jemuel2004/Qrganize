@@ -6,6 +6,7 @@ import { getWorkloadPolicy } from '@/services/workloadPolicy';
 import { canAccessProgram } from '@/services/programScope';
 import { ensurePraiseSplitColumn } from '@/services/praiseSplit';
 import { ensureSessionTypes } from '@/services/sessionTypeRepair';
+import { needsOneRoomSql } from '@shared/subjectCategory';
 
 /* Module-level flags — DDL and one-time data migrations run once per cold start,
  * not on every request. Avoids unnecessary write overhead on every GET. */
@@ -77,6 +78,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ facu
         c.units as curriculum_units, c.total_hours as curriculum_total_hours,
         c.lecture_hours, c.laboratory_hours,
         c.subject_category,
+        -- Major subject with Lecture + Laboratory: both parts use one room (Scheduling enforces it)
+        ${needsOneRoomSql('c')} AS one_room,
         b.id as block_id, b.block_name, b.year_level, b.semester as block_semester, b.academic_year as block_academic_year,
         b.number_of_students,
         p.code as program_code,

@@ -4,6 +4,7 @@ import { query } from '@/database/db';
 import { expireStaleOccupancy, expireStaleRoomRequests } from '@/services/ensureRoomOccupancy';
 import { createNotification } from '@/services/notifications';
 import { withAudit } from '@/services/audit';
+import { needsOneRoomSql } from '@shared/subjectCategory';
 
 /* ─── GET /api/instructor/room-requests ─────────────────────────────────────
    Returns the faculty's full request history with subject, sessions, and
@@ -158,6 +159,7 @@ async function POST_handler(req: NextRequest) {
         c.subject_name,
         COALESCE(c.lecture_hours, 0)           AS lecture_hours,
         COALESCE(c.laboratory_hours, 0)        AS laboratory_hours,
+        ${needsOneRoomSql('c')}              AS one_room,
         b.block_name,
         b.academic_year,
         b.semester,
@@ -184,6 +186,7 @@ async function POST_handler(req: NextRequest) {
         )
       GROUP BY ms.id, ms.faculty_id, ms.room_id, r.room_name,
                c.subject_code, c.subject_name, c.lecture_hours, c.laboratory_hours,
+               c.subject_category, c.subject_category_manual,
                b.block_name, b.academic_year, b.semester
     `, [master_schedule_id, facultyId]);
 
@@ -229,6 +232,16 @@ async function POST_handler(req: NextRequest) {
     if (!isLabRoom && !(Number(sched.lecture_hours) > 0)) {
       return NextResponse.json(
         { error: `${sched.subject_code} is a laboratory subject, so it can only use a laboratory room. Please choose a laboratory room.` },
+        { status: 400 },
+      );
+    }
+
+    /* 5d. A Major subject's Lecture and Laboratory share one room — a lecture
+          room could only take the Lecture, so the class can only move to a
+          laboratory room (services/majorRoomRule.ts) */
+    if (!isLabRoom && sched.one_room) {
+      return NextResponse.json(
+        { error: `${sched.subject_code} is a Major subject, so its Lecture and Laboratory stay in one room. Please choose a laboratory room.` },
         { status: 400 },
       );
     }

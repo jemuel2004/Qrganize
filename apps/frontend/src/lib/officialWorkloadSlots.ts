@@ -174,13 +174,29 @@ export function buildOfficialGroups(
   return groups;
 }
 
-/** Every day pattern a set of loads is scheduled on (whole class, Lec and Lab). */
+/**
+ * Every day pattern the form's rows sit on. Each Lecture / Laboratory row is
+ * placed by its own days, and by the class's day_pattern only when it has none
+ * — so the same rule picks the sections. The class's day_pattern can hold both
+ * parts' days together (Lec Mon/Thu + Lab Tue/Fri → "Mon/Tue/Thu/Fri", as the
+ * workload import saves it); no row is on that set, so it gets no section.
+ */
 export function loadDayPatterns(
-  loads: readonly { day_pattern?: string | null; lec_day_pattern?: string | null; lab_day_pattern?: string | null }[] | null | undefined,
+  loads: readonly {
+    day_pattern?: string | null; lec_day_pattern?: string | null; lab_day_pattern?: string | null;
+    lecture_hours?: number | string | null; laboratory_hours?: number | string | null;
+  }[] | null | undefined,
 ): string[] {
   const out = new Set<string>();
   for (const l of loads ?? []) {
-    for (const p of [l.day_pattern, l.lec_day_pattern, l.lab_day_pattern]) if (p) out.add(p);
+    const lec = parseFloat(String(l.lecture_hours)) || 0;
+    const lab = parseFloat(String(l.laboratory_hours)) || 0;
+    // The parts that get rows, as on the form: both for a Lec + Lab subject, else its one part
+    const parts: ('lec' | 'lab')[] = lec > 0 && lab > 0 ? ['lec', 'lab'] : [lec > 0 ? 'lec' : 'lab'];
+    for (const part of parts) {
+      const p = (part === 'lec' ? l.lec_day_pattern : l.lab_day_pattern) ?? l.day_pattern;
+      if (p) out.add(p);
+    }
   }
   return [...out];
 }

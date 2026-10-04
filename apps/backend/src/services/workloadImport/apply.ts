@@ -6,6 +6,7 @@ import { ensureRealtimeTable } from '@/database/realtimeSchema';
 import { dayCombinationError, type WeekDay } from '@shared/dayCombination';
 import { maxDeductionUnits } from '@shared/regularLoad';
 import { parseWorkloadSheet, roomKey } from '@shared/workloadImport';
+import { needsOneRoomSql } from '@shared/subjectCategory';
 import { findScheduleConflicts, type ScheduleConflict } from '@/services/scheduleConflicts';
 import { generateRoomQr } from '@/services/roomQr';
 import { getWorkloadPolicy } from '@/services/workloadPolicy';
@@ -762,6 +763,12 @@ const uniqueMessages = (list: ScheduleConflict[]) => [...new Set(list.map(c => c
  * together: that room when it suits and is free for both, else one free room
  * that suits both (a laboratory). Only when no room fits both are the parts
  * placed one by one.
+ *
+ * A Major subject's Lecture and Laboratory always share one laboratory, even
+ * when the form writes different rooms (services/majorRoomRule.ts): the
+ * Laboratory's room first, then the Lecture's, then a free laboratory for
+ * both. When none fits both, the Laboratory is placed and the Lecture joins
+ * its room where that is free, or stays without a room — never a second room.
  */
 async function assignRooms(ctx: PlacementContext, tasks: RoomTask[], report: ImportReport): Promise<void> {
   const desires = tasks.map((t, i) => ({ i, roomId: ctx.roomIdOf(t.wanted), sessions: t.sessions }));
@@ -814,10 +821,20 @@ async function assignRooms(ctx: PlacementContext, tasks: RoomTask[], report: Imp
     }
   }
 
-  /** Lecture + Laboratory written in the same room: one room for both, or false when none fits both */
-  async function placeTogether(parts: RoomTask[], wanted: number): Promise<boolean> {
+  const otherPartName = (task: RoomTask) => (task.comp.type === 'lec' ? 'Laboratory' : 'Lecture');
+  const roomNameOf = (roomId: number | null, task?: RoomTask) =>
+    (roomId != null ? ctx.rooms.get(roomId)?.name : null) ?? task?.wanted?.excelText ?? 'no room';
+
+  /**
+   * Lecture + Laboratory in one room (written in the same room, or a Major
+   * subject): a room the form gives them — the Laboratory's first — when it
+   * suits and is free for both, else one free room that suits both; false when
+   * none fits both.
+   */
+  async function placeTogether(parts: RoomTask[]): Promise<boolean> {
     const { cls } = parts[0];
     const sessions = parts.flatMap(p => p.sessions);
+    const lab = parts.find(p => p.comp.type === 'lab') ?? parts[0];
     const suitsAll = (roomId: number) => parts.every(p => !roomProblem(ctx, cls, p.comp, roomId));
     const firstClash = async (roomId: number) => {
       for (const p of parts) {
@@ -826,27 +843,69 @@ async function assignRooms(ctx: PlacementContext, tasks: RoomTask[], report: Imp
       }
       return undefined;
     };
-    const name = ctx.rooms.get(wanted)?.name ?? parts[0].wanted?.excelText ?? '';
-    const problem = parts.map(p => roomProblem(ctx, cls, p.comp, wanted)).find(Boolean) ?? null;
-    const taken = problem ? undefined : await firstClash(wanted);
-    if (!problem && !taken) {
-      for (const p of parts) { await place(p, wanted); noteOutsideUse(p, wanted, name); }
-      return true;
+    const wantedRooms = [...new Set([lab, ...parts].map(p => ctx.roomIdOf(p.wanted)).filter((id): id is number => id != null))];
+    let reason: string | null = null;
+    let taken = false;
+    for (const roomId of wantedRooms) {
+      const problem = parts.map(p => roomProblem(ctx, cls, p.comp, roomId)).find(Boolean) ?? null;
+      // A part the form puts in another room joins only when no other class's form wants this one then
+      const wantedElsewhere = parts.some(p => ctx.roomIdOf(p.wanted) !== roomId
+        && (reserved(roomId, p.sessions) || externalRoomUse(ctx, roomId, p.sessions)));
+      const clash = problem || wantedElsewhere ? undefined : await firstClash(roomId);
+      if (!problem && !wantedElsewhere && !clash) {
+        for (const p of parts) {
+          await place(p, roomId);
+          const own = ctx.roomIdOf(p.wanted);
+          if (own === roomId) noteOutsideUse(p, roomId, roomNameOf(roomId, p));
+          else p.outcome.roomNotes.push(`${roomNameOf(own, p)} → ${roomNameOf(roomId)}: kept in one room with its ${otherPartName(p)} (Major subject)`);
+        }
+        if (taken) { report.conflicts.roomDetected++; report.conflicts.roomResolved++; }
+        return true;
+      }
+      reason ??= problem ?? clash?.message ?? `${roomNameOf(roomId)} is written on another class's form at that time`;
+      if (clash) taken = true;
     }
     // One free room that suits both parts — the kind the Laboratory needs
-    const lab = parts.find(p => p.comp.type === 'lab') ?? parts[0];
-    for (const room of alternativeRooms(ctx, cls, lab.comp, wanted)) {
+    for (const room of alternativeRooms(ctx, cls, lab.comp, wantedRooms[0])) {
+      if (wantedRooms.includes(room.id)) continue;
       if (!suitsAll(room.id) || reserved(room.id, sessions) || externalRoomUse(ctx, room.id, sessions)) continue;
       if (await firstClash(room.id)) continue;
-      const reason = problem ?? taken!.message;
       for (const p of parts) {
         await place(p, room.id);
-        p.outcome.roomNotes.push(`${name} → ${room.name}: ${reason}; kept in one room with its ${p.comp.type === 'lec' ? 'Laboratory' : 'Lecture'}`);
+        p.outcome.roomNotes.push(`${roomNameOf(ctx.roomIdOf(p.wanted), p)} → ${room.name}: ${reason}; kept in one room with its ${otherPartName(p)}`);
       }
       if (taken) { report.conflicts.roomDetected++; report.conflicts.roomResolved++; }
       return true;
     }
     return false;
+  }
+
+  /**
+   * A Major subject's part placed on its own: it goes into the room its other
+   * part already has, where that room is free — otherwise it stays without a
+   * room (Lecture and Laboratory never get two rooms). When the other part has
+   * no room yet, it is placed as usual (in a laboratory).
+   */
+  async function joinClassRoom(task: RoomTask, wanted: number) {
+    const pair = (await ctx.q(
+      `SELECT room_id FROM schedule_sessions
+        WHERE master_schedule_id = $1 AND COALESCE(type, 'lec') <> $2 AND room_id IS NOT NULL
+        ORDER BY id LIMIT 1`, [task.msId, task.comp.type])).rows[0];
+    if (!pair) { await placeOne(task, wanted); return; }
+    const roomId = Number(pair.room_id);
+    const problem = roomProblem(ctx, task.cls, task.comp, roomId);
+    const clash = problem ? undefined : (await roomConflicts(ctx, task, roomId))[0];
+    if (!problem && !clash) {
+      await place(task, roomId);
+      if (roomId === wanted) noteOutsideUse(task, roomId, roomNameOf(roomId, task));
+      else task.outcome.roomNotes.push(`${roomNameOf(wanted, task)} → ${roomNameOf(roomId)}: kept in one room with its ${otherPartName(task)} (Major subject)`);
+      return;
+    }
+    if (clash) report.conflicts.roomDetected++;
+    const why = `a Major subject's Lecture and Laboratory share one room, and ${roomNameOf(roomId)} (its ${otherPartName(task)}'s room) can't be used (${problem ?? clash!.message})`;
+    task.outcome.roomNotes.push(`${roomNameOf(wanted, task)} not used: ${why} — left without a room`);
+    report.issues.push({ level: 'review', topic: 'Room', faculty: task.cls.facultyLabel,
+      message: `${task.cls.subject.code} ${task.cls.programCode} ${task.cls.year}${task.cls.block} ${task.comp.type === 'lec' ? 'Lecture' : 'Laboratory'} ${describeSessions(task.sessions)}: left without a room — ${why}.` });
   }
 
   for (let i = 0; i < tasks.length; i++) {
@@ -855,19 +914,30 @@ async function assignRooms(ctx: PlacementContext, tasks: RoomTask[], report: Imp
     done.add(i);
     const wanted = ctx.roomIdOf(task.wanted);
     if (wanted == null) continue; // blank on the form
-    // The class's other part written in the same room → they are meant to share it
+    // The class's other part written in the same room → they are meant to share it.
+    // A Major subject's Lecture and Laboratory always share one room.
+    const oneRoom = task.cls.subject.oneRoom;
     const partners: number[] = [];
     tasks.forEach((t, j) => {
-      if (!done.has(j) && t.msId === task.msId && t.comp.type !== task.comp.type && ctx.roomIdOf(t.wanted) === wanted) partners.push(j);
+      const own = ctx.roomIdOf(t.wanted);
+      if (!done.has(j) && t.msId === task.msId && t.comp.type !== task.comp.type && own != null && (oneRoom || own === wanted)) partners.push(j);
     });
     if (partners.length) {
       for (const j of partners) done.add(j);
       const parts = [task, ...partners.map(j => tasks[j])];
-      if (await placeTogether(parts, wanted)) continue;
+      if (await placeTogether(parts)) continue;
+      if (oneRoom) {
+        // No room fits both: the Laboratory is placed, the Lecture joins its room where it can
+        const lab = parts.find(p => p.comp.type === 'lab') ?? parts[0];
+        await placeOne(lab, ctx.roomIdOf(lab.wanted)!);
+        for (const p of parts) if (p !== lab) await joinClassRoom(p, ctx.roomIdOf(p.wanted)!);
+        continue;
+      }
       for (const p of parts) await placeOne(p, wanted);
       continue;
     }
-    await placeOne(task, wanted);
+    if (oneRoom) await joinClassRoom(task, wanted);
+    else await placeOne(task, wanted);
   }
   // Room names on the outcome, and the class's main room for the workload pages
   for (const task of tasks) {
@@ -900,6 +970,7 @@ function roomConflicts(ctx: PlacementContext, task: RoomTask, roomId: number) {
 function requiredRoomType(cls: PlannedClass, comp: PlannedComponent): 'Laboratory' | 'Lecture' | null {
   if (comp.type === 'lab') return 'Laboratory';
   if (cls.subject.labHours <= 0) return 'Lecture';
+  if (cls.subject.oneRoom) return 'Laboratory'; // a Major subject's Lecture shares its Laboratory's room
   return null; // the Lecture of a Lec + Lab subject may use either
 }
 
@@ -910,6 +981,9 @@ function roomProblem(ctx: PlacementContext, cls: PlannedClass, comp: PlannedComp
   const isLab = room.type === 'Laboratory' || room.type === 'Computer Lab';
   if (comp.type === 'lab' && !isLab) return `a Laboratory session needs a laboratory room (${room.name} is a ${room.type} room)`;
   if (comp.type === 'lec' && isLab && cls.subject.labHours <= 0) return `${cls.subject.code} is lecture-only, so it can't use a laboratory room`;
+  if (comp.type === 'lec' && !isLab && cls.subject.oneRoom) {
+    return `${cls.subject.code} is a Major subject, so its Lecture shares its Laboratory's room (${room.name} is a ${room.type} room)`;
+  }
   return null;
 }
 
@@ -1021,6 +1095,35 @@ async function validate(q: Q, term: ImportTerm, plan: ImportPlan, facultyIds: Ma
          OR (t.type = 'lec' AND COALESCE(t.laboratory_hours,0) = 0 AND r.room_type IN ('Laboratory','Computer Lab'))
          OR COALESCE(r.status,'Active') <> 'Active'`, p)).rows,
     r => `${r.subject_code} ${r.type} in ${r.room_name}`);
+  add('Major subjects keep their Lecture and Laboratory in one laboratory room', (await q(
+    `SELECT c.subject_code, b.block_name, string_agg(DISTINCT r.room_name, ', ') AS rooms
+       FROM schedule_sessions ss
+       JOIN master_schedule ms ON ms.id = ss.master_schedule_id
+       JOIN block_subjects bs ON bs.id = ms.block_subject_id
+       JOIN curriculums c ON c.id = bs.curriculum_id
+       JOIN blocks b ON b.id = bs.block_id
+       JOIN rooms r ON r.id = ss.room_id
+      WHERE ms.faculty_id IS NOT NULL AND ms.status IN ('Assigned','Scheduled','Completed')
+        AND b.semester = $1 AND b.academic_year = $2 AND ${needsOneRoomSql('c')}
+      GROUP BY ms.id, c.subject_code, b.block_name
+     HAVING COUNT(DISTINCT ss.room_id) > 1 OR bool_or(r.room_type NOT IN ('Laboratory', 'Computer Lab'))`, p)).rows,
+    r => `${r.subject_code} ${r.block_name}: ${r.rooms}`);
+  add('Major subjects meet on the same days for Lecture and Laboratory', (await q(
+    `SELECT c.subject_code, b.block_name,
+            string_agg(DISTINCT CASE WHEN ss.type = 'lec' THEN LEFT(ss.day_of_week, 3) END, '/') AS lec_days,
+            string_agg(DISTINCT CASE WHEN ss.type = 'lab' THEN LEFT(ss.day_of_week, 3) END, '/') AS lab_days
+       FROM schedule_sessions ss
+       JOIN master_schedule ms ON ms.id = ss.master_schedule_id
+       JOIN block_subjects bs ON bs.id = ms.block_subject_id
+       JOIN curriculums c ON c.id = bs.curriculum_id
+       JOIN blocks b ON b.id = bs.block_id
+      WHERE ms.faculty_id IS NOT NULL AND ms.status IN ('Assigned','Scheduled','Completed')
+        AND b.semester = $1 AND b.academic_year = $2 AND ${needsOneRoomSql('c')}
+      GROUP BY ms.id, c.subject_code, b.block_name
+     HAVING bool_or(ss.type = 'lec') AND bool_or(ss.type = 'lab')
+        AND array_agg(DISTINCT ss.day_of_week) FILTER (WHERE ss.type = 'lec')
+            IS DISTINCT FROM array_agg(DISTINCT ss.day_of_week) FILTER (WHERE ss.type = 'lab')`, p)).rows,
+    r => `${r.subject_code} ${r.block_name}: Lec ${r.lec_days} · Lab ${r.lab_days}`);
   add('No duplicate sessions', (await q(
     `WITH t AS (${termSessions}) SELECT ms, day, start_time::text AS s, type, COUNT(*) AS n FROM t GROUP BY ms, day, start_time, type HAVING COUNT(*) > 1`, p)).rows,
     r => `ms ${r.ms} ${r.day} ${r.s} ${r.type} ×${r.n}`);
@@ -1054,9 +1157,10 @@ async function validate(q: Q, term: ImportTerm, plan: ImportPlan, facultyIds: Ma
       GROUP BY program_id, year_level, block_name, curriculum_version HAVING COUNT(*) > 1`, p)).rows,
     r => `${r.year_level} ${r.block_name} ×${r.c}`);
   const ids = [...facultyIds.values()];
-  add('Imported faculty have a name, program and account', (await q(
+  // Program is optional for faculty — only the name and the sign-in account must be there
+  add('Imported faculty have a name and account', (await q(
     `SELECT f.id, f.name FROM faculty f LEFT JOIN instructor_accounts ia ON ia.faculty_id = f.id
-      WHERE f.id = ANY($1::int[]) AND (COALESCE(TRIM(f.name), '') = '' OR ia.id IS NULL OR COALESCE(ia.password_hash, '') = '' OR f.program_id IS NULL)`, [ids])).rows,
+      WHERE f.id = ANY($1::int[]) AND (COALESCE(TRIM(f.name), '') = '' OR ia.id IS NULL OR COALESCE(ia.password_hash, '') = '')`, [ids])).rows,
     r => `#${r.id} ${r.name}`);
   const created = report.rooms.created.map(r => r.name.toUpperCase());
   const blankCreated = report.rooms.created.filter(r => !plan.newRooms.some(n => n.name === r.name));

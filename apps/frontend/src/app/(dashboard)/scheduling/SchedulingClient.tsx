@@ -14,7 +14,7 @@ import {
   AlertTriangle, CheckCircle, Clock, Trash2, X,
   RefreshCw, Save, Search,
   ChevronLeft, XCircle, Loader2, AlertCircle,
-  CalendarDays, Eye, ShieldCheck, FileClock, ArrowRight, ChevronDown, Maximize2, Minimize2,
+  CalendarDays, Eye, ShieldCheck, FileClock, ArrowRight, ChevronDown, Maximize2, Minimize2, DoorOpen,
 } from 'lucide-react';
 import { ListSkeleton, TableSkeleton, Skeleton } from '@/components/ui/skeletons';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
@@ -28,7 +28,7 @@ import RoomPicker from '@/components/ui/RoomPicker';
 import DayPicker from '@/components/ui/DayPicker';
 import { TT_DAY_TONES, TT_TONE_MTH, TT_TONE_OVERLOAD, TT_TONE_SAT, TT_TONE_TF, TT_TONE_W, type DayTone } from '@/lib/dayTones';
 import { useDayCombinations } from '@/lib/dayCombinations';
-import { dayCombinationError, daysCode, daysLabel, matchCombination } from '@shared/dayCombination';
+import { dayCombinationError, daysCode, daysLabel, matchCombination, type WeekDay } from '@shared/dayCombination';
 import { blockCode, programBlockCode } from '@shared/blockCode';
 import { LOAD_GRACE_UNITS, formatLoadCap } from '@shared/regularLoad';
 import { asSessionList, fmt12, normTime, parseDays } from '@/lib/scheduleTime';
@@ -84,6 +84,8 @@ interface WorkloadLoad {
   lec_day_pattern?: string | null; lab_day_pattern?: string | null;
   /** All schedule_sessions for this subject (full multi-session truth). */
   sessions?: WorkloadSession[] | null;
+  /** Major subject with a Lecture and a Laboratory — both parts use one (laboratory) room */
+  one_room?: boolean;
 }
 interface WorkloadSummary {
   faculty: Faculty & { designation_type: string; designation_units: number };
@@ -517,9 +519,22 @@ function WeeklyTimetableGrid({
             const cardH = Math.max(34, Math.round(durationMins * TT_PX_PER_MIN) - 2);
             const isLab = label === 'Lab';
             const typeLabel = isLab ? 'Laboratory' : 'Lecture';
+            // Lecture or Laboratory — each card also shows its own room, so the meetings need no numbers
+            const partLabel = isLab ? 'Lab' : 'Lec';
             const isOverload = isOverloadSession(load, isLab ? 'lab' : 'lec');
             const tone = isOverload ? TT_TONE_OVERLOAD : toneOf(day);
             const roomLabel = room_name ?? 'No room assigned';
+            /* The room this meeting is held in — on every card, whatever its size */
+            const roomPill = (
+              <span
+                className={`inline-flex items-center gap-0.5 min-w-0 text-[11px] font-bold px-1.5 rounded border leading-[17px] ${
+                  room_name ? 'bg-white text-[#0B2A5B] border-[#CBD5E1]' : 'bg-amber-50 text-amber-700 border-amber-200'
+                }`}
+              >
+                <DoorOpen className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
+                <span className="truncate">{room_name ?? 'No room'}</span>
+              </span>
+            );
             const tooltip = [
               `${load.subject_code} — ${load.subject_name}${isOverload ? ' · OVERLOAD' : ''}`,
               `${fmt12(st)} – ${fmt12(et)}`,
@@ -571,10 +586,10 @@ Click for details`}
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span className="text-[13px] font-bold text-[#0F172A] truncate">{load.subject_code}</span>
                       <span
-                        className="flex-shrink-0 text-[10px] font-bold uppercase tracking-wide px-1.5 rounded"
+                        className="flex-shrink-0 text-[10px] font-bold uppercase tracking-wide px-1.5 rounded whitespace-nowrap"
                         style={{ color: tone.text, backgroundColor: '#FFFFFF', border: `1px solid ${tone.border}` }}
                       >
-                        {isLab ? 'Lab' : 'Lec'}
+                        {partLabel}
                       </span>
                       {load.block_name && (
                         <span className="flex-shrink-0 text-[11px] font-bold px-1.5 rounded bg-[#1E4FB8] leading-[17px] whitespace-nowrap" style={{ color: '#FFFFFF' }}>
@@ -582,8 +597,9 @@ Click for details`}
                         </span>
                       )}
                     </div>
-                    <div className="text-[12px] font-semibold tabular-nums text-[#0F172A] whitespace-nowrap">
-                      {fmt12(st)} – {fmt12(et)}
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="text-[12px] font-semibold tabular-nums text-[#0F172A] whitespace-nowrap">{fmt12(st)} – {fmt12(et)}</span>
+                      {roomPill}
                     </div>
                     {cardH >= 76 && (
                       <div className="text-[11px] text-[#475569] truncate">{load.subject_name}</div>
@@ -595,10 +611,10 @@ Click for details`}
                   <span className="text-[14px] font-bold text-[#0F172A] leading-tight break-words">{load.subject_code}</span>
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span
-                      className="flex-shrink-0 text-[10px] font-bold uppercase tracking-wide px-1.5 rounded"
+                      className="flex-shrink-0 text-[10px] font-bold uppercase tracking-wide px-1.5 rounded whitespace-nowrap"
                       style={{ color: tone.text, backgroundColor: '#FFFFFF', border: `1px solid ${tone.border}` }}
                     >
-                      {isLab ? 'Lab' : 'Lec'}
+                      {partLabel}
                     </span>
                     {/* Block — same royal-blue badge as the subject cards */}
                     {load.block_name && (
@@ -615,15 +631,10 @@ Click for details`}
                   <div className={`text-[12px] text-[#334155] leading-snug ${cardH >= 130 ? 'line-clamp-2' : 'truncate'}`}>
                     {load.subject_name}
                   </div>
-                  <div className="text-[12px] font-semibold tabular-nums text-[#0F172A] whitespace-nowrap">
-                    {fmt12(st)} – {fmt12(et)}
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="text-[12px] font-semibold tabular-nums text-[#0F172A] whitespace-nowrap">{fmt12(st)} – {fmt12(et)}</span>
+                    {roomPill}
                   </div>
-                  {/* Type · room — only on cards tall enough (2 hr+) to fit it under the title */}
-                  {cardH >= 140 && (
-                    <div className={`text-[11px] font-medium truncate ${room_name ? 'text-[#475569]' : 'text-[#B45309]'}`}>
-                      {typeLabel}{room_name ? ` · ${room_name}` : ' · No room'}
-                    </div>
-                  )}
                 </div>
                 )}
               </div>
@@ -1272,6 +1283,11 @@ export default function SchedulingClient() {
   const [sessionConflicts, setSessionConflicts] = useState<ConflictInfo[]>([]);
   const [conflictsVerified, setConflictsVerified] = useState(false);
   const [checkingConflicts, setCheckingConflicts] = useState(false);
+  /** Major subject one-room check from the conflict preview, for the rooms it was run with (`key`) —
+   *  error: can't be saved; move: the other part follows into the room on saving */
+  const [roomRule, setRoomRule] = useState<{
+    key: string; error: string | null; move: { part: 'lec' | 'lab'; room_name: string } | null;
+  } | null>(null);
   /** Weekly Timetable modal — closed by default so Schedule Classes stays focused. */
   const [showTimetable, setShowTimetable] = useState(false);
   const [timetableEntered, setTimetableEntered] = useState(false);
@@ -1391,7 +1407,13 @@ export default function SchedulingClient() {
     prefillRef.current = saved.length > 0 ? { key: row.key, sessions: saved } : null;
     setSelLoad(row); setError(''); setSuccess('');
     setSessionConflicts([]); setConflictsVerified(false);
-    setSessions([]); setManualCount(saved.length > 0 ? saved.length : 1);
+    // A new part of a Major Lec + Lab class starts on the days its other part already uses
+    const pairDaysOf = row.load.one_room && saved.length === 0
+      ? WEEK_DAYS.filter(d => asSessionList<WorkloadSession>(row.load.sessions)
+          .some(x => (x.type === 'lab' ? 'lab' : 'lec') !== row.component && x.day === d))
+      : [];
+    if (pairDaysOf.length > 0) comboDaysRef.current = pairDaysOf;
+    setSessions([]); setManualCount(saved.length > 0 ? saved.length : pairDaysOf.length || 1);
     /* Selecting a subject just swaps already-loaded local state — no fetch —
        so without this it snapped instantly. A brief skeleton (same 2s as the
        Minor/Major subject-category switch) makes it feel like a deliberate,
@@ -1472,6 +1494,8 @@ export default function SchedulingClient() {
     // room) — only new rows start blank; hours are re-split evenly.
     setSessions(prev => {
       const keep = prev.filter(s => s.type === comp);
+      // Major subject: a new row takes the room the other rows already use (one room for the class)
+      const shared = selLoad.load.one_room ? keep.find(s => s.room_id)?.room_id : undefined;
       return Array.from({ length: manualCount }, (_, i) => {
         const old = keep[i];
         const start = old?.start_time || '07:00';
@@ -1481,7 +1505,7 @@ export default function SchedulingClient() {
           start_time: start,
           units: uPerSession, hours: hPerSession,
           end_time: addMinutes(start, Math.round(hPerSession * 60)),
-          type: comp, room_id: old ? old.room_id : pair ? String(pair.id) : '',
+          type: comp, room_id: old ? old.room_id : shared || (pair ? String(pair.id) : ''),
         };
       });
     });
@@ -1520,6 +1544,43 @@ export default function SchedulingClient() {
     else setLiveTick(t => t + 1);
     return Promise.all(jobs);
   }, { enabled: !facultyLoading && !fetchingW && !saving && !deleting });
+
+  /** Major subject with a Lecture and a Laboratory: every session of both parts
+   *  uses one room — picking a room for one part moves the other part too. */
+  const oneRoom = selLoad?.load.one_room === true;
+  /** …and both parts meet on the same days: the days its other part already uses (null = not scheduled yet) */
+  const pairDays: string[] | null = (() => {
+    if (!selLoad || !oneRoom) return null;
+    const days = WEEK_DAYS.filter(d => asSessionList<WorkloadSession>(selLoad.load.sessions)
+      .some(x => (x.type === 'lab' ? 'lab' : 'lec') !== selLoad.component && x.day === d));
+    return days.length > 0 ? days : null;
+  })();
+  const otherPartName = selLoad?.component === 'lab' ? 'Lecture' : 'Laboratory';
+  /** …and once its other part has a room, this part must use that same room — the only one offered */
+  const lockedRoom: Room | null = (() => {
+    if (!selLoad || !oneRoom) return null;
+    const used = asSessionList<WorkloadSession>(selLoad.load.sessions)
+      .find(x => (x.type === 'lab' ? 'lab' : 'lec') !== selLoad.component && x.room_id != null);
+    return used ? rooms.find(r => r.id === Number(used.room_id)) ?? null : null;
+  })();
+
+  /** Major subject: why a room can't also take the class's other part at its
+   *  saved times ('' = free). The class's own sessions don't count. */
+  function otherPartBusyWith(roomId: number): string {
+    if (!selLoad || !oneRoom) return '';
+    for (const o of asSessionList<WorkloadSession>(selLoad.load.sessions)) {
+      if ((o.type === 'lab' ? 'lab' : 'lec') === selLoad.component || !o.day || !o.start_time || !o.end_time) continue;
+      const start = timeToMinutes(normTime(o.start_time));
+      const end = sessionEndMinutes(o.start_time, o.end_time);
+      for (const b of roomBookings) {
+        if (Number(b.room_id) !== roomId || b.day !== o.day || Number(b.ms_id) === selLoad.load.ms_id) continue;
+        if (start < sessionEndMinutes(b.start_time, b.end_time) && end > timeToMinutes(normTime(b.start_time))) {
+          return `${selLoad.component === 'lec' ? 'Lab' : 'Lec'} time: ${b.subject_code} · ${[b.program_code, b.block_name].filter(Boolean).join(' ')} · ${DAY_SHORT[b.day] ?? b.day} ${fmt12(normTime(b.start_time))}`;
+        }
+      }
+    }
+    return '';
+  }
 
   /** Why a room can't be used for this session ('' = free). Ignores the
    *  component being edited (saving replaces its sessions). */
@@ -1666,28 +1727,39 @@ export default function SchedulingClient() {
        by hand keeps its own value from then on. */
     const idx = sessions.findIndex(s => s.id === id);
     const followed = key === 'start_time' || key === 'room_id';
-    if (idx > 0 && followed) manualSessionFields.current.add(`${id}:${key}`);
+    // Major subject: the room picked on any row is every row's room — no row keeps its own
+    const sharedRoom = key === 'room_id' && oneRoom;
+    if (idx > 0 && followed && !sharedRoom) manualSessionFields.current.add(`${id}:${key}`);
 
     setSessions(prev => {
+      // Picking a day — or a room — where the current time is already taken
+      // (by the instructor, the block, or that room) → jump to the first free start
+      const toFreeStart = (updated: SessionItem, all: SessionItem[]) => {
+        const free = freeStartTimes(updated, all);
+        if (free.length > 0 && !free.includes(updated.start_time)) {
+          updated.start_time = free[0];
+          updated.end_time = addMinutes(free[0], Math.round(toNum(updated.hours) * 60));
+        }
+      };
       let next = prev.map(s => {
         if (s.id !== id) return s;
         const updated = { ...s, [key]: val };
-        // Picking a day — or a room — where the current time is already taken
-        // (by the instructor, the block, or that room) → jump to the first free start
-        if ((key === 'day' || key === 'room_id') && val && updated.day) {
-          const free = freeStartTimes(updated, prev);
-          if (free.length > 0 && !free.includes(updated.start_time)) {
-            updated.start_time = free[0];
-            updated.end_time = addMinutes(free[0], Math.round(toNum(updated.hours) * 60));
-          }
-        }
+        if ((key === 'day' || key === 'room_id') && val && updated.day) toFreeStart(updated, prev);
         if (key === 'start_time') {
           updated.end_time = addMinutes(String(val), Math.round(toNum(updated.hours) * 60));
         }
         return updated;
       });
 
-      if (idx === 0 && followed) {
+      if (sharedRoom) {
+        const v = String(val);
+        next = next.map(s => {
+          if (s.id === id || s.room_id === v) return s;
+          const updated = { ...s, room_id: v };
+          if (v && updated.day) toFreeStart(updated, next);
+          return updated;
+        });
+      } else if (idx === 0 && followed) {
         const v = String(next[0][key as 'start_time' | 'room_id']);
         next = next.map((s, i) => {
           if (i === 0 || manualSessionFields.current.has(`${s.id}:${key}`)) return s;
@@ -1728,6 +1800,24 @@ export default function SchedulingClient() {
     [sessionConflicts],
   );
   const hasLabRoomMissing = selLoad?.component === 'lab' && sessions.some(s => !s.room_id);
+  /* Major subject with a Lecture and a Laboratory: the same days as its other
+     part and one room for every session. Wrong days or different rooms on the
+     rows are caught here at once; the server preview checks the room against
+     the other part's times (same check as the save). */
+  const roomsKey = selLoad ? `${selLoad.key}|${sessions.map(s => `${s.day}:${s.room_id}`).join(',')}` : '';
+  const ruleNow = roomRule && roomRule.key === roomsKey ? roomRule : null;
+  const chosenRoomIds = [...new Set(sessions.map(s => s.room_id).filter(Boolean))];
+  const myDays = WEEK_DAYS.filter(d => sessions.some(s => s.day === d));
+  const pairDaysText = pairDays ? daysLabel(pairDays as WeekDay[]) : '';
+  const daysRuleError = pairDays && selLoad && allDaysSet && sessions.length > 0 && myDays.join() !== pairDays.join()
+    ? `${selLoad.load.subject_code} is a Major subject, so its Lecture and Laboratory must meet on the same days. Its ${otherPartName} is on ${pairDaysText} — use ${pairDaysText} for the ${selLoad.label === 'Lab' ? 'Laboratory' : 'Lecture'} too (the times may differ).`
+    : null;
+  const roomRuleError = !oneRoom || !selLoad ? null
+    : daysRuleError ?? (chosenRoomIds.length > 1
+      ? `${selLoad.load.subject_code} is a Major subject, so its Lecture and Laboratory must use the same room. Choose one room for every session.`
+      : lockedRoom && chosenRoomIds.length === 1 && chosenRoomIds[0] !== String(lockedRoom.id)
+        ? `${selLoad.load.subject_code} is a Major subject, so its Lecture and Laboratory must use the same room. Its ${otherPartName} is in ${lockedRoom.room_name} — choose ${lockedRoom.room_name} for the ${selLoad.label === 'Lab' ? 'Laboratory' : 'Lecture'} too.`
+        : ruleNow?.error ?? null);
 
   /* Day combinations allowed this semester (Settings → Day Combinations).
      None configured → no restriction, exactly as before. */
@@ -1735,8 +1825,9 @@ export default function SchedulingClient() {
     ? matchCombination(sessions.map(s => s.day), dayCombos)
     : null;
   const comboError = allDaysSet && sessions.length > 0 ? dayCombinationError(sessions.map(s => s.day), dayCombos) : null;
-  /** Days that appear in any allowed combination (null = every day) */
-  const allowedDays = dayCombos.length > 0 ? new Set<string>(dayCombos.flatMap(c => c.days)) : null;
+  /** Days that appear in any allowed combination (null = every day) — a Major Lec + Lab part: its other part's days */
+  const allowedDays = pairDays ? new Set<string>(pairDays)
+    : dayCombos.length > 0 ? new Set<string>(dayCombos.flatMap(c => c.days)) : null;
 
   /** Use a combination: one session per day, in week order (times/rooms kept per row) */
   function applyCombination(days: readonly string[]) {
@@ -1751,7 +1842,7 @@ export default function SchedulingClient() {
     }
   }
 
-  const canSave           = isComplete && allDaysSet && sessions.length > 0 && !saving && !hasConflicts && !comboError;
+  const canSave           = isComplete && allDaysSet && sessions.length > 0 && !saving && !hasConflicts && !comboError && !roomRuleError;
 
   async function runConflictCheck() {
     if (!selLoad || sessions.length === 0) return;
@@ -1800,6 +1891,7 @@ export default function SchedulingClient() {
       }
     }
     try {
+      const checkedKey = roomsKey;
       const res = await fetch('/api/scheduling/check-conflicts', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1810,6 +1902,7 @@ export default function SchedulingClient() {
         }),
       });
       const data = await res.json();
+      setRoomRule(data.room_rule ? { key: checkedKey, error: data.room_rule.error ?? null, move: data.room_rule.move ?? null } : null);
       if (Array.isArray(data.conflicts)) {
         for (const c of data.conflicts) {
           const newId = sessions[c.session_index]?.id ?? `idx:${c.session_index}`;
@@ -1901,9 +1994,11 @@ export default function SchedulingClient() {
         }
         setError(msg); toast.error(msg); return;
       }
-      await res.json().catch(() => null);
+      const result = await res.json().catch(() => null) as { moved?: { part: 'lec' | 'lab'; room_name: string } | null } | null;
       const saved = selLoad;
-      setSuccess(`Schedule saved for ${saved.load.subject_code} (${saved.label}) — ${blockCode(saved.load.year_level, saved.load.block_name)}`);
+      // Major subject: the other part followed into the same room
+      const moved = result?.moved ? ` The ${result.moved.part === 'lab' ? 'Laboratory' : 'Lecture'} is now in ${result.moved.room_name} too.` : '';
+      setSuccess(`Schedule saved for ${saved.load.subject_code} (${saved.label}) — ${blockCode(saved.load.year_level, saved.load.block_name)}.${moved}`);
       fetchWorkload();
       // Check animation plays for 1.3s (same as Faculty / Blocks / Curriculum),
       // then the form clears and the toast confirms.
@@ -1911,7 +2006,7 @@ export default function SchedulingClient() {
       setTimeout(() => {
         setSaveSuccess(false);
         setSelLoad(null); setSessions([]);
-        toast.success(`Schedule saved for ${saved.load.subject_code} — ${blockCode(saved.load.year_level, saved.load.block_name)}.`);
+        toast.success(`Schedule saved for ${saved.load.subject_code} — ${blockCode(saved.load.year_level, saved.load.block_name)}.${moved}`);
       }, 1300);
     } catch { setError('Connection error.'); toast.error('Connection error. Please try again.'); }
     finally { setSaving(false); }
@@ -1955,8 +2050,10 @@ export default function SchedulingClient() {
   const lectureRooms = rooms.filter(r => !LAB_ROOM_TYPES.includes(r.room_type));
   const labRooms     = rooms.filter(r =>  LAB_ROOM_TYPES.includes(r.room_type));
   const subjectHasLab = toNum(selLoad?.load.laboratory_hours) > 0;
-  const activeRooms  = selLoad?.component === 'lab'
-    ? labRooms
+  // A Major subject's Lecture shares its Laboratory's room, so it is a laboratory too —
+  // and once the other part has a room, that room is the only one offered
+  const activeRooms  = lockedRoom ? [lockedRoom]
+    : selLoad?.component === 'lab' || oneRoom ? labRooms
     : subjectHasLab ? [...lectureRooms, ...labRooms] : lectureRooms;
   /** The class's other part's room — offered first in the Room picker */
   const pairRoom = selLoad ? pairedRoom(selLoad.load, selLoad.component, rooms) : null;
@@ -2262,7 +2359,8 @@ export default function SchedulingClient() {
           start_time: st,
           end_time: et,
           day: sess.day,
-          room_name: sess.room_name ?? l.room_name ?? null,
+          // This meeting's own room — never another meeting's (the class's first room)
+          room_name: sess.room_name ?? null,
         });
       }
       continue;
@@ -2776,7 +2874,9 @@ export default function SchedulingClient() {
                             );
                           })}
                           {partRooms.same && <span className="text-[12.5px] font-semibold text-emerald-700">Same room</span>}
-                          {partRooms.different && <span className="text-[12.5px] font-semibold text-amber-700">Different rooms</span>}
+                          {partRooms.different && (oneRoom
+                            ? <span className="text-[12.5px] font-semibold text-red-700">Must use one room</span>
+                            : <span className="text-[12.5px] font-semibold text-amber-700">Different rooms</span>)}
                         </div>
                       )}
                     </div>
@@ -2820,16 +2920,19 @@ export default function SchedulingClient() {
                     <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Day combination">
                       {dayCombos.map(c => {
                         const on = currentCombo === c;
+                        // Major Lec + Lab: only its other part's days
+                        const locked = !!pairDays && c.days.join() !== pairDays.join();
                         return (
                           <motion.button
                             key={c.id}
                             type="button"
                             onClick={() => applyCombination(c.days)}
-                            whileTap={reduceMotion ? undefined : { scale: 0.95 }}
+                            disabled={locked}
+                            whileTap={reduceMotion || locked ? undefined : { scale: 0.95 }}
                             aria-pressed={on}
-                            title={daysLabel(c.days)}
-                            className={`relative h-10 min-w-[56px] px-4 rounded-lg border text-sm font-bold transition-colors ${
-                              on ? 'border-[#0B2A5B]' : 'bg-white border-[#D6E0EF] text-[#0B2A5B] hover:border-[#9DB8E8] hover:bg-[#F8FAFE]'
+                            title={locked ? `Its ${otherPartName} is on ${pairDaysText} — both parts use the same days` : daysLabel(c.days)}
+                            className={`relative h-10 min-w-[56px] px-4 rounded-lg border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                              on ? 'border-[#0B2A5B]' : 'bg-white border-[#D6E0EF] text-[#0B2A5B] hover:border-[#9DB8E8] hover:bg-[#F8FAFE] disabled:hover:border-[#D6E0EF] disabled:hover:bg-white'
                             }`}
                             style={on ? { color: '#FFFFFF' } : undefined}
                           >
@@ -2842,6 +2945,9 @@ export default function SchedulingClient() {
                         );
                       })}
                     </div>
+                    {pairDays && (
+                      <p className="mt-1.5 text-xs font-medium text-[#475569]">Same days as its {otherPartName}: <b className="text-[#0B2A5B]">{pairDaysText}</b> · times may differ</p>
+                    )}
                     </div>
                   )}
                   <div>
@@ -2874,7 +2980,14 @@ export default function SchedulingClient() {
                   <div className="bg-white rounded-xl border border-[#E2E8F0] overflow-hidden shadow-sm">
                     <div className="px-4 py-3 border-b border-[#E2E8F0] flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
                       <StepLabel className="!mb-0">Session schedule</StepLabel>
-                      {sessions.length > 1 && (
+                      {oneRoom ? (
+                        <span className="text-xs text-[#64748B]">
+                          {sessions.length > 1 ? 'Session 1’s time fills the others · ' : ''}
+                          {lockedRoom
+                            ? <>Major subject — same room as its {otherPartName}: <b className="text-[#0B2A5B]">{lockedRoom.room_name}</b></>
+                            : 'Major subject — one room for every Lecture and Laboratory session.'}
+                        </span>
+                      ) : sessions.length > 1 && (
                         <span className="text-xs text-[#64748B]">Session 1&apos;s time and room fill the others — change any row on its own.</span>
                       )}
                     </div>
@@ -2951,7 +3064,7 @@ export default function SchedulingClient() {
                                 <RoomPicker
                                   value={sess.room_id}
                                   onChange={v => updateSession(sess.id, 'room_id', v)}
-                                  rooms={activeRooms.map(r => ({ ...r, busyWith: roomBusyWith(sess, r.id) || null }))}
+                                  rooms={activeRooms.map(r => ({ ...r, busyWith: roomBusyWith(sess, r.id) || otherPartBusyWith(r.id) || null }))}
                                   preferred={pairRoom ? { id: pairRoom.id, label: selLoad.component === 'lab' ? "Lecture's room" : "Laboratory's room" } : null}
                                   component={selLoad.component}
                                   day={sess.day}
@@ -3021,7 +3134,19 @@ export default function SchedulingClient() {
                     })}
                   </div>
                 )}
-                {sessionConflicts.length === 0 && conflictsVerified && sessions.length > 0 && (
+                {/* Major subject: one room for the Lecture and the Laboratory */}
+                {roomRuleError && sessions.length > 0 && (
+                  <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-[13px] flex items-start gap-2" role="alert">
+                    <XCircle className="w-4 h-4 flex-shrink-0 mt-0.5" /> {roomRuleError}
+                  </div>
+                )}
+                {!roomRuleError && ruleNow?.move && sessions.length > 0 && (
+                  <div className="bg-[#EFF6FF] border border-[#BFDBFE] text-[#1D5BD6] px-4 py-3 rounded-xl text-[13px] flex items-start gap-2">
+                    <ArrowRight className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                    Saving also puts the {ruleNow.move.part === 'lab' ? 'Laboratory' : 'Lecture'} in {ruleNow.move.room_name} — it has no room yet, and a Major subject keeps both in one room.
+                  </div>
+                )}
+                {sessionConflicts.length === 0 && conflictsVerified && sessions.length > 0 && !roomRuleError && (
                   <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 text-xs text-emerald-700 flex items-center gap-2">
                     <CheckCircle className="w-3.5 h-3.5" /> All sessions verified — no conflicts detected.
                   </div>
@@ -3073,6 +3198,8 @@ export default function SchedulingClient() {
                       ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
                       : hasConflicts
                         ? <><AlertTriangle className="w-4 h-4" /> Resolve Conflicts First</>
+                        : roomRuleError
+                          ? <><AlertTriangle className="w-4 h-4" /> {daysRuleError || /same days/.test(roomRuleError) ? 'Use the Same Days First' : 'Use One Room First'}</>
                         : selLoad.isScheduled
                           ? <><RefreshCw className="w-4 h-4" /> Reschedule {selLoad.label} — {selLoad.load.subject_code}</>
                           : <><Save className="w-4 h-4" /> Save {selLoad.label} Schedule — {selLoad.load.subject_code}</>

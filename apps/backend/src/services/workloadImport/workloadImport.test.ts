@@ -13,7 +13,7 @@ const row = (over: Partial<WorkloadRow>): WorkloadRow => ({
 const t = (h: number, m = 0) => h * 60 + m;
 const subject = (lec: number, lab: number): CatalogSubject => ({
   id: 1, programId: 1, yearLevel: '1st Year', semester: '1st Semester', version: 'old',
-  code: 'IT 112', name: 'Fundamentals of Programming', lecHours: lec, labHours: lab, totalHours: lec + lab,
+  code: 'IT 112', name: 'Fundamentals of Programming', lecHours: lec, labHours: lab, totalHours: lec + lab, oneRoom: lec > 0 && lab > 0,
 });
 
 test('a row\'s part of the subject is read from its units first, then hours, then the marker', () => {

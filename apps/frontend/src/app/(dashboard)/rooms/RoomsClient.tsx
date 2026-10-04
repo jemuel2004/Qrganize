@@ -25,6 +25,7 @@ import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import AnchoredPopover from '@/components/ui/AnchoredPopover';
 import TrashDropAnimation from '@/components/ui/TrashDropAnimation';
 import UnassignedRoomsPanel from './UnassignedRoomsPanel';
+import SplitMajorRoomsPanel from './SplitMajorRoomsPanel';
 import { FilterSelect } from '@/components/ui/SearchFilter';
 import {
   AlertTriangle, BookOpen, Building2, Download, Loader2, Monitor, MoreVertical,
@@ -720,6 +721,7 @@ export default function RoomsPage() {
         ) : (
           <div className="space-y-4">
             <UnassignedRoomsPanel refreshKey={rooms.length} />
+            <SplitMajorRoomsPanel refreshKey={rooms.length} />
             {/* Lecture Rooms | Laboratory Rooms — click to show that type (both closed at first) */}
             <div className="grid grid-cols-2 gap-4" role="tablist" aria-label="Room type">
               {TABS.map(t => {

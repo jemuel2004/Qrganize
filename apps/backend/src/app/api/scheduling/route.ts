@@ -3,6 +3,7 @@ import { query, transaction } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { getChairAssignedProgramId, isScopedChair } from '@/services/programScope';
 import { findOverlappingSessions, findScheduleConflicts, validateSessions, type ScheduleConflict } from '@/services/scheduleConflicts';
+import { checkMajorLecLab, type MajorLecLabCheck } from '@/services/majorRoomRule';
 import { termDayCombinationError } from '@/services/dayCombinations';
 import { withAudit } from '@/services/audit';
 import { ensureSessionTypes } from '@/services/sessionTypeRepair';
@@ -248,11 +249,30 @@ async function POST_handler(req: NextRequest) {
     // back entirely instead of leaving the schedule in a partial state.
     // For Lec+Lab subjects, only sessions of the current component type are
     // deleted so the other component's sessions are preserved independently.
-    const outcome = await transaction(async (client) => {
+    const outcome = await transaction<{ conflicts: ScheduleConflict[]; majorRoom?: MajorLecLabCheck }>(async (client) => {
       // One schedule save at a time: without this, two admins saving at the
       // same moment could both pass the conflict check and double-book an
       // instructor, room or block. Released automatically at COMMIT/ROLLBACK.
       await client.query(`SELECT pg_advisory_xact_lock(hashtext('qrganize:schedule-save'))`);
+
+      // First the Major Lec + Lab rule (it is about the request itself): the same
+      // days and one laboratory for both parts. A room chosen here moves the other
+      // part into it too — refused when that room is not free at the other part's
+      // times, or when the days differ from the other part's (services/majorRoomRule.ts).
+      const majorRoom = await checkMajorLecLab(
+        (text, params) => client.query(text, params),
+        {
+          masterScheduleId: Number(master_schedule_id),
+          facultyId: Number(sched.faculty_id),
+          blockId: Number(sched.bs_block_id),
+          semester: sched.semester || '',
+          academicYear: sched.academic_year || '',
+          part: schedulingType === 'lab' ? 'lab' : 'lec',
+          days: sessions.map((s: { day?: unknown }) => (s.day == null ? null : String(s.day))),
+          roomIds: sessions.map((s: { room_id?: unknown }) => s.room_id as string | number | null),
+        },
+      );
+      if (majorRoom.error) return { conflicts: [], majorRoom };
 
       // Conflict check inside the lock — same rules as /check-conflicts
       const conflicts = await findScheduleConflicts(
@@ -283,6 +303,10 @@ async function POST_handler(req: NextRequest) {
           VALUES ($1, $2, $3, $4, $5, $6, $7)
         `, [master_schedule_id, session.day, session.start_time, sessionEndTime, session.hours, sessionRoomId, schedulingType]);
       }
+      if (majorRoom.move) {
+        await client.query('UPDATE schedule_sessions SET room_id = $1 WHERE id = ANY($2::int[])',
+          [majorRoom.move.roomId, majorRoom.move.sessionIds]);
+      }
 
       // For Lec+Lab subjects, only mark 'Scheduled' when both components have sessions.
       // Single-component subjects are always 'Scheduled' after saving.
@@ -311,7 +335,7 @@ async function POST_handler(req: NextRequest) {
          WHERE id=(SELECT block_subject_id FROM master_schedule WHERE id=$2)`,
         [newStatus, master_schedule_id]
       );
-      return { conflicts: [] as ScheduleConflict[] };
+      return { conflicts: [], majorRoom };
     });
 
     if (outcome.conflicts.length > 0) {
@@ -320,8 +344,17 @@ async function POST_handler(req: NextRequest) {
         conflicts: outcome.conflicts,
       }, { status: 409 });
     }
+    if (outcome.majorRoom?.error) {
+      return NextResponse.json({ error: outcome.majorRoom.error, room_rule_error: true }, { status: outcome.majorRoom.status ?? 400 });
+    }
 
-    return NextResponse.json({ success: true, message: 'Schedule saved successfully' });
+    const moved = outcome.majorRoom?.move;
+    return NextResponse.json({
+      success: true,
+      message: 'Schedule saved successfully',
+      // The other part followed into the same room (Major subject)
+      moved: moved ? { part: moved.part, room_name: moved.roomName } : null,
+    });
   } catch (error) {
     console.error('[POST /api/scheduling]', error);
     return NextResponse.json({ error: 'Failed to save schedule.' }, { status: 500 });

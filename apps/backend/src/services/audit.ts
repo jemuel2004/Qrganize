@@ -77,6 +77,7 @@ const RULES: Rule[] = [
   { re: /^\/api\/qr\/scan/, category: 'Rooms', noun: 'room QR', verbs: { POST: 'Scanned room QR' } },
   { re: /^\/api\/rooms\/qr-codes/, category: 'Rooms', noun: 'room QR codes', verbs: { POST: 'Generated room QR codes' } },
   { re: /^\/api\/rooms\/unassigned/, category: 'Rooms', noun: 'class room', verbs: { POST: 'Assigned rooms to classes' } },
+  { re: /^\/api\/rooms\/one-room/, category: 'Rooms', noun: 'class room', verbs: { POST: 'Put Major classes’ Lecture and Laboratory in one room' } },
   { re: /^\/api\/rooms/, category: 'Rooms', noun: 'room' },
   { re: /^\/api\/admin\/room-requests/, category: 'Rooms', noun: 'room request', verbs: { PATCH: 'Reviewed room request', PUT: 'Reviewed room request' } },
   { re: /^\/api\/instructor\/room-requests/, category: 'Rooms', noun: 'room request', verbs: { POST: 'Submitted room request', DELETE: 'Cancelled room request' } },

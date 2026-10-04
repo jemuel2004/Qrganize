@@ -10,7 +10,7 @@ import {
   classifyFacultyPgError,
   parseFacultyId,
   parsePosition,
-  resolveRequiredProgramId,
+  resolveOptionalProgramId,
 } from '@/services/facultyValidation';
 import { ensureFacultyProfileColumns } from '@/database/schema-guard';
 import { formatLoadCap, maxDeductionUnits, regularUnitsCap, shownUnitsCap } from '@shared/regularLoad';
@@ -128,7 +128,8 @@ async function PUT_handler(req: NextRequest, { params }: { params: Promise<{ id:
     const pos = parsePosition(position);
     if (!pos.ok)
       return NextResponse.json({ error: pos.error.error, field: pos.error.field }, { status: 400 });
-    const program = await resolveRequiredProgramId(program_id);
+    // Program is optional — blank clears it (a faculty member may belong to no single program)
+    const program = await resolveOptionalProgramId(program_id);
     if (!program.ok)
       return NextResponse.json({ error: program.error.error, field: program.error.field }, { status: 400 });
     if (!String(username ?? '').trim())

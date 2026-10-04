@@ -1,4 +1,5 @@
 import { parseDays, type WeekDay } from '@shared/dayCombination';
+import { needsOneRoomSql } from '@shared/subjectCategory';
 import type { ImportCatalog, ImportTerm } from './types';
 
 type Queryable = (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>;
@@ -11,7 +12,8 @@ export async function loadImportCatalog(q: Queryable, term: ImportTerm): Promise
   // One after another: q may be a single transaction client
   const programs = await q(`SELECT id, code FROM programs WHERE is_active IS NOT FALSE ORDER BY id`);
   const subjects = await q(`SELECT id, program_id, year_level, semester, curriculum_version, subject_code, subject_name,
-              COALESCE(lecture_hours, 0) AS lec, COALESCE(laboratory_hours, 0) AS lab, COALESCE(total_hours, 0) AS total
+              COALESCE(lecture_hours, 0) AS lec, COALESCE(laboratory_hours, 0) AS lab, COALESCE(total_hours, 0) AS total,
+              ${needsOneRoomSql()} AS one_room
          FROM curriculums WHERE is_active = true`);
   const faculty = await q(`SELECT f.id, f.name, f.first_name, f.middle_name, f.last_name, f.position, f.employment_status,
               f.is_active, f.program_id, ia.username AS account_username,
@@ -28,7 +30,7 @@ export async function loadImportCatalog(q: Queryable, term: ImportTerm): Promise
     subjects: subjects.rows.map(r => ({
       id: num(r.id), programId: num(r.program_id), yearLevel: str(r.year_level), semester: str(r.semester),
       version: str(r.curriculum_version), code: str(r.subject_code), name: str(r.subject_name),
-      lecHours: num(r.lec), labHours: num(r.lab), totalHours: num(r.total),
+      lecHours: num(r.lec), labHours: num(r.lab), totalHours: num(r.total), oneRoom: r.one_room === true,
     })),
     faculty: faculty.rows.map(r => ({
       id: num(r.id), name: str(r.name), firstName: str(r.first_name), middleName: str(r.middle_name), lastName: str(r.last_name),

@@ -4,7 +4,7 @@ import { getAuthUser } from '@/auth/auth';
 import { releaseFacultyAssignments } from '@/services/releaseFacultyAssignments';
 import bcrypt from 'bcryptjs';
 import { revokeAccountAccess, revokeInstructorAccessByFacultyId } from '@/auth/trustedDevices';
-import { INSTRUCTOR_EMAIL_GOOGLE_SQL, parsePosition, resolveRequiredProgramId } from '@/services/facultyValidation';
+import { INSTRUCTOR_EMAIL_GOOGLE_SQL, parsePosition, resolveOptionalProgramId } from '@/services/facultyValidation';
 import { ensureFacultyProfileColumns, ensureInstructorGooglePicture } from '@/database/schema-guard';
 import { assertEmailAvailable, EMAIL_ALREADY_REGISTERED, assertUsernameAllowed } from '@/auth/emailIdentity';
 import { PRIORITY_SUBJECTS_SUBQUERY, setPrioritySubjects, type PrioritySubject } from '@/services/facultyPrioritySubjects';
@@ -70,7 +70,8 @@ async function PUT_handler(req: NextRequest, { params }: Params) {
     const pos = parsePosition(position);
     if (!pos.ok)
       return NextResponse.json({ error: pos.error.error, field: pos.error.field }, { status: 400 });
-    const program = await resolveRequiredProgramId(program_id);
+    // Program is optional — a faculty member may belong to no single program
+    const program = await resolveOptionalProgramId(program_id);
     if (!program.ok)
       return NextResponse.json({ error: program.error.error, field: program.error.field }, { status: 400 });
     if (!username?.trim())

@@ -46,6 +46,7 @@ import { positionRank } from '@/lib/positionRank';
 import { isSameSubject, mergeSameSubjects } from '@shared/subjectCode';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import CountFilterTabs from '@/components/ui/CountFilterTabs';
+import Pagination from '@/components/ui/Pagination';
 import {
   Plus, X, AlertTriangle, Check, Minus,
   Eye, Award, CheckCircle2, Pencil,
@@ -214,6 +215,8 @@ interface OverloadConfirmData {
 }
 
 const SEMESTERS = ['1st Semester', '2nd Semester', 'Summer'];
+/** Faculty list rows per page (same as Setup → Faculty) */
+const FACULTY_LIST_PAGE_SIZE = 10;
 
 function calcWorkloadUnits(lec: number, lab: number): number {
   return lec + (lab * 0.75);
@@ -443,6 +446,10 @@ export default function WorkloadPage({
   const [filterEmploymentType, setFilterEmploymentType] = useState('');
   /** Faculty list: everyone, only those with a subject this term, or those still needing one */
   const [assignFilter, setAssignFilter] = useState<'all' | 'assigned' | 'unassigned'>('all');
+  /** Faculty list page (from 1) — back to the first page when the search or a filter changes */
+  const [facultyPage, setFacultyPage] = useState(1);
+  useEffect(() => { setFacultyPage(1); }, [search, filterEmploymentType, assignFilter]);
+  const facultyListRef = useRef<HTMLDivElement>(null);
   const reduceMotion = useReducedMotion();
   /* Settings → Workload Limits, as exact caps (published + the 0.25 grace).
      Deloading can take at most the whole Regular cap. */
@@ -1767,6 +1774,17 @@ export default function WorkloadPage({
       }
       return a.name.localeCompare(b.name);
     });
+  /* The list shows one page at a time (the search dropdown still offers everyone) */
+  const facultyPageCount = Math.max(1, Math.ceil(filteredFaculty.length / FACULTY_LIST_PAGE_SIZE));
+  const safeFacultyPage = Math.min(facultyPage, facultyPageCount);
+  const pagedFaculty = filteredFaculty.slice((safeFacultyPage - 1) * FACULTY_LIST_PAGE_SIZE, safeFacultyPage * FACULTY_LIST_PAGE_SIZE);
+  function goToFacultyPage(next: number) {
+    setFacultyPage(next);
+    // From the pager at the bottom, bring the top of the list back into view
+    // (scroll-mt on the list keeps it clear of the sticky top bar)
+    const top = facultyListRef.current?.getBoundingClientRect().top ?? 0;
+    if (top < 130) facultyListRef.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+  }
 
   const selectedBlock   = allBlocks.find(b => String(b.id) === filterBlock);
   const selectedProgram = programs.find(p => String(p.id) === filterProgram);
@@ -2495,10 +2513,13 @@ export default function WorkloadPage({
             )}
 
             {!selectedFaculty ? (
-              /* All / Assigned / Unassigned: the old list fades out, the new one fades in */
+              <>
+              {/* All / Assigned / Unassigned, or another page: the old list fades out, the new one fades in */}
               <AnimatePresence mode="wait" initial={false}>
               <motion.div
-                key={`faculty-list-${assignFilter}`}
+                key={`faculty-list-${assignFilter}-${safeFacultyPage}`}
+                ref={facultyListRef}
+                className="scroll-mt-32"
                 initial={reduceMotion ? false : { opacity: 0, y: 6 }}
                 animate={{ opacity: 1, y: 0, transition: { duration: reduceMotion ? 0 : 0.28, ease: [0.4, 0, 0.2, 1] } }}
                 exit={reduceMotion ? undefined : { opacity: 0, transition: { duration: 0.14, ease: [0.4, 0, 0.2, 1] } }}
@@ -2525,7 +2546,7 @@ export default function WorkloadPage({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {filteredFaculty.map((f, rowIdx) => {
+                      {pagedFaculty.map((f, rowIdx) => {
                         const fSummary = facultySummaries[f.id];
                         const status   = fSummary ? getFacultyStatus(fSummary) : null;
                         const isP      = f.employment_status === 'Permanent';
@@ -2600,6 +2621,18 @@ export default function WorkloadPage({
               )}
               </motion.div>
               </AnimatePresence>
+              {/* Outside the fading list, so it stays put and its highlight slides to the new page */}
+              <Pagination
+                className="px-4 sm:px-6 py-4 border-t border-[#E2E8F0]"
+                layoutId="workload-faculty-page"
+                page={safeFacultyPage}
+                pageCount={facultyPageCount}
+                onChange={goToFacultyPage}
+                total={filteredFaculty.length}
+                pageSize={FACULTY_LIST_PAGE_SIZE}
+                noun="faculty"
+              />
+              </>
             ) : !allFiltersSet ? (
               <div className="py-14 px-8 text-center">
                 <p className="text-sm text-[#64748B]">No subjects to display.</p>

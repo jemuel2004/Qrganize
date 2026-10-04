@@ -368,7 +368,6 @@ export default function InstructorAccountsClient() {
     const errs: Record<string, string> = {};
     if (!form.first_name.trim())   errs.first_name = 'First Name is required.';
     if (!form.last_name.trim())    errs.last_name  = 'Last Name is required.';
-    if (!form.program_id)          errs.program_id = 'Program is required.';
     if (!form.position)            errs.position   = 'Position / Academic Rank is required.';
     if (!form.username.trim())     errs.username   = 'Username is required.';
     if (form.username && !/^[a-zA-Z0-9_]+$/.test(form.username.trim()))
@@ -947,14 +946,14 @@ export default function InstructorAccountsClient() {
                 </div>
                 <div>
                   <label className="block text-sm font-semibold text-slate-300 mb-2">
-                    Program <span className="text-red-400">*</span>
+                    Program&nbsp;<span className="text-slate-500 font-normal">(optional)</span>
                   </label>
                   <select
                     value={form.program_id}
                     onChange={e => setField('program_id', e.target.value)}
                     className={`w-full bg-[#0b0f1a] border rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:ring-1 focus:ring-[#1D5BD6]/50 transition hover:border-white/20 ${formErrors.program_id ? 'border-red-500/50' : 'border-white/10'}`}
                   >
-                    <option value="">— Select Program —</option>
+                    <option value="">No program</option>
                     {programs.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
                   </select>
                   {formErrors.program_id && <p className="text-xs text-red-400 mt-1">{formErrors.program_id}</p>}

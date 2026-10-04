@@ -66,7 +66,7 @@ function getMeetings(si: SubjectInstructor, comp: 'lec' | 'lab' | null): Meeting
     return sessions.map(s => ({
       day: s.day,
       time: `${fmt12(normTime(s.start_time))} – ${fmt12(normTime(s.end_time))}`,
-      room: s.room_name ?? si.room_name ?? NO_ROOM,
+      room: s.room_name ?? NO_ROOM, // its own room — not the class's first room
       kind: s.type === 'lab' ? 'lab' : 'lec',
     }));
   }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { categoryFromHours, categoryFromSubjectType, isMajorCourseCode, resolveSubjectCategory } from './subjectCategory';
+import { categoryFromHours, categoryFromSubjectType, isMajorCourseCode, needsOneRoom, resolveSubjectCategory } from './subjectCategory';
 
 test('CS / CPE / IT course codes are Major even when lecture only', () => {
   for (const code of ['CS 211', 'CS326', 'cs 121', 'CPE 101', 'CPE-12', 'IT 1', 'IT121', ' IT 222 ']) {
@@ -32,4 +32,13 @@ test('picking the default, or nothing valid, follows the rule (not manual)', () 
   assert.deepEqual(resolveSubjectCategory('Major', 3, 0, 'IT 1'), { category: 'Major', manual: false });
   assert.deepEqual(resolveSubjectCategory(undefined, 3, 0, 'IT 1'), { category: 'Major', manual: false });
   assert.deepEqual(resolveSubjectCategory('Elective', 3, 0, 'GE-US'), { category: 'Minor', manual: false });
+});
+
+test('one room for Lecture and Laboratory: Major subjects that have both parts', () => {
+  assert.equal(needsOneRoom('Major', 2, 3), true);
+  assert.equal(needsOneRoom('major', '2.00', '3.00'), true);
+  assert.equal(needsOneRoom('Minor', 2, 3), false); // marked Minor by hand
+  assert.equal(needsOneRoom('Major', 3, 0), false); // lecture only
+  assert.equal(needsOneRoom('Major', 0, 3), false); // laboratory only
+  assert.equal(needsOneRoom(null, 2, 3), false);
 });

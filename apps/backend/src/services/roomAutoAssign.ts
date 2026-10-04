@@ -1,4 +1,5 @@
 import { codeKey, roomKey } from '@shared/workloadImport';
+import { needsOneRoomSql } from '@shared/subjectCategory';
 import { findScheduleConflicts } from '@/services/scheduleConflicts';
 
 /**
@@ -17,7 +18,10 @@ import { findScheduleConflicts } from '@/services/scheduleConflicts';
  *   5. the general Lecture-N / Laboratory-N rooms, in number order
  * A class's meetings without a room are placed together: one room that suits
  * and is free for all of them comes first, so its Lecture and Laboratory share
- * a room; only when none does is each meeting placed on its own.
+ * a room; only when none does is each meeting placed on its own. A Major
+ * subject with a Lecture and a Laboratory never splits (services/majorRoomRule.ts):
+ * all its meetings use one laboratory — the room the class already has, if
+ * any — and a meeting that room isn't free for stays without a room.
  * Special rooms (a gym, a robotics lab — any name other than Lecture-N /
  * Lab-N, as in the workload import) are only picked for a class that already
  * uses them or whose subject is held there; they stay in the manual list.
@@ -40,6 +44,7 @@ export interface Room { id: number; room_name: string; room_type: string }
 const ROOMLESS_SQL = `
   SELECT ss.id, ss.day_of_week AS day, ss.start_time::text AS start_time, ss.end_time::text AS end_time,
          COALESCE(ss.type, 'lec') AS type, COALESCE(c.laboratory_hours, 0)::float AS lab_hours,
+         ${needsOneRoomSql('c')} AS one_room,
          ms.id AS ms_id, ms.faculty_id, bs.block_id, b.semester, b.academic_year,
          COALESCE(NULLIF(TRIM(f.name), ''), NULLIF(TRIM(CONCAT_WS(' ', f.first_name, f.last_name)), ''), 'Unassigned faculty') AS faculty_name,
          f.employee_id, c.subject_code, c.subject_name,
@@ -81,6 +86,8 @@ const ACTIVE_ROOMS_SQL = `SELECT id, room_name, room_type FROM rooms WHERE statu
 
 interface Roomless {
   id: number; day: string; start_time: string; end_time: string; type: string; lab_hours: number;
+  /** Major subject with a Lecture and a Laboratory — all its meetings share one laboratory */
+  one_room: boolean;
   ms_id: number; faculty_id: number | null; block_id: number; semester: string; academic_year: string;
   faculty_name: string; employee_id: string | null; subject_code: string; subject_name: string;
   program_code: string | null; year_level: string | null; block_name: string | null;
@@ -118,9 +125,16 @@ function usualRooms(rows: Record<string, unknown>[]): UsualRooms {
   return usual;
 }
 
-/** Scheduling's room-type rule for one session */
+/** Scheduling's room-type rule for one session (a Major subject's Lecture shares its Laboratory's room) */
 const roomFits = (r: Room, s: Roomless) =>
-  s.type === 'lab' ? isLab(r.room_type) : !(isLab(r.room_type) && s.lab_hours <= 0);
+  s.type === 'lab' || s.one_room ? isLab(r.room_type) : !(isLab(r.room_type) && s.lab_hours <= 0);
+
+/** The room a Major subject's meetings must use: the one the class already has (or was just given) */
+const fixedRoomOf = (s: Roomless, given?: GivenRooms): number | null => {
+  if (!s.one_room) return null;
+  const mine = given?.get(s.ms_id);
+  return s.class_room_id ?? s.pair_room_id ?? mine?.[partOf(s)] ?? mine?.[otherPart(s)] ?? null;
+};
 
 /** Why a room is offered first — shown next to it on screen ('pair' = the room of the class's other part) */
 export type RoomNote = 'class' | 'pair' | 'faculty' | 'subject';
@@ -141,7 +155,8 @@ function roomCandidates(rooms: Room[], s: Roomless, usual: UsualRooms, given?: G
   const mine = given?.get(s.ms_id);
   const sameRoom = s.class_room_id ?? mine?.[partOf(s)] ?? null;
   const pairRoom = s.pair_room_id ?? mine?.[otherPart(s)] ?? null;
-  const scored = rooms.filter(r => roomFits(r, s)).map(room => {
+  const fixed = fixedRoomOf(s, given);
+  const scored = rooms.filter(r => roomFits(r, s) && (fixed == null || r.id === fixed)).map(room => {
     const special = roomKey(room.room_name).kind === 'other';
     const score = [
       room.id === sameRoom ? 2 : room.id === pairRoom ? 1 : 0, // its own room, then its other part's
@@ -187,6 +202,25 @@ async function pickClassRooms(
   meetings: Roomless[], rooms: Room[], usual: UsualRooms, given: GivenRooms, isFree: FreeCheck,
 ): Promise<Map<number, Room | null>> {
   const picked = new Map<number, Room | null>();
+  if (meetings[0]?.one_room) {
+    // Major subject: one laboratory for all of them (the class's own room when it
+    // has one) — the room free for the most meetings; the rest stay without one
+    const lead = meetings.find(s => s.type === 'lab') ?? meetings[0];
+    let best: { room: Room; free: Set<number> } | null = null;
+    for (const c of roomCandidates(rooms, lead, usual, given)) {
+      if (!c.auto || !meetings.every(s => roomFits(c.room, s))) continue;
+      const free = new Set<number>();
+      for (const s of meetings) if (await isFree(s, c.room)) free.add(s.id);
+      if (free.size > (best?.free.size ?? 0)) best = { room: c.room, free };
+      if (free.size === meetings.length) break;
+    }
+    for (const s of meetings) {
+      const room = best?.free.has(s.id) ? best.room : null;
+      picked.set(s.id, room);
+      if (room) remember(given, s, room);
+    }
+    return picked;
+  }
   if (meetings.length > 1) {
     const lead = meetings.find(s => s.type === 'lab') ?? meetings[0];
     for (const c of roomCandidates(rooms, lead, usual, given)) {
@@ -360,15 +394,26 @@ export async function assignRooms(q: Queryable, opts: AssignRoomsOptions): Promi
     result.assigned.push({ ...brief(s), room_name: room.room_name });
   };
 
+  /** Why a Major subject's meeting got no room */
+  const oneRoomReason = (s: Roomless, fixed: number | null) => {
+    if (fixed == null) return `No laboratory is free for all of ${s.subject_code}'s Lecture and Laboratory times (a Major subject keeps both in one room).`;
+    const room = rooms.find(r => r.id === fixed);
+    return room && roomFits(room, s)
+      ? `${s.subject_code} is a Major subject, so its Lecture and Laboratory use one room — ${room.room_name} is not free at this time.`
+      // e.g. its Lecture was left in a lecture room before this rule
+      : `${s.subject_code} is a Major subject, so its Lecture and Laboratory share one laboratory, but its other part is in ${room?.room_name ?? 'a room that can’t take it'} — move the class to one laboratory on the Scheduling page.`;
+  };
+
   if (opts.auto) {
     // Class by class, so a class's Lecture and Laboratory end up in one room where one fits both
     const given: GivenRooms = new Map();
     for (const meetings of byClass(sessions)) {
+      const fixed = fixedRoomOf(meetings[0], given);
       const picks = await pickClassRooms(meetings, rooms, usual, given, roomIsFree);
       for (const s of meetings) {
         const room = picks.get(s.id) ?? null;
         if (room) await give(s, room);
-        else result.skipped.push({ ...brief(s), reason: 'No suitable room is free at this time.' });
+        else result.skipped.push({ ...brief(s), reason: s.one_room ? oneRoomReason(s, fixed) : 'No suitable room is free at this time.' });
       }
     }
     return result;
@@ -380,11 +425,32 @@ export async function assignRooms(q: Queryable, opts: AssignRoomsOptions): Promi
     if (!chosen || !roomFits(chosen, s)) {
       result.skipped.push({ ...brief(s), reason: !chosen ? 'That room is no longer available.'
         : s.type === 'lab' ? 'Lab classes need a laboratory room.'
+        : s.one_room ? `${s.subject_code} is a Major subject, so its Lecture uses its Laboratory's room — choose a laboratory.`
         : 'A lecture-only subject cannot use a laboratory room.' });
       continue;
     }
-    if (await roomIsFree(s, chosen)) await give(s, chosen);
-    else result.skipped.push({ ...brief(s), reason: 'Another class is already in that room at this time.' });
+    const fixed = fixedRoomOf(s);
+    if (fixed != null && fixed !== chosen.id) {
+      const room = rooms.find(r => r.id === fixed);
+      result.skipped.push({ ...brief(s), reason: room && roomFits(room, s)
+        ? `${s.subject_code} is a Major subject, so its Lecture and Laboratory use one room — choose ${room.room_name}.`
+        : oneRoomReason(s, fixed) });
+      continue;
+    }
+    if (!(await roomIsFree(s, chosen))) {
+      result.skipped.push({ ...brief(s), reason: 'Another class is already in that room at this time.' });
+      continue;
+    }
+    await give(s, chosen);
+    // A Major subject's other meetings without a room follow into the same room where it is free
+    if (s.one_room) {
+      const rest = (await q(`${ROOMLESS_SQL} AND ms.id = $3 AND ss.id <> $4 ${ROOMLESS_ORDER}`,
+        [opts.term.semester, opts.term.schoolYear, s.ms_id, s.id])).rows as unknown as Roomless[];
+      for (const o of rest) {
+        if (await roomIsFree(o, chosen)) await give(o, chosen);
+        else result.skipped.push({ ...brief(o), reason: oneRoomReason(o, chosen.id) });
+      }
+    }
   }
   return result;
 }

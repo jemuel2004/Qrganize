@@ -31,6 +31,8 @@ export interface CatalogSubject {
   lecHours: number;
   labHours: number;
   totalHours: number;
+  /** Major subject with a Lecture and a Laboratory — both parts share one laboratory room */
+  oneRoom: boolean;
 }
 
 export interface CatalogFaculty {

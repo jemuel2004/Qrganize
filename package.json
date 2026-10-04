@@ -18,7 +18,7 @@
     "start:backend": "npm run start -w @qrganize/backend",
     "lint": "eslint",
     "typecheck": "tsc --noEmit -p apps/frontend && tsc --noEmit -p apps/backend && tsc --noEmit -p packages/shared",
-    "test": "tsx --tsconfig apps/backend/tsconfig.json --test packages/shared/src/curriculumImport/curriculumImport.test.ts packages/shared/src/curriculumExport/curriculumExport.test.ts packages/shared/src/classroomDemand.test.ts packages/shared/src/regularLoad.test.ts packages/shared/src/subjectCategory.test.ts packages/shared/src/blockCode.test.ts packages/shared/src/realtime.test.ts packages/shared/src/errorLog.test.ts apps/backend/src/services/scheduleConflicts.test.ts apps/backend/src/database/migrate.test.ts packages/shared/src/workloadImport/workloadImport.test.ts apps/backend/src/services/workloadImport/workloadImport.test.ts"
+    "test": "tsx --tsconfig apps/backend/tsconfig.json --test packages/shared/src/curriculumImport/curriculumImport.test.ts packages/shared/src/curriculumExport/curriculumExport.test.ts packages/shared/src/classroomDemand.test.ts packages/shared/src/regularLoad.test.ts packages/shared/src/subjectCategory.test.ts packages/shared/src/blockCode.test.ts packages/shared/src/realtime.test.ts packages/shared/src/errorLog.test.ts apps/backend/src/services/scheduleConflicts.test.ts apps/backend/src/services/majorRoomRule.test.ts apps/backend/src/database/migrate.test.ts packages/shared/src/workloadImport/workloadImport.test.ts apps/backend/src/services/workloadImport/workloadImport.test.ts"
   },
   "devDependencies": {
     "@types/node": "^20",

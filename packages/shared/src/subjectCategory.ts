@@ -72,6 +72,24 @@ export function effectiveSubjectCategorySql(alias = ''): string {
                ELSE ${subjectCategorySql(alias)} END`;
 }
 
+/**
+ * A Major subject with both Lecture and Laboratory hours keeps one room: every
+ * Lecture and Laboratory session of the class uses the same room — a
+ * laboratory, since the Laboratory needs one.
+ */
+export function needsOneRoom(category: unknown, lectureHours: unknown, laboratoryHours: unknown): boolean {
+  return parseSubjectCategory(category) === 'Major'
+    && (Number(lectureHours) || 0) > 0
+    && (Number(laboratoryHours) || 0) > 0;
+}
+
+/** PostgreSQL boolean matching needsOneRoom, with the effective category. Pass a table alias when joining. */
+export function needsOneRoomSql(alias = ''): string {
+  const p = alias ? `${alias}.` : '';
+  return `((${effectiveSubjectCategorySql(alias)}) = 'Major'
+           AND COALESCE(${p}lecture_hours, 0) > 0 AND COALESCE(${p}laboratory_hours, 0) > 0)`;
+}
+
 /** PostgreSQL expression matching categoryFromHours. Pass a table alias when joining. */
 export function subjectCategorySql(alias = ''): string {
   const p = alias ? `${alias}.` : '';

@@ -1,6 +1,7 @@
 ﻿import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUser } from '@/auth/auth';
 import { query } from '@/database/db';
+import { needsOneRoomSql } from '@shared/subjectCategory';
 
 /**
  * GET /api/instructor/schedule
@@ -37,6 +38,8 @@ export async function GET(req: NextRequest) {
         c.subject_name,
         c.lecture_hours,
         c.laboratory_hours,
+        -- Major subject with Lecture + Laboratory: one (laboratory) room for both parts
+        ${needsOneRoomSql('c')} AS one_room,
         c.total_hours,
         c.units,
         b.block_name,

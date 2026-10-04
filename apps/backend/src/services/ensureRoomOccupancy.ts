@@ -1,5 +1,6 @@
 import { query, transaction } from '@/database/db';
 import { bumpTopics } from '@/services/realtime';
+import { needsOneRoomSql } from '@shared/subjectCategory';
 
 let ready = false;
 let rcrSchemaReady = false;
@@ -150,10 +151,11 @@ export async function expireStaleOccupancy(roomId?: number): Promise<void> {
 /**
  * Put a class into the room its request was approved or confirmed for.
  * Only sessions allowed in that room move — a lecture room never takes a
- * Laboratory session (the Scheduling rule) — and each moved session's previous
- * room is kept on the request (session_rooms), so releasing the room puts every
- * session back exactly where it was, even when Lecture and Laboratory use
- * different rooms.
+ * Laboratory session (the Scheduling rule), and a Major subject's Lecture and
+ * Laboratory share one room, so they move together or not at all — and each
+ * moved session's previous room is kept on the request (session_rooms), so
+ * releasing the room puts every session back exactly where it was, even when
+ * Lecture and Laboratory use different rooms.
  */
 export async function applyRequestedRoom(rcr: {
   id: number;
@@ -166,9 +168,13 @@ export async function applyRequestedRoom(rcr: {
       SELECT ss.id, ss.room_id
       FROM   schedule_sessions ss
       JOIN   rooms r ON r.id = $2
+      JOIN   master_schedule ms ON ms.id = ss.master_schedule_id
+      JOIN   block_subjects bs ON bs.id = ms.block_subject_id
+      JOIN   curriculums c ON c.id = bs.curriculum_id
       WHERE  ss.master_schedule_id = $1
         AND  ss.room_id IS DISTINCT FROM $2
-        AND  (LOWER(TRIM(r.room_type)) IN ('laboratory', 'computer lab') OR COALESCE(ss.type, 'lec') = 'lec')
+        AND  (LOWER(TRIM(r.room_type)) IN ('laboratory', 'computer lab')
+              OR (COALESCE(ss.type, 'lec') = 'lec' AND NOT ${needsOneRoomSql('c')}))
       ORDER BY ss.id
       FOR UPDATE OF ss
     `, [rcr.master_schedule_id, rcr.requested_room_id]);

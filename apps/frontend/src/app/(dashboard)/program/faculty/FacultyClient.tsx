@@ -575,9 +575,8 @@ export default function FacultyPage() {
 
     if (!form.first_name.trim()) errors.first_name = 'First Name is required.';
     if (!form.last_name.trim()) errors.last_name = 'Last Name is required.';
-    if (!form.program_id) {
-      errors.program_id = 'Program is required.';
-    } else if (!programs.some(p => String(p.id) === String(form.program_id))) {
+    // Program is optional — only a chosen one has to exist
+    if (form.program_id && !programs.some(p => String(p.id) === String(form.program_id))) {
       errors.program_id = 'Invalid program selected.';
     }
     if (!form.position.trim()) {
@@ -819,7 +818,7 @@ export default function FacultyPage() {
         <div className="space-y-5">
 
           <div data-field="program_id" tabIndex={-1} className="outline-none">
-            <FieldLabel required>Program</FieldLabel>
+            <FieldLabel optional>Program</FieldLabel>
             <div className={`rounded-xl ${fieldErrors.program_id ? 'ring-2 ring-[#EF4444]' : ''}`}>
               <FriendlySelect
                 value={form.program_id}
@@ -829,10 +828,13 @@ export default function FacultyPage() {
                 disabled={userRole === 'program_chair'}
                 showHintInTrigger
                 minPanelWidth={380}
-                options={(userRole === 'program_chair'
-                  ? programs.filter(p => p.id === chairProgramId)
-                  : programs
-                ).map(p => ({ value: String(p.id), label: p.code, hint: p.name }))}
+                options={userRole === 'program_chair'
+                  ? programs.filter(p => p.id === chairProgramId).map(p => ({ value: String(p.id), label: p.code, hint: p.name }))
+                  : [
+                    // Saving without a program is allowed — this also clears one
+                    { value: '', label: 'No program', hint: 'Not tied to one program' },
+                    ...programs.map(p => ({ value: String(p.id), label: p.code, hint: p.name })),
+                  ]}
               />
             </div>
             {userRole === 'program_chair' && <FieldHint>Locked to your assigned program.</FieldHint>}
@@ -1211,9 +1213,6 @@ export default function FacultyPage() {
                     {f.program_name && (
                       <p className="text-xs mt-0.5 break-words" style={{ color: '#94A3B8' }}>{f.program_name}</p>
                     )}
-                    {!f.program_code && (
-                      <p className="text-xs italic mt-0.5 font-medium" style={{ color: '#D97706' }}>Not assigned</p>
-                    )}
                   </div>
                   {userRole === 'admin' && (
                     <div className="flex gap-1 flex-shrink-0">
@@ -1315,7 +1314,8 @@ export default function FacultyPage() {
                             )}
                           </div>
                         )
-                        : <span className="text-xs italic font-medium" style={{ color: '#D97706' }}>Not assigned</span>}
+                        // Program is optional — none is not a problem
+                        : <span className="text-xs" style={{ color: '#94A3B8' }}>—</span>}
                     </td>
                     <td className="px-5 py-4 font-medium" style={{ color: '#0B2A5B' }}>
                       {f.position ?? <span className="text-xs italic font-medium" style={{ color: '#D97706' }}>Not set</span>}

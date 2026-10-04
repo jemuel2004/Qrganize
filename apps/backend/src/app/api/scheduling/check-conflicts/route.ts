@@ -3,6 +3,7 @@ import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { canAccessMasterSchedule } from '@/services/programScope';
 import { findScheduleConflicts, validateSessions, type ConflictSessionInput } from '@/services/scheduleConflicts';
+import { checkMajorLecLab } from '@/services/majorRoomRule';
 import { withAudit } from '@/services/audit';
 import { termDayCombinationError } from '@/services/dayCombinations';
 import { ensureFacultyActivitiesTable } from '@/database/facultyActivitiesSchema';
@@ -75,7 +76,22 @@ async function POST_handler(req: NextRequest) {
           sessions.map(s => String(s.day ?? '')),
         )
       : null;
-    return NextResponse.json({ conflicts, day_combination_error });
+    // Major subject with a Lecture and a Laboratory: same days, one room (same check as the save)
+    const majorRoom = await checkMajorLecLab(query, {
+      masterScheduleId: Number(master_schedule_id),
+      facultyId: sched.faculty_id ? Number(sched.faculty_id) : null,
+      blockId: Number(sched.block_id),
+      semester: sched.semester || semester || '',
+      academicYear: sched.academic_year || academic_year || '',
+      part: component === 'lab' ? 'lab' : 'lec',
+      days: sessions.map(s => s.day),
+      roomIds: sessions.map(s => s.room_id),
+    });
+    const room_rule = majorRoom.applies ? {
+      error: majorRoom.error,
+      move: majorRoom.move ? { part: majorRoom.move.part, room_name: majorRoom.move.roomName } : null,
+    } : null;
+    return NextResponse.json({ conflicts, day_combination_error, room_rule });
   } catch (error) {
     console.error('[POST /api/scheduling/check-conflicts]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

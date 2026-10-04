@@ -59,6 +59,17 @@ export async function resolveRequiredProgramId(
   return { ok: true, id: parsed.id };
 }
 
+/**
+ * A faculty member's Program is optional: blank → null (no program); a value
+ * must be an active program.
+ */
+export async function resolveOptionalProgramId(
+  raw: unknown,
+): Promise<{ ok: true; id: number | null } | { ok: false; error: FacultyFieldError }> {
+  if (raw === null || raw === undefined || String(raw).trim() === '') return { ok: true, id: null };
+  return resolveRequiredProgramId(raw);
+}
+
 export function parsePosition(raw: unknown): { ok: true; position: string } | { ok: false; error: FacultyFieldError } {
   const position = String(raw ?? '').trim();
   if (!position) {

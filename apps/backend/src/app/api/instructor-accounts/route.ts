@@ -2,7 +2,7 @@
 import { query, transaction } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import bcrypt from 'bcryptjs';
-import { parsePosition, resolveRequiredProgramId } from '@/services/facultyValidation';
+import { parsePosition, resolveOptionalProgramId } from '@/services/facultyValidation';
 import {
   EMAIL_ALREADY_REGISTERED,
   assertEmailAvailable,
@@ -106,7 +106,8 @@ async function POST_handler(req: NextRequest) {
     const pos = parsePosition(position);
     if (!pos.ok)
       return NextResponse.json({ error: pos.error.error, field: pos.error.field }, { status: 400 });
-    const program = await resolveRequiredProgramId(program_id);
+    // Program is optional — a faculty member may belong to no single program
+    const program = await resolveOptionalProgramId(program_id);
     if (!program.ok)
       return NextResponse.json({ error: program.error.error, field: program.error.field }, { status: 400 });
     if (!username?.trim())
