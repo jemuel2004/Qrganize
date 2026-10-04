@@ -21,6 +21,7 @@ import { Skeleton, TableSkeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import { byPosition } from '@/lib/positionRank';
 import { printWorkloadSummary } from '@/lib/workloadSummaryPrint';
+import { blockCode } from '@shared/blockCode';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -111,6 +112,23 @@ function rowValue(row: FacultyScheduleRow): number {
   }
   const h = (row.hours !== null && Number(row.hours) > 0) ? Number(row.hours) : row.total_hours;
   return h ?? 0;
+}
+
+/** Schedule Details order: Regular, then Overload, then Praise; within each,
+ *  by first meeting day and time (unscheduled last), then subject and block. */
+const LOAD_ORDER: Record<string, number> = { Regular: 0, Overload: 1, Praise: 2 };
+function firstDayIndex(dayPattern: string | null): number {
+  const first = (dayPattern ?? '').split('/')[0].trim().slice(0, 3);
+  const i = first ? DAY_ORDER.findIndex(d => d.startsWith(first)) : -1;
+  return i === -1 ? 99 : i;
+}
+function byLoadThenTime(a: FacultyScheduleRow, b: FacultyScheduleRow): number {
+  return (LOAD_ORDER[a.load_category] ?? 9) - (LOAD_ORDER[b.load_category] ?? 9)
+    || firstDayIndex(a.day_pattern) - firstDayIndex(b.day_pattern)
+    || (a.start_time ?? '99').localeCompare(b.start_time ?? '99')
+    || a.subject_code.localeCompare(b.subject_code, undefined, { numeric: true })
+    || String(a.year_level ?? '').localeCompare(String(b.year_level ?? ''), undefined, { numeric: true })
+    || String(a.block_name ?? '').localeCompare(String(b.block_name ?? ''));
 }
 
 /* ── Sub-components ─────────────────────────────────────────────────────── */
@@ -306,7 +324,7 @@ export default function FacultySchedulesClient({
   /* The open Schedule Details reads the live rows, so a background refresh
      (another user changing this faculty's classes) shows up there too. */
   const viewRows = useMemo(
-    () => (viewFaculty ? rows.filter(r => r.faculty_id === viewFaculty.id) : []),
+    () => (viewFaculty ? rows.filter(r => r.faculty_id === viewFaculty.id).sort(byLoadThenTime) : []),
     [rows, viewFaculty],
   );
 
@@ -469,7 +487,7 @@ export default function FacultySchedulesClient({
     g.rows.some(r =>
       r.subject_code.toLowerCase().includes(q) ||
       r.subject_name.toLowerCase().includes(q) ||
-      r.block_name.toLowerCase().includes(q) ||
+      blockCode(r.year_level, r.block_name).toLowerCase().includes(q) ||
       (r.room_name ?? '').toLowerCase().includes(q)
     ), [q]);
 
@@ -1038,7 +1056,7 @@ export default function FacultySchedulesClient({
                             </span>
                           </td>
                           <td className="px-4 py-2.5 whitespace-nowrap" style={{ color: '#64748B' }}>
-                            {row.block_name}
+                            {blockCode(row.year_level, row.block_name)}
                           </td>
                           <td className="px-4 py-2.5" style={{ color: '#64748B' }}>
                             {row.room_name ?? (
