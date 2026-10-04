@@ -33,7 +33,7 @@ import WorkloadPrintMenu, { type WorkloadPrintData } from '@/components/Workload
 import { openWorkloadPrintableVersion } from '@/lib/openPrintHtmlDocument';
 import { coerceSubjectCategory } from '@shared/subjectCategory';
 import {
-  LOAD_GRACE_UNITS, overloadUnitsCap, regularUnitsCap, canHaveOverloadOrPraise,
+  LOAD_GRACE_UNITS, overloadUnitsCap, regularUnitsCap, canHaveOverloadOrPraise, contractualLimitError,
   formatLoadCap, shownUnitsCap, shownUnitsLeft, shownUnitsOver, isRegularLoadComplete,
 } from '@shared/regularLoad';
 import { useWorkloadPolicy } from '@/hooks/useWorkloadPolicy';
@@ -50,7 +50,7 @@ import Pagination from '@/components/ui/Pagination';
 import {
   Plus, X, AlertTriangle, Check, Minus,
   Eye, Award, CheckCircle2, Pencil,
-  Trash2, ArrowUpCircle, ArrowDownCircle, ArrowRight, ArrowLeft,
+  Trash2, ArrowUpCircle, ArrowDownCircle, ArrowRight, ArrowLeft, Ban,
 } from 'lucide-react';
 
 interface PrioritySubject { subject_code: string; subject_name: string; }
@@ -1953,6 +1953,16 @@ export default function WorkloadPage({
 
   /** The picked subjects go past the remaining regular load (e.g. beyond 18 units). */
   const pickedOver = remainingForWarning !== null && pickedTotal > remainingForWarning + 0.001;
+  /** Contractual faculty can't go past their hours limit: a subject that doesn't fit can't be picked */
+  const blockedOverLimit = (value: number) => !extraLoads && remainingForWarning !== null && value > remainingForWarning + 0.001;
+  /** …and the picked subjects together may not go past it either — Assign is blocked */
+  const pickedBlocked = !extraLoads && pickedOver;
+  /** Why the picked subjects can't be assigned (Contractual, over the limit) */
+  const pickedLimitError = (remaining: number | null, limit: number | null) => (
+    selectedFaculty && remaining !== null && limit !== null
+      ? contractualLimitError({ name: selectedFaculty.name, currentHours: limit - remaining, addHours: pickedTotal, limitHours: limit })
+      : null
+  );
   const regularLimitLabel = summary ? `${capText(summary.regular_load_limit, isPermanent)} ${loadUnit}` : `the regular ${loadUnit}`;
 
   /** Selection bar → Assign. Fits the remaining regular load → saved straight away,
@@ -1966,6 +1976,12 @@ export default function WorkloadPage({
     setBulkChecking(false);
     const remaining = fresh ? fresh.summary.remaining_regular_load : remainingForWarning;
     if (remaining != null && pickedTotal <= remaining + 0.001) void assignPicked({ direct: true });
+    else if (!extraLoads) {
+      // Contractual: nothing past the hours limit is saved
+      const why = pickedLimitError(remaining ?? null, fresh?.summary.regular_load_limit ?? summary?.regular_load_limit ?? null);
+      if (why) toast.error(why);
+      else void assignPicked({ direct: true }); // load not known here — the server checks each subject
+    }
     else setBulkOpen(true);
   }
 
@@ -2244,7 +2260,19 @@ export default function WorkloadPage({
                   <span className="min-w-0">Assigning to <span className="font-bold">{selectedFaculty.name}</span></span>
                   <EmploymentBadge status={selectedFaculty.employment_status} />
                 </span>
-                <span className="text-[#15803D]">Highlighted in green below — press + to assign.</span>
+                {(() => {
+                  // Contractual: a subject past the hours limit can't be assigned — say so instead of "press +"
+                  const why = assignTarget && !extraLoads && summary && remainingForWarning !== null
+                    ? contractualLimitError({
+                        name: selectedFaculty.name, subject: assignTarget.subject_code,
+                        currentHours: summary.regular_load_limit - remainingForWarning,
+                        addHours: scheduleValue(assignTarget), limitHours: summary.regular_load_limit,
+                      })
+                    : null;
+                  return why
+                    ? <span className="text-[#B91C1C] font-semibold">{why}</span>
+                    : <span className="text-[#15803D]">Highlighted in green below — press + to assign.</span>;
+                })()}
               </div>
             )}
             </motion.div>
@@ -2684,7 +2712,7 @@ export default function WorkloadPage({
                     <tr>
                       <th className="pl-3 sm:pl-5 pr-1 py-3 w-10">
                         {(() => {
-                          const tabIds = displaySchedules.map(s => s.id);
+                          const tabIds = displaySchedules.filter(s => !blockedOverLimit(scheduleValue(s))).map(s => s.id);
                           const pickedHere = tabIds.filter(id => pickedIds.has(id)).length;
                           const all = pickedHere > 0 && pickedHere === tabIds.length;
                           return (
@@ -2710,6 +2738,8 @@ export default function WorkloadPage({
                       const willExceed = remainingForWarning !== null && (
                         remainingForWarning <= 0.001 || wu > remainingForWarning + 0.001
                       );
+                      // Contractual: a subject past the hours left can't be picked or assigned
+                      const blocked = blockedOverLimit(wu);
                       const isPriority = isPrioritySubject(s);
                       const isPicked = pickedIds.has(s.id);
                       const isAssignTarget = assignTarget?.id === s.id;
@@ -2727,9 +2757,10 @@ export default function WorkloadPage({
                           initial={animateTarget ? { backgroundColor: '#FFFFFF' } : false}
                           animate={animateTarget ? { backgroundColor: ['#FFFFFF', '#86EFAC', '#DCFCE7'] } : undefined}
                           transition={animateTarget ? { duration: 1.1, ease: 'easeOut', delay: 0.35 } : undefined}
-                          onClick={() => togglePicked(s.id)}
+                          onClick={() => { if (!blocked) togglePicked(s.id); }}
                           aria-selected={isPicked}
-                          className={`cursor-pointer transition-colors duration-300 ${
+                          aria-disabled={blocked || undefined}
+                          className={`${blocked ? 'cursor-not-allowed' : 'cursor-pointer'} transition-colors duration-300 ${
                             isAssignTarget ? 'bg-[#DCFCE7] border-l-[3px] border-l-[#22C55E] ring-2 ring-inset ring-[#22C55E]'
                               : isPicked ? 'bg-[#DBEAFE] hover:bg-[#CFE0FB] border-l-[3px] border-l-[#1D5BD6]'
                               : willExceed ? 'bg-[#FEF2F2] hover:bg-red-50'
@@ -2738,7 +2769,9 @@ export default function WorkloadPage({
                           }`}
                         >
                           <td className="pl-3 sm:pl-5 pr-1 py-4 align-middle">
-                            <PickBox checked={isPicked} onToggle={() => togglePicked(s.id)} label={`Select ${s.subject_code}`} />
+                            {blocked && !isPicked
+                              ? <span aria-hidden className="block w-6 h-6 rounded-md border-2 border-[#E2E8F0] bg-[#F1F5F9]" />
+                              : <PickBox checked={isPicked} onToggle={() => togglePicked(s.id)} label={`Select ${s.subject_code}`} />}
                           </td>
                           <td className="px-3 sm:px-5 py-4 font-mono font-semibold text-[#0B2A5B] text-sm align-middle whitespace-nowrap">{s.subject_code}</td>
                           <td className="px-3 sm:px-5 py-4 align-middle">
@@ -2776,7 +2809,14 @@ export default function WorkloadPage({
                             {wu.toFixed(2)}
                           </td>
                           <td className="px-3 sm:px-5 py-4 align-middle">
-                            {willExceed ? (
+                            {blocked ? (
+                              <span
+                                title={`Only ${Math.max(0, remainingForWarning ?? 0).toFixed(2)} hours left — Contractual faculty can't go over ${regularLimitLabel}`}
+                                className="inline-flex items-center gap-1 h-9 px-2.5 rounded-full bg-[#FEE2E2] text-[#B91C1C] border border-[#FECACA] text-[11px] font-bold whitespace-nowrap"
+                              >
+                                <Ban className="w-3.5 h-3.5" /> Exceeds limit
+                              </span>
+                            ) : willExceed ? (
                               <motion.button
                                 {...plusPulse}
                                 onClick={e => { e.stopPropagation(); assignSubject(s.id); }}
@@ -2847,6 +2887,7 @@ export default function WorkloadPage({
                       <p className="flex items-center gap-1.5 text-sm font-semibold text-[#DC2626] tabular-nums mt-0.5">
                         <AlertTriangle className="w-4 h-4 flex-shrink-0" aria-hidden />
                         {overFromRemaining(remainingForWarning - pickedTotal, isPermanent).toFixed(2)} {loadUnit} over the {regularLimitLabel} limit
+                        {pickedBlocked && ' — remove a subject'}
                       </p>
                     ) : (
                       <p className="text-sm text-[#64748B] tabular-nums mt-0.5">
@@ -2870,8 +2911,11 @@ export default function WorkloadPage({
                     type="button"
                     whileTap={reduceMotion ? undefined : { scale: 0.96 }}
                     onClick={() => { void onAssignPickedClick(); }}
-                    disabled={bulkState !== 'idle' || bulkChecking}
-                    className="flex-1 sm:flex-none h-11 px-5 rounded-xl bg-[#1D5BD6] hover:bg-[#2E7DD1] text-white text-sm font-bold inline-flex items-center justify-center gap-2 transition-colors duration-300 disabled:cursor-wait disabled:opacity-90"
+                    disabled={bulkState !== 'idle' || bulkChecking || pickedBlocked}
+                    title={pickedBlocked ? `Contractual faculty can't go over ${regularLimitLabel}` : undefined}
+                    className={`flex-1 sm:flex-none h-11 px-5 rounded-xl bg-[#1D5BD6] hover:bg-[#2E7DD1] text-white text-sm font-bold inline-flex items-center justify-center gap-2 transition-colors duration-300 ${
+                      pickedBlocked ? 'opacity-50 cursor-not-allowed' : 'disabled:cursor-wait disabled:opacity-90'
+                    }`}
                   >
                     {bulkState === 'saving'
                       ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Assigning {Math.min(bulkProgress + 1, bulkTotal)} of {bulkTotal}…</>
@@ -2906,7 +2950,7 @@ export default function WorkloadPage({
             <button
               type="button"
               onClick={() => { void assignPicked(); }}
-              disabled={bulkState !== 'idle' || pickedSchedules.length === 0}
+              disabled={bulkState !== 'idle' || pickedSchedules.length === 0 || pickedBlocked}
               className="flex-1 bg-[#1D5BD6] hover:bg-[#2E7DD1] text-white py-2.5 rounded-xl text-sm font-bold transition-colors duration-300 flex items-center justify-center gap-2 disabled:cursor-wait disabled:opacity-80"
             >
               {bulkState === 'saving'
@@ -2992,7 +3036,7 @@ export default function WorkloadPage({
                       load by <span className="font-semibold text-[#DC2626]">{overFromRemaining(after, isPermanent).toFixed(2)} {loadUnit}</span>.{' '}
                       {extraLoads
                         ? 'You can still assign them, then move any to Overload in View Workload.'
-                        : 'You can still assign them as Regular Load — Contractual faculty can\'t take Overload.'}
+                        : 'Contractual faculty can\'t go over it — remove a subject to continue.'}
                     </p>
                   </div>
                 )}
@@ -3027,15 +3071,13 @@ export default function WorkloadPage({
           Shown when assigning would exceed the regular load limit (fully or
           partially). Admin must explicitly choose to continue or ignore.
           ------------------------------------------------------------------- */}
-      <Modal open={!!overloadConfirm} onClose={() => { if (continueState !== 'saving') setOverloadConfirm(null); }} title={extraLoads ? 'Overload Warning' : 'Over the Regular Load'}>
+      <Modal open={!!overloadConfirm} onClose={() => { if (continueState !== 'saving') setOverloadConfirm(null); }} title="Overload Warning">
         {continueState === 'success' && overloadConfirm && <AssignSuccess note={continueNote} />}
         <div className="space-y-4">
           <div className="bg-[#FEF2F2] border border-[#FECACA] rounded-xl p-4 flex items-start gap-3">
             <AlertTriangle className="w-5 h-5 text-[#DC2626] flex-shrink-0 mt-0.5" />
             <p className="text-[#0B2A5B] text-sm leading-relaxed">
-              {extraLoads
-                ? 'This subject will exceed the regular load limit. You may continue adding it, then manually move a subject to overload using the table below.'
-                : 'This subject will exceed the regular load limit. Contractual faculty can\'t take Overload, so it will be added as Regular Load.'}
+              This subject will exceed the regular load limit. You may continue adding it, then manually move a subject to overload using the table below.
             </p>
           </div>
           {overloadConfirm && (

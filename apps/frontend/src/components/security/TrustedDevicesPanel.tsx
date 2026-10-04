@@ -333,8 +333,8 @@ export default function TrustedDevicesPanel({
       {detail && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" data-modal-root>
           <button type="button" className="absolute inset-0 bg-black/50" aria-label="Close" onClick={() => setDetail(null)} />
-          <div className={`relative w-full max-w-md rounded-2xl overflow-hidden border shadow-xl max-h-[90vh] overflow-y-auto ${dark ? 'bg-[#111827] border-white/10' : 'bg-white border-[#E2E8F0]'}`}>
-            <div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-5 py-4" style={{ background: 'linear-gradient(120deg, #1D5BD6 0%, #0B2A5B 120%)' }}>
+          <div className={`relative w-full max-w-md rounded-2xl overflow-hidden border shadow-xl max-h-[calc(100dvh-1.5rem)] sm:max-h-[90dvh] overflow-y-auto ${dark ? 'bg-[#111827] border-white/10' : 'bg-white border-[#E2E8F0]'}`}>
+            <div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-5 py-4" style={{ backgroundColor: '#1D5BD6' }}>
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-white/15 ring-1 ring-white/25">
                   <span style={{ color: "#FFFFFF" }} className="inline-flex"><DeviceIcon type={detail.device_type} className="w-5 h-5" /></span>

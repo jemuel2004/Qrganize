@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   DEFAULT_WORKLOAD_POLICY, LOAD_GRACE_UNITS,
-  canHaveOverloadOrPraise, computeRegularLoadStatus, formatLoadCap, isRegularLoadComplete, maxDeductionUnits,
+  canHaveOverloadOrPraise, computeRegularLoadStatus, contractualLimitError, formatLoadCap, isRegularLoadComplete, maxDeductionUnits,
   normalizeWorkloadPolicy, overloadUnitsCap, parseWorkloadPolicy, permanentRegularLoadLimit,
   regularLoadLimit, regularUnitsCap, sameWorkloadPolicy, shownUnitsCap, shownUnitsLeft, shownUnitsOver,
   type WorkloadPolicy,
@@ -15,6 +15,19 @@ test('only Permanent faculty can have Overload or Praise Load', () => {
   assert.equal(canHaveOverloadOrPraise('Contractual'), false);
   assert.equal(canHaveOverloadOrPraise(null), false);
   assert.equal(canHaveOverloadOrPraise(undefined), false);
+});
+
+test("a Contractual faculty can't go past the hours limit", () => {
+  // up to the limit is fine — exactly 30 too
+  assert.equal(contractualLimitError({ name: 'J', currentHours: 25, addHours: 5, limitHours: 30 }), null);
+  assert.equal(contractualLimitError({ name: 'J', currentHours: 0, addHours: 3, limitHours: 30 }), null);
+  // 28 + 5 = 33 → refused, and says why
+  assert.equal(
+    contractualLimitError({ name: 'Jemuel', subject: 'IT 211', currentHours: 28, addHours: 5, limitHours: 30 }),
+    "Jemuel has 28.00 of 30 hours — IT 211 (5.00 hours) would make 33.00. Contractual faculty can't go over 30 hours.",
+  );
+  // already over: nothing more fits
+  assert.notEqual(contractualLimitError({ name: 'J', currentHours: 33, addHours: 1, limitHours: 30 }), null);
 });
 
 test('default caps carry the 0.25 grace and are shown without it', () => {

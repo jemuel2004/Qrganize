@@ -53,6 +53,15 @@ const SECTION_TONE: Record<Section, string> = {
 };
 const WHITE = { color: '#FFFFFF' } as const;
 const EASE_P = [0.4, 0, 0.2, 1] as const;
+/** Pop-up headers are solid royal blue, like every other window in QRganize */
+const HEADER_BG = { backgroundColor: '#1D5BD6' } as const;
+
+/** Phones: once the keyboard has opened, scroll the tapped field into the middle of the window */
+function revealFocused(e: React.FocusEvent) {
+  const el = e.target as HTMLElement;
+  if (!el.matches?.('input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), textarea, select')) return;
+  window.setTimeout(() => el.scrollIntoView({ block: 'center', behavior: 'smooth' }), 300);
+}
 
 /**
  * A setting = a big colour tile; clicking it opens the setting in its own
@@ -109,26 +118,23 @@ function AccordionCard({
       {mounted && createPortal(
         <AnimatePresence>
           {open && (
-            /* Phones: a bottom sheet that slides up; larger screens: a centred window */
-            <motion.div key={`setting-${id}`} className="fixed inset-0 z-40 flex items-end sm:items-center justify-center sm:p-6"
+            /* A centred window on every screen — it fits inside the visible screen and scrolls inside */
+            <motion.div key={`setting-${id}`} className="fixed inset-0 z-40 flex items-center justify-center p-3 sm:p-6"
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: reduceMotion ? 0 : 0.25 }}>
               <div className="absolute inset-0 bg-[#0B2A5B]/45 backdrop-blur-sm" onClick={onToggle} aria-hidden />
               <motion.div role="dialog" aria-modal="true" aria-label={title}
-                initial={reduceMotion ? false : { opacity: 0, y: 48 }}
-                animate={{ opacity: 1, y: 0, transition: { type: 'spring', stiffness: 320, damping: 32 } }}
-                exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 32, transition: { duration: 0.2, ease: EASE_P } }}
-                className="relative w-full sm:max-w-2xl max-h-[92dvh] sm:max-h-[90vh] flex flex-col rounded-t-3xl sm:rounded-3xl overflow-hidden bg-white shadow-[0_30px_70px_-25px_rgba(11,42,91,0.6)]">
-                <header className="relative overflow-hidden flex-shrink-0 px-4 py-4 sm:px-6 sm:py-5" style={{ background: `linear-gradient(120deg, ${tone} 0%, #0B2A5B 115%)` }}>
-                  <span aria-hidden className="absolute -right-14 -top-20 w-56 h-56 rounded-full bg-white/10" />
-                  {/* Grab handle — reads as a sheet on phones */}
-                  <span aria-hidden className="sm:hidden absolute top-1.5 left-1/2 -translate-x-1/2 w-10 h-1 rounded-full bg-white/40" />
-                  <div className="relative flex items-center gap-3 sm:gap-4">
+                initial={reduceMotion ? false : { opacity: 0, scale: 0.96, y: 12 }}
+                animate={{ opacity: 1, scale: 1, y: 0, transition: { type: 'spring', stiffness: 360, damping: 30 } }}
+                exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.97, y: 8, transition: { duration: 0.18, ease: EASE_P } }}
+                className="relative w-full max-w-lg sm:max-w-2xl max-h-[calc(100dvh-1.5rem)] sm:max-h-[min(90dvh,860px)] flex flex-col rounded-2xl sm:rounded-3xl overflow-hidden bg-white shadow-[0_30px_70px_-25px_rgba(11,42,91,0.6)]">
+                <header className="flex-shrink-0 px-4 py-3.5 sm:px-6 sm:py-5" style={HEADER_BG}>
+                  <div className="flex items-center gap-3 sm:gap-4">
                     <span className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl bg-white/15 ring-1 ring-white/25 flex items-center justify-center flex-shrink-0">
                       <Icon className="w-5 h-5 sm:w-6 sm:h-6" style={WHITE} />
                     </span>
                     <div className="min-w-0 flex-1">
                       <h2 className="text-lg sm:text-xl font-bold leading-tight truncate" style={WHITE}>{title}</h2>
-                      <p className="text-[13px] sm:text-sm mt-0.5 truncate" style={{ color: 'rgba(255,255,255,0.8)' }}>{subtitle}</p>
+                      <p className="text-[13px] sm:text-sm mt-0.5 leading-snug" style={{ color: 'rgba(255,255,255,0.85)' }}>{subtitle}</p>
                     </div>
                     <button type="button" onClick={onToggle} aria-label="Close"
                       className="inline-flex items-center justify-center gap-1.5 h-10 min-w-10 sm:px-3.5 rounded-full bg-white/15 hover:bg-white/25 text-[15px] font-semibold transition-colors flex-shrink-0" style={WHITE}>
@@ -136,8 +142,7 @@ function AccordionCard({
                     </button>
                   </div>
                 </header>
-                {/* Safe-area padding keeps the last item above the iPhone home bar */}
-                <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)]">{children}</div>
+                <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain" onFocusCapture={revealFocused}>{children}</div>
               </motion.div>
             </motion.div>
           )}
@@ -201,7 +206,7 @@ function ModalShell({
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" data-modal-root>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4" data-modal-root>
       <button
         type="button"
         className="absolute inset-0 bg-black/55"
@@ -212,21 +217,21 @@ function ModalShell({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={`relative w-full ${wide ? 'max-w-lg' : 'max-w-md'} rounded-2xl overflow-hidden border border-white/10 bg-[#111827] shadow-xl max-h-[90vh] overflow-y-auto`}
+        className={`relative w-full ${wide ? 'max-w-lg' : 'max-w-md'} rounded-2xl overflow-hidden border border-white/10 bg-[#111827] shadow-xl max-h-[calc(100dvh-1.5rem)] sm:max-h-[90dvh] flex flex-col`}
       >
-        <div className="flex items-center justify-between gap-3 px-5 py-4 sticky top-0 z-10" style={{ background: 'linear-gradient(120deg, #1D5BD6 0%, #0B2A5B 120%)' }}>
+        <div className="flex items-center justify-between gap-3 px-5 py-4 flex-shrink-0" style={HEADER_BG}>
           <h2 className="text-base font-bold" style={{ color: '#FFFFFF' }}>{title}</h2>
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg bg-white/15 hover:bg-white/25 transition-colors"
+            className="w-10 h-10 inline-flex items-center justify-center rounded-full bg-white/15 hover:bg-white/25 transition-colors"
             style={{ color: '#FFFFFF' }}
             aria-label="Close dialog"
           >
-            <X className="w-4 h-4" />
+            <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="px-5 py-5">{children}</div>
+        <div className="px-5 py-5 flex-1 min-h-0 overflow-y-auto overscroll-contain" onFocusCapture={revealFocused}>{children}</div>
       </div>
     </div>
   );
@@ -476,6 +481,8 @@ export default function ProfileClient() {
     if (!target) return;
 
     target.innerHTML = '';
+    // As wide as its space (Google allows 200–400 px) — on a phone it fills the window
+    const width = Math.round(Math.min(400, Math.max(200, target.clientWidth || 280)));
     window.google.accounts.id.initialize({
       client_id: clientId,
       callback: handleGoogleCredential,
@@ -487,7 +494,7 @@ export default function ProfileClient() {
       theme: 'filled_blue',
       size: 'large',
       text: 'continue_with',
-      width: 280,
+      width,
     });
   }, [gisReady, googleVerified, showChangeGoogle, openSection, handleGoogleCredential]);
 
@@ -614,7 +621,7 @@ export default function ProfileClient() {
           open={openSection === 'picture'}
           onToggle={() => toggle('picture')}
         >
-          <div className="px-6 py-6">
+          <div className="px-4 py-5 sm:px-6 sm:py-6">
             <ProfilePictureUpload
               currentUrl={displayPic ?? null}
               uploadEndpoint="/api/instructor/profile/picture"
@@ -638,7 +645,7 @@ export default function ProfileClient() {
           open={openSection === 'appearance'}
           onToggle={() => toggle('appearance')}
         >
-          <div className="px-6 py-6 space-y-5">
+          <div className="px-4 py-5 sm:px-6 sm:py-6 space-y-5">
             <div>
               <div className="flex items-center justify-between mb-4">
                 <div>
@@ -743,7 +750,7 @@ export default function ProfileClient() {
           open={openSection === 'google'}
           onToggle={() => toggle('google')}
         >
-          <div className="px-6 py-6 space-y-4">
+          <div className="px-4 py-5 sm:px-6 sm:py-6 space-y-4">
             {googleError && (
               <div className="flex items-start gap-3 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">
                 <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
@@ -802,7 +809,7 @@ export default function ProfileClient() {
                       <p className="text-sm text-amber-400">Google Sign-In is not configured.</p>
                     ) : (
                       <div className="flex items-center gap-3">
-                        <div ref={changeGoogleBtnRef} className={googleBusy ? 'pointer-events-none opacity-60' : ''} />
+                        <div ref={changeGoogleBtnRef} className={`flex-1 min-w-0 flex justify-center sm:justify-start ${googleBusy ? 'pointer-events-none opacity-60' : ''}`} />
                         {googleBusy && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
                       </div>
                     )}
@@ -819,7 +826,7 @@ export default function ProfileClient() {
                   <p className="text-sm text-amber-400">Google Sign-In is not configured.</p>
                 ) : (
                   <div className="flex items-center gap-3">
-                    <div ref={googleBtnRef} className={googleBusy ? 'pointer-events-none opacity-60' : ''} />
+                    <div ref={googleBtnRef} className={`flex-1 min-w-0 flex justify-center sm:justify-start ${googleBusy ? 'pointer-events-none opacity-60' : ''}`} />
                     {googleBusy && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
                   </div>
                 )}

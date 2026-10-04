@@ -120,6 +120,26 @@ export function canHaveOverloadOrPraise(employmentStatus: unknown): boolean {
 export const OVERLOAD_PRAISE_PERMANENT_ONLY =
   'Only Permanent faculty can have Overload or Praise Load — Contractual faculty carry Regular Load only.';
 
+/**
+ * Contractual faculty can't go past their Regular Load limit — with no Overload
+ * there is nowhere for the extra hours to go, so the subject is not assigned.
+ * Returns why `addHours` can't be added, or null when it fits.
+ */
+export function contractualLimitError(opts: {
+  name: string;
+  subject?: string;
+  currentHours: number;
+  addHours: number;
+  limitHours: number;
+}): string | null {
+  const after = opts.currentHours + opts.addHours;
+  if (after <= opts.limitHours + 0.001) return null;
+  const limit = formatLoadCap(opts.limitHours);
+  const what = opts.subject ? `${opts.subject} (${opts.addHours.toFixed(2)} hours)` : `${opts.addHours.toFixed(2)} more hours`;
+  return `${opts.name} has ${opts.currentHours.toFixed(2)} of ${limit} hours — ${what} would make ${after.toFixed(2)}. `
+    + `Contractual faculty can't go over ${limit} hours.`;
+}
+
 /* ── Reading and checking policies ────────────────────────────────────────── */
 
 function toNumber(raw: unknown): number {

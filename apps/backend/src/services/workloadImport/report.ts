@@ -11,6 +11,7 @@ export function renderImportReport(r: ImportReport): string {
   const imported = r.classes.filter(c => c.status === 'imported');
   const unchanged = r.classes.filter(c => c.status === 'unchanged');
   const kept = r.classes.filter(c => c.status === 'kept-existing');
+  const overLimit = r.classes.filter(c => c.status === 'over-limit');
   const comps = imported.flatMap(c => c.components.map(k => ({ c, k })));
   const count = (res: string) => comps.filter(x => x.k.result === res).length;
 
@@ -48,7 +49,7 @@ export function renderImportReport(r: ImportReport): string {
 
   line('## Classes');
   line();
-  line(`- Planned: ${plan.classes.length}; imported: ${imported.length}; already in QRganize (unchanged): ${unchanged.length}; kept QRganize's different data: ${kept.length}`);
+  line(`- Planned: ${plan.classes.length}; imported: ${imported.length}; already in QRganize (unchanged): ${unchanged.length}; kept QRganize's different data: ${kept.length}; not assigned (over a Contractual hours limit): ${overLimit.length}`);
   line(`- Components: ${count('as-written')} exactly as on the form, ${count('adjusted')} with the length set to QRganize's hours, ${count('other-sheet')} from another sheet's time, ${count('moved')} moved to a vacant time, ${count('unscheduled')} left unscheduled`);
   line(`- Time conflicts: ${r.conflicts.timeDetected} detected, ${r.conflicts.timeResolved} resolved; room conflicts: ${r.conflicts.roomDetected} detected, ${r.conflicts.roomResolved} resolved`);
   line();

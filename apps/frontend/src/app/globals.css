@@ -391,12 +391,13 @@ body {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
-/* Phones: 16px form text is easier to read and stops iOS zooming on focus */
+/* Phones: 16px form text is easier to read and stops iOS zooming on focus
+   (!important: the text-sm lift below would otherwise make fields 15px, and iOS zooms under 16px) */
 @media (max-width: 639px) {
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
   select,
   textarea {
-    font-size: 16px;
+    font-size: 16px !important;
   }
 }
 /* Light: faint blue wash like the reference instead of a flat fill */

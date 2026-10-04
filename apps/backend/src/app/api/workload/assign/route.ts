@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { query, transaction } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import {
-  regularLoadLimit as termRegularLoadLimit, canHaveOverloadOrPraise, OVERLOAD_PRAISE_PERMANENT_ONLY,
+  regularLoadLimit as termRegularLoadLimit, canHaveOverloadOrPraise, contractualLimitError, OVERLOAD_PRAISE_PERMANENT_ONLY,
 } from '@shared/regularLoad';
 import { getWorkloadPolicy } from '@/services/workloadPolicy';
 import { syncWorkloadMonitoringNotifications } from '@/services/workloadMonitoring';
@@ -93,7 +93,7 @@ async function POST_handler(req: NextRequest) {
     }
 
     // Current regular load for this semester (excluding this subject row in case of retry)
-    const currentLoadResult = await query(`
+    const currentRegularSql = `
       SELECT COALESCE(SUM(
         CASE WHEN il.load_category = 'Regular'
           THEN CASE WHEN $1 = 'Permanent' THEN il.units ELSE il.hours END
@@ -107,7 +107,9 @@ async function POST_handler(req: NextRequest) {
         AND b2.academic_year      = $3
         AND b2.semester           = $4
         AND il.master_schedule_id != $5
-    `, [faculty.employment_status, faculty_id, sched.academic_year, sched.semester, master_schedule_id]);
+    `;
+    const currentRegularParams = [faculty.employment_status, faculty_id, sched.academic_year, sched.semester, master_schedule_id];
+    const currentLoadResult = await query(currentRegularSql, currentRegularParams);
 
     const currentRegular = parseFloat(currentLoadResult.rows[0].regular_load) || 0;
 
@@ -130,6 +132,13 @@ async function POST_handler(req: NextRequest) {
     }
     const regularLoadLimit = termRegularLoadLimit(isPermanent, termDeduction, await getWorkloadPolicy());
     const remainingRegular = parseFloat((regularLoadLimit - currentRegular).toFixed(10));
+
+    // Contractual faculty can't go past their Regular Load limit (no Overload) — nothing is saved
+    const limitError = (current: number) => isPermanent ? null : contractualLimitError({
+      name: faculty.name, subject: sched.subject_code, currentHours: current, addHours: subjectValue, limitHours: regularLoadLimit,
+    });
+    const overLimit = limitError(currentRegular);
+    if (overLimit) return NextResponse.json({ error: overLimit, over_limit: true }, { status: 409 });
 
     // ── No category provided yet: determine which confirmation is needed ─────
     if (!assign_category) {
@@ -179,9 +188,17 @@ async function POST_handler(req: NextRequest) {
     // once can't both pass the checks above, and a failed insert never leaves
     // a class marked Assigned with no load behind it.
     // assign_category === 'regular' (or any other value) is stored as Regular —
-    // even past the limit; the admin can move it to Overload later.
+    // a Permanent faculty may go past the limit (the admin moves it to Overload later);
+    // a Contractual faculty may not.
     const category = assign_category === 'overload' ? 'Overload' : 'Regular';
-    const claimed = await transaction(async (client) => {
+    const claimed = await transaction(async (client): Promise<boolean | { limitError: string }> => {
+      if (!isPermanent) {
+        // One save at a time per Contractual faculty, so two can't both squeeze past the limit
+        await client.query('SELECT id FROM faculty WHERE id = $1 FOR UPDATE', [faculty_id]);
+        const fresh = await client.query(currentRegularSql, currentRegularParams);
+        const late = limitError(parseFloat(fresh.rows[0].regular_load) || 0);
+        if (late) return { limitError: late };
+      }
       const claim = await client.query(
         `UPDATE master_schedule SET faculty_id=$1, status=$2, updated_at=NOW()
          WHERE id=$3 AND faculty_id IS NULL
@@ -219,6 +236,9 @@ async function POST_handler(req: NextRequest) {
       }
       return true;
     });
+    if (typeof claimed === 'object') {
+      return NextResponse.json({ error: claimed.limitError, over_limit: true }, { status: 409 });
+    }
     if (!claimed) {
       return NextResponse.json(
         { error: 'This subject is already assigned to a faculty member and cannot be assigned again.' },

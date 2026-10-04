@@ -4,7 +4,7 @@ import { FACULTY_ACTIVITIES_SQL } from '@/database/facultyActivitiesSchema';
 import { ensureAuditTable } from '@/database/auditSchema';
 import { ensureRealtimeTable } from '@/database/realtimeSchema';
 import { dayCombinationError, type WeekDay } from '@shared/dayCombination';
-import { maxDeductionUnits } from '@shared/regularLoad';
+import { contractualLimitError, maxDeductionUnits, regularLoadLimit } from '@shared/regularLoad';
 import { parseWorkloadSheet, roomKey } from '@shared/workloadImport';
 import { needsOneRoomSql } from '@shared/subjectCategory';
 import { findScheduleConflicts, type ScheduleConflict } from '@/services/scheduleConflicts';
@@ -68,7 +68,8 @@ export interface ClassOutcome {
   subject: string;
   block: string;
   category: string;
-  status: 'imported' | 'unchanged' | 'kept-existing';
+  /** over-limit: not assigned — it would take a Contractual faculty past the hours limit */
+  status: 'imported' | 'unchanged' | 'kept-existing' | 'over-limit';
   value: number;
   unit: 'units' | 'hours';
   excelUnits: number;
@@ -268,6 +269,7 @@ export async function runWorkloadImport(options: ImportOptions): Promise<ImportR
       })))),
       placedKeys: new Set<string>(),
       roomNotesGiven: new Set<string>(),
+      contractualHours: regularLoadLimit(false, 0, policy),
     };
 
     const roomTasks: RoomTask[] = [];
@@ -277,7 +279,7 @@ export async function runWorkloadImport(options: ImportOptions): Promise<ImportR
       const { outcome, tasks } = await placeClassTimes(ctx, cls, facultyId, blockId, isPermanentOf.get(cls.facultyKey)!, report);
       report.classes.push(outcome);
       roomTasks.push(...tasks);
-      if (outcome.status !== 'kept-existing') {
+      if (outcome.status === 'imported' || outcome.status === 'unchanged') {
         await q('INSERT INTO faculty_blocks (faculty_id, block_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [facultyId, blockId]);
       }
     }
@@ -358,7 +360,7 @@ export async function runWorkloadImport(options: ImportOptions): Promise<ImportR
 
     // ── Totals and validation (inside the same transaction) ────────────────
     report.totals = await workloadTotals(q, plan, facultyIds, facultyLabel, term);
-    report.validation = await validate(q, term, plan, facultyIds, report);
+    report.validation = await validate(q, term, plan, facultyIds, report, ctx.contractualHours);
 
     // Open pages refresh once the change is committed; one audit entry for the import
     await q(
@@ -489,6 +491,8 @@ interface PlacementContext {
   wanted: { key: string; facultyKey: string; blockKey: string; day: WeekDay; start: number; end: number }[];
   placedKeys: Set<string>;
   roomNotesGiven: Set<string>;
+  /** Regular Load limit of Contractual faculty (hours) — they can't go past it */
+  contractualHours: number;
 }
 
 /** Placed sessions of one component that share the room the form gives them */
@@ -577,6 +581,25 @@ async function placeClassTimes(
         message: `${outcome.subject} ${outcome.block}: QRganize already has it for ${cls.facultyLabel} with different load data — kept (the form says ${cls.category.label}).` });
     }
     return { outcome, tasks };
+  }
+
+  // A Contractual faculty can't go past the hours limit (no Overload) — the class is left unassigned
+  if (!isPermanent && cls.category.loadCategory === 'Regular') {
+    const cur = await q(
+      `SELECT COALESCE(SUM(hours), 0) AS h FROM instructor_loads
+        WHERE faculty_id = $1 AND load_category = 'Regular' AND academic_year = $2 AND semester = $3`,
+      [facultyId, term.academicYear, term.semester]);
+    const why = contractualLimitError({
+      name: cls.facultyLabel, subject: `${cls.subject.code} ${cls.programCode} ${cls.year}${cls.block}`,
+      currentHours: Number(cur.rows[0].h) || 0, addHours: cls.category.loadValue, limitHours: ctx.contractualHours,
+    });
+    if (why) {
+      outcome.status = 'over-limit';
+      outcome.notes.push(`not assigned — over the ${ctx.contractualHours}-hour Contractual limit`);
+      report.issues.push({ level: 'review', topic: 'Load limit', faculty: cls.facultyLabel,
+        message: `${why} Not assigned — give it to another faculty on Faculty Workload.` });
+      return { outcome, tasks };
+    }
   }
 
   // Claim the class first so its own other component counts in the conflict check
@@ -1046,7 +1069,9 @@ async function workloadTotals(q: Q, plan: ImportPlan, facultyIds: Map<string, nu
   return out;
 }
 
-async function validate(q: Q, term: ImportTerm, plan: ImportPlan, facultyIds: Map<string, number>, report: ImportReport): Promise<ValidationCheck[]> {
+async function validate(
+  q: Q, term: ImportTerm, plan: ImportPlan, facultyIds: Map<string, number>, report: ImportReport, contractualHours: number,
+): Promise<ValidationCheck[]> {
   const checks: ValidationCheck[] = [];
   const add = (name: string, rows: Record<string, unknown>[], describe: (r: Record<string, unknown>) => string) =>
     checks.push({ name, ok: rows.length === 0, detail: rows.length ? rows.slice(0, 12).map(describe).join('; ') + (rows.length > 12 ? `; … ${rows.length - 12} more` : '') : 'none' });
@@ -1157,6 +1182,12 @@ async function validate(q: Q, term: ImportTerm, plan: ImportPlan, facultyIds: Ma
       GROUP BY program_id, year_level, block_name, curriculum_version HAVING COUNT(*) > 1`, p)).rows,
     r => `${r.year_level} ${r.block_name} ×${r.c}`);
   const ids = [...facultyIds.values()];
+  add(`No Contractual faculty past the ${contractualHours}-hour Regular Load limit`, (await q(
+    `SELECT f.name, SUM(il.hours) AS h FROM instructor_loads il JOIN faculty f ON f.id = il.faculty_id
+      WHERE f.id = ANY($1::int[]) AND f.employment_status <> 'Permanent' AND il.load_category = 'Regular'
+        AND il.semester = $2 AND il.academic_year = $3
+      GROUP BY f.id, f.name HAVING SUM(il.hours) > $4 + 0.001`, [ids, term.semester, term.academicYear, contractualHours])).rows,
+    r => `${r.name} ${Number(r.h)} h`);
   // Program is optional for faculty — only the name and the sign-in account must be there
   add('Imported faculty have a name and account', (await q(
     `SELECT f.id, f.name FROM faculty f LEFT JOIN instructor_accounts ia ON ia.faculty_id = f.id
