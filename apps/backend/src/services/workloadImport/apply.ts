@@ -7,6 +7,7 @@ import { dayCombinationError, type WeekDay } from '@shared/dayCombination';
 import { contractualLimitError, maxDeductionUnits, regularLoadLimit } from '@shared/regularLoad';
 import { parseWorkloadSheet, roomKey } from '@shared/workloadImport';
 import { needsOneRoomSql } from '@shared/subjectCategory';
+import { SCHOOL_DAY_END_MIN, SCHOOL_DAY_LABEL, SCHOOL_DAY_START_MIN, minutesHHMM } from '@shared/schoolDay';
 import { findScheduleConflicts, type ScheduleConflict } from '@/services/scheduleConflicts';
 import { generateRoomQr } from '@/services/roomQr';
 import { getWorkloadPolicy } from '@/services/workloadPolicy';
@@ -752,7 +753,7 @@ async function tryTimes(
   ctx: PlacementContext, cls: PlannedClass, comp: PlannedComponent, sessions: PlannedSession[],
   msId: number, facultyId: number, blockId: number, vacantSearch: boolean,
 ): Promise<{ ok: boolean; timeConflicts: string[]; invalid?: string }> {
-  if (!sessionsAreValid(sessions)) return { ok: false, timeConflicts: [], invalid: 'outside 7:00 AM–9:00 PM or over the 12:00–1:00 PM lunch break' };
+  if (!sessionsAreValid(sessions)) return { ok: false, timeConflicts: [], invalid: `outside ${SCHOOL_DAY_LABEL} or over the 12:00–1:00 PM lunch break` };
   if (ctx.combos.length) {
     const err = dayCombinationError(sessions.map(s => s.day), ctx.combos.map(days => ({ days })));
     if (err) return { ok: false, timeConflicts: [], invalid: err };
@@ -1102,9 +1103,9 @@ async function validate(
        FROM t JOIN faculty_activities fa ON fa.faculty_id = t.faculty_id AND fa.day_of_week = t.day
         AND fa.semester = $1 AND fa.academic_year = $2 AND fa.start_time < t.end_time AND t.start_time < fa.end_time`, p)).rows,
     r => `${r.day} ${r.subject_code} ${String(r.s).slice(0, 5)} × ${r.activity} ${String(r.fs).slice(0, 5)}`);
-  add('Every session within 7:00 AM–9:00 PM and clear of lunch', (await q(
+  add(`Every session within ${SCHOOL_DAY_LABEL} and clear of lunch`, (await q(
     `WITH t AS (${termSessions}) SELECT subject_code, day, start_time::text AS s, end_time::text AS e FROM t
-      WHERE start_time < '07:00' OR end_time > '21:00' OR (start_time < '13:00' AND end_time > '12:00')`, p)).rows,
+      WHERE start_time < '${minutesHHMM(SCHOOL_DAY_START_MIN)}' OR end_time > '${minutesHHMM(SCHOOL_DAY_END_MIN)}' OR (start_time < '13:00' AND end_time > '12:00')`, p)).rows,
     r => `${r.day} ${r.subject_code} ${r.s}–${r.e}`);
   add('Session hours equal the curriculum Lec / Lab hours', (await q(
     `WITH t AS (${termSessions})

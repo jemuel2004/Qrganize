@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { createPortal } from 'react-dom';
 import { motion, useReducedMotion } from 'framer-motion';
@@ -395,6 +395,17 @@ export default function FacultyPage() {
 
   useEffect(() => () => { if (pageSwitchTimeout.current) clearTimeout(pageSwitchTimeout.current); }, []);
 
+  const loadFaculty = useCallback(() => {
+    // Status filtering happens client-side (see `facultyDisplayGroup`).
+    setListLoading(true);
+    // A failed load keeps the list shown and says so — never an empty list that looks like "no faculty"
+    fetch('/api/faculty')
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then(d => setFaculty(d.faculty || []))
+      .catch(() => toast.error('Could not load the faculty list. Check your connection and try again.'))
+      .finally(() => setListLoading(false));
+  }, [toast]);
+
   useEffect(() => {
     fetch('/api/programs')
       .then(r => (r.ok ? r.json() : null))
@@ -413,7 +424,7 @@ export default function FacultyPage() {
       })
       .catch(() => {});
     loadFaculty();
-  }, []);
+  }, [loadFaculty]);
 
   /* Subjects to Handle — pulled from the full curriculum across all programs
      (not scoped to whichever program this faculty member belongs to). */
@@ -425,6 +436,7 @@ export default function FacultyPage() {
     fetch('/api/curriculum/subjects')
       .then(r => r.ok ? r.json() : { subjects: [] })
       .then(d => setSubjectOptions(d.subjects || []))
+      .catch(() => setSubjectOptions([]))
       .finally(() => setSubjectOptionsLoading(false));
   }, [modalOpen]);
 
@@ -439,20 +451,13 @@ export default function FacultyPage() {
     fetch(`/api/blocks?${qs}`)
       .then(r => r.ok ? r.json() : { blocks: [] })
       .then(d => setBlockOptions((d.blocks || []) as BlockOption[]))
+      .catch(() => setBlockOptions([]))
       .finally(() => setBlockOptionsLoading(false));
   }, [modalOpen, activeSemester, activeYear]);
 
   /* Back to page 1 whenever the filtered result set changes shape */
   useEffect(() => { setPage(1); }, [search, statusFilter]);
 
-  function loadFaculty() {
-    // Status filtering happens client-side (see `facultyDisplayGroup`).
-    setListLoading(true);
-    fetch('/api/faculty')
-      .then(r => r.json())
-      .then(d => setFaculty(d.faculty || []))
-      .finally(() => setListLoading(false));
-  }
 
   // Live updates: faculty added, edited, deactivated or their account changed
   // elsewhere — the list reloads quietly (search, filter, page and open forms stay).

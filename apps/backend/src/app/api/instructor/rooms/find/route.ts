@@ -30,7 +30,9 @@ export async function GET(req: NextRequest) {
     }
 
     // Basic time validation
-    if (!/^\d{1,2}:\d{2}$/.test(time)) {
+    // 00:00–23:59 only — "25:99" passed the pattern and reached Postgres as a 500
+    const [hh, mm] = time.split(':').map(Number);
+    if (!/^\d{1,2}:\d{2}$/.test(time) || hh > 23 || mm > 59) {
       return NextResponse.json({ error: 'Invalid time format — use HH:MM' }, { status: 400 });
     }
 

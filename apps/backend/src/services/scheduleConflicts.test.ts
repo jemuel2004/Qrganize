@@ -32,13 +32,16 @@ test('each overlapping session is reported once, against the first it hits', () 
   assert.match(found[1].message, /^Session 3 overlaps with Session 1 /);
 });
 
-test('session rules: valid day and time, 7:00 AM–9:00 PM, no lunch overlap', () => {
+test('session rules: valid day and time, 7:00 AM–6:00 PM, no lunch overlap', () => {
   assert.equal(validateSessions([s('Monday', '08:00', 2)]), null);
   assert.equal(validateSessions([s('Someday', '08:00', 2)]), 'Session 1: choose a valid day.');
   assert.equal(validateSessions([s('Monday', '8am', 2)]), 'Session 1: invalid start time.');
   assert.equal(validateSessions([s('Monday', '08:00', 0)]), 'Session 1: hours must be between 0 and 12.');
   assert.equal(validateSessions([s('Monday', '06:30', 1)]), "Session 1: classes can't start before 7:00 AM.");
-  assert.equal(validateSessions([s('Monday', '20:00', 1.5)]), 'Session 1: classes must end by 9:00 PM.');
+  // Faculty are out by 6:00 PM: 4:30–6:00 is the last slot that fits, 5:00–6:30 is not
+  assert.equal(validateSessions([s('Monday', '16:30', 1.5)]), null);
+  assert.equal(validateSessions([s('Monday', '17:00', 1.5)]), 'Session 1: classes must end by 6:00 PM — faculty are out by then.');
+  assert.equal(validateSessions([s('Monday', '20:00', 1.5)]), 'Session 1: classes must end by 6:00 PM — faculty are out by then.');
   assert.equal(validateSessions([s('Monday', '08:00', 1), s('Monday', '11:30', 1)]), 'Session 2: overlaps the lunch break (12:00–1:00 PM).');
   assert.equal(validateSessions([s('Monday', '11:00', 1), s('Monday', '13:00', 1)]), null);
 });

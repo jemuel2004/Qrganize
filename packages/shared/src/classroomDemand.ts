@@ -15,8 +15,16 @@
  *    in minutes as half-open ranges, and an end at/before the start means it
  *    runs past midnight (same rule as schedule conflict checks).
  *
+ *  • Classes must fit the school day (7:00 AM–6:00 PM, lunch free — faculty are
+ *    out by 6 PM), so one classroom holds at most 10 hours of classes a day. A
+ *    day whose classes add up to more needs more rooms even if they never all
+ *    meet at once: required = the larger of the two. Classes running past
+ *    6 PM are listed (after_hours) so they can be moved into the day.
+ *
  * Pure logic (no DB) so the rules can be tested and shared with the UI.
  */
+
+import { SCHOOL_DAY_CLASS_MIN, SCHOOL_DAY_END_MIN, SCHOOL_DAY_START_MIN } from './schoolDay';
 
 export const DEMAND_WEEK_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 
@@ -76,6 +84,12 @@ export interface DayDemand {
   classes: DemandClass[];
   /** Classes needing a classroom that day */
   total: number;
+  /** Minutes of those classes added together */
+  class_minutes: number;
+  /** Classrooms that many minutes need inside one school day (10 hours each) */
+  rooms_by_hours: number;
+  /** The larger of peak and rooms_by_hours — what this day needs */
+  required: number;
 }
 
 export type DemandVerdict = 'none' | 'shortage' | 'enough' | 'surplus';
@@ -100,6 +114,12 @@ export interface ClassroomDemand {
   peak: DayDemand | null;
   /** Days with classroom demand, Monday first */
   days: DayDemand[];
+  /** What decides `required`: the busiest moment, or a day's total class hours */
+  basis: 'peak' | 'hours';
+  /** The day whose class hours need the most rooms (null = no classes) */
+  hours_day: DayDemand | null;
+  /** Classes needing a classroom that start before 7:00 AM or end after 6:00 PM */
+  after_hours: DemandClass[];
 }
 
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)(:[0-5]\d)?$/;
@@ -185,15 +205,30 @@ export function computeClassroomDemand(sessions: DemandSessionInput[], usableCla
         || (a.room_name ?? '').localeCompare(b.room_name ?? '', undefined, { numeric: true })
         || (a.subject_code ?? '').localeCompare(b.subject_code ?? ''));
     const assigned = classes.filter(c => c.status === 'Assigned').length;
+    const classMinutes = list.reduce((sum, m) => sum + (m.e - m.s), 0);
+    const roomsByHours = Math.ceil(classMinutes / SCHOOL_DAY_CLASS_MIN);
     days.push({
       day, peak: classes.length, start: toHm(best.from), end: toHm(best.to),
       assigned, unassigned: classes.length - assigned, classes, total: list.length,
+      class_minutes: classMinutes, rooms_by_hours: roomsByHours, required: Math.max(classes.length, roomsByHours),
     });
   }
 
   // Busiest day; ties go to the earlier day of the week
   const peak = days.reduce<DayDemand | null>((p, d) => (!p || d.peak > p.peak ? d : p), null);
-  const required = peak?.peak ?? 0;
+  const hoursDay = days.reduce<DayDemand | null>((p, d) => (!p || d.rooms_by_hours > p.rooms_by_hours ? d : p), null);
+  const peakNeed = peak?.peak ?? 0;
+  const hoursNeed = hoursDay?.rooms_by_hours ?? 0;
+  const required = Math.max(peakNeed, hoursNeed);
+  const basis: ClassroomDemand['basis'] = hoursNeed > peakNeed ? 'hours' : 'peak';
+  const afterHours = meetings
+    .filter(m => m.s < SCHOOL_DAY_START_MIN || m.e > SCHOOL_DAY_END_MIN)
+    .sort((a, b) => DEMAND_WEEK_DAYS.indexOf(a.day as typeof DEMAND_WEEK_DAYS[number]) - DEMAND_WEEK_DAYS.indexOf(b.day as typeof DEMAND_WEEK_DAYS[number]) || a.s - b.s)
+    .map((m): DemandClass => ({
+      id: m.id, day: m.day, subject_code: m.subject_code, subject_name: m.subject_name, block: m.block,
+      faculty_name: m.faculty_name, start: m.start, end: m.end, room_name: m.room_name, room_type: m.room_type,
+      status: m.status, double_booked: false,
+    }));
   const unassigned = meetings.filter(m => m.status !== 'Assigned').length;
   const verdict: DemandVerdict = required === 0 ? 'none' : required > usable ? 'shortage' : required === usable ? 'enough' : 'surplus';
 
@@ -205,5 +240,6 @@ export function computeClassroomDemand(sessions: DemandSessionInput[], usableCla
     excluded_lab: excludedLab, lec_in_lab_room: lecInLab, verdict,
     assignment_issue: verdict !== 'shortage' && unassigned > 0,
     peak, days,
+    basis, hours_day: hoursDay, after_hours: afterHours,
   };
 }

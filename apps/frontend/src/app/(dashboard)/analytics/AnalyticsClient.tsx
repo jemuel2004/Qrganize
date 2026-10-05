@@ -19,6 +19,7 @@ import LoadBreakdownDonut from '@/components/charts/LoadBreakdownDonut';
 import { BarChart, EASE, Legend, LineChart, type Series } from './charts';
 import DateRangeButton, { type Range } from './DateRangeButton';
 import DetailModal, { type DetailKey, type Details } from './DetailModal';
+import { SCHOOL_DAY_END_MIN } from '@shared/schoolDay';
 
 /* ─── Data (GET /api/analytics?from&to — active term) ─────────────────────── */
 
@@ -68,8 +69,9 @@ const KINDS = Object.keys(KIND) as Kind[];
 const roomSeries = <T extends Record<Kind, number>>(rows: T[]): Series[] =>
   KINDS.map(k => ({ key: k, label: KIND[k].rooms, color: KIND[k].color, values: rows.map(r => r[k]) }));
 /** 420 → "7–9a" (short so all seven fit a one-third card) */
+/** Two-hour bucket "1–3p"; the last one stops at the end of the school day ("5–6p") */
 const bucketLabel = (min: number) => {
-  const s = min / 60, e = s + 2;
+  const s = min / 60, e = Math.min(s + 2, SCHOOL_DAY_END_MIN / 60);
   return `${s % 12 || 12}–${e % 12 || 12}${e < 12 ? 'a' : 'p'}`;
 };
 const percent = (n: number) => `${n}%`;

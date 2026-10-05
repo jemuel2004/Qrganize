@@ -14,6 +14,7 @@ import { useScrollLock } from '@/hooks/useScrollLock';
 import { logoHover, logoTap, NAV_DURATION, NAV_EASE } from '@/components/layout/navMotion';
 import { useSchedulingPendingCounts } from '@/hooks/useSchedulingPendingCounts';
 import { useNavTrail } from '@/lib/navTrail';
+import { PageSuccessCheckHost } from '@/components/ui/SaveSuccessOverlay';
 
 /**
  * Admin chrome: sticky top navigation + full-width content.
@@ -23,6 +24,8 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
   const reduceMotion = useReducedMotion();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [role, setRole] = useState('admin');
+  /** Shown in the phone menu ("Signed in as …") */
+  const [username, setUsername] = useState<string | null>(null);
   const isWorkloadPrint = pathname === '/workload/print' || pathname.startsWith('/workload/print/');
   const pendingCounts = useSchedulingPendingCounts();
   // Back buttons return to the page this tab came from
@@ -53,6 +56,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
       .then(r => (r.ok ? r.json() : null))
       .then(data => {
         if (data?.user?.role) setRole(data.user.role);
+        if (data?.user?.username) setUsername(String(data.user.username));
       })
       .catch(() => {});
   }, []);
@@ -111,10 +115,19 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
             </div>
           </div>
 
-          {mobileOpen && (
-            <AdminMobileNav onNavigate={() => setMobileOpen(false)} pendingCounts={pendingCounts} />
-          )}
         </header>
+
+        {/* "Saved" checks that play after a dialog has closed */}
+        <PageSuccessCheckHost />
+
+        {/* Phones / tablets: slide-in sidebar — the same one as the Faculty side */}
+        <AdminMobileNav
+          open={mobileOpen}
+          onClose={() => setMobileOpen(false)}
+          role={role}
+          username={username}
+          pendingCounts={pendingCounts}
+        />
 
         <main
           className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable] dashboard-main-scroll flex flex-col bg-[var(--background)]"

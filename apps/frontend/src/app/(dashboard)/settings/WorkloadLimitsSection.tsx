@@ -13,6 +13,7 @@ import { useToast } from '@/context/ToastContext';
 import { useRealtime } from '@/context/RealtimeContext';
 import { setWorkloadPolicyCache } from '@/hooks/useWorkloadPolicy';
 import { Skeleton } from '@/components/ui/skeletons';
+import SaveSuccessOverlay, { useSaveSuccess } from '@/components/ui/SaveSuccessOverlay';
 import {
   DEFAULT_WORKLOAD_POLICY, LOAD_GRACE_UNITS, WORKLOAD_POLICY_LIMITS,
   normalizeWorkloadPolicy, parseWorkloadPolicy, sameWorkloadPolicy,
@@ -51,7 +52,7 @@ export default function WorkloadLimitsSection() {
   const [loadError, setLoadError] = useState('');
   const [error, setError] = useState<{ field?: WorkloadPolicyField; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
-  const [success, setSuccess] = useState(false);
+  const success = useSaveSuccess();
 
   const parsed = parseWorkloadPolicy(form);
   const dirty = !!saved && (!parsed.ok || !sameWorkloadPolicy(parsed.policy, saved));
@@ -100,11 +101,8 @@ export default function WorkloadLimitsSection() {
       setSaved(policy);
       setForm(toForm(policy));
       setWorkloadPolicyCache(policy); // this tab's pages show the new limits at once
-      setSuccess(true);
-      window.setTimeout(() => {
-        setSuccess(false);
-        toast.success('Workload limits saved — every faculty load now uses them.');
-      }, 1300);
+      // The check draws itself first, then the toast says what it means
+      success.play(() => toast.success('Workload limits saved — every faculty load now uses them.'));
     } catch {
       setError({ message: 'Connection error. Please try again.' });
     } finally {
@@ -134,17 +132,7 @@ export default function WorkloadLimitsSection() {
 
   return (
     <div className="relative space-y-5">
-      {success && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-white/80 backdrop-blur-sm save-success-overlay">
-          <div className="save-success-badge flex flex-col items-center gap-3 px-8 py-7 rounded-2xl bg-white border border-[#E2E8F0] shadow-xl">
-            <svg width="72" height="72" viewBox="0 0 52 52" aria-hidden>
-              <circle className="save-success-circle" cx="26" cy="26" r="24" fill="none" stroke="#16A34A" strokeWidth="3" />
-              <path className="save-success-check" fill="none" stroke="#16A34A" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" d="M14.5 27 22 34.5 38 17" />
-            </svg>
-            <p className="text-base font-semibold text-[#0B2A5B]">Workload limits saved</p>
-          </div>
-        </div>
-      )}
+      {success.shown && <SaveSuccessOverlay title="Workload limits saved" />}
 
       <div className="space-y-3">
         {FIELDS.map(({ field, title, hint, step }) => {

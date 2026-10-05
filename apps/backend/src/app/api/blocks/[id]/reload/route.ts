@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query, transaction } from '@/database/db';
+import { parseId } from '@/database/ids';
 import { getAuthUser } from '@/auth/auth';
 import { assertBlockProgramAccess } from '@/services/programScope';
 import { ensureBlockCurriculumVersion } from '@/database/migrateCurriculum';
@@ -13,7 +14,8 @@ async function POST_handler(req: NextRequest, { params }: { params: Promise<{ id
     if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-    const { id } = await params;
+    const id = parseId((await params).id);
+    if (id === null) return NextResponse.json({ error: 'Block not found.' }, { status: 404 });
 
     await ensureBlockCurriculumVersion();
 

@@ -16,6 +16,7 @@ import ErrorBoundary from '@/components/ui/ErrorBoundary';
 import InstructorSidebar, { InstructorMobileNav } from '@/components/layout/InstructorSidebar';
 import { useScrollLock } from '@/hooks/useScrollLock';
 import { useNavTrail } from '@/lib/navTrail';
+import { PageSuccessCheckHost } from '@/components/ui/SaveSuccessOverlay';
 
 /**
  * A subject newly assigned to this faculty pops up on whatever page is open
@@ -122,6 +123,9 @@ export default function InstructorShell({ children }: { children: React.ReactNod
                   </div>
 
                 </header>
+
+                {/* "Saved" checks that play after a dialog has closed */}
+                <PageSuccessCheckHost />
 
                 {/* Phones / tablets: slide-in sidebar */}
                 <InstructorMobileNav open={mobileOpen} onClose={() => setMobileOpen(false)} />

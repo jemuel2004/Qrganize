@@ -1,5 +1,6 @@
 ﻿import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/database/db';
+import { parseId } from '@/database/ids';
 import { getAuthUser } from '@/auth/auth';
 import { computeRegularLoadStatus, regularLoadLimit as termRegularLoadLimit } from '@shared/regularLoad';
 import { getWorkloadPolicy } from '@/services/workloadPolicy';
@@ -41,7 +42,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ facu
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { facultyId } = await params;
+    const facultyId = parseId((await params).facultyId);
+    if (facultyId === null) return NextResponse.json({ error: 'Faculty not found' }, { status: 404 });
     const { searchParams } = new URL(req.url);
     const academicYear = searchParams.get('academic_year');
     const semester = searchParams.get('semester');

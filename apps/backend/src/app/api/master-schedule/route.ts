@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/database/db';
+import { parseId } from '@/database/ids';
 import { getAuthUser } from '@/auth/auth';
 import { ensureCurriculumFields } from '@/database/migrateCurriculum';
 import { effectiveSubjectCategorySql } from '@shared/subjectCategory';
@@ -24,6 +25,10 @@ export async function GET(req: NextRequest) {
     // Require at least a program or a block — returning everything at once is expensive
     if (!programId && !blockId) {
       return NextResponse.json({ schedules: [] });
+    }
+    // Ids must be whole numbers in range — anything else used to reach Postgres and come back as a 500
+    if ((programId && parseId(programId) === null) || (blockId && parseId(blockId) === null)) {
+      return NextResponse.json({ error: 'Invalid program or block.' }, { status: 400 });
     }
 
     let effectiveProgramId: string | number | null = programId;

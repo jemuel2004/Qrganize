@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/database/db';
+import { parseId } from '@/database/ids';
 import { getAuthUser } from '@/auth/auth';
 import { ensureFacultyActivitiesTable } from '@/database/facultyActivitiesSchema';
 import { canAccessProgram } from '@/services/programScope';
@@ -18,8 +19,8 @@ type Scope = { ok: true; id: number } | { ok: false; response: NextResponse };
 async function facultyInScope(req: NextRequest, idRaw: string): Promise<Scope> {
   const auth = await getAuthUser(req) as { role?: string } | null;
   if (!auth || !STAFF.includes(auth.role ?? '')) return { ok: false, response: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
-  const id = Number(idRaw);
-  if (!Number.isInteger(id) || id <= 0) return { ok: false, response: NextResponse.json({ error: 'Faculty not found.' }, { status: 404 }) };
+  const id = parseId(idRaw);
+  if (id === null) return { ok: false, response: NextResponse.json({ error: 'Faculty not found.' }, { status: 404 }) };
   const owner = await query('SELECT program_id FROM faculty WHERE id = $1', [id]);
   if (!owner.rows[0] || !(await canAccessProgram(auth, owner.rows[0].program_id))) {
     return { ok: false, response: NextResponse.json({ error: 'Faculty not found.' }, { status: 404 }) };

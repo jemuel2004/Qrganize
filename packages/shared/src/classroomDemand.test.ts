@@ -162,3 +162,34 @@ test('all schedules are laboratories → no classroom requirement', () => {
   assert.equal(d.additional, 0);
   assert.equal(d.excluded_lab, 4);
 });
+
+test('a day with more class hours than its rooms can hold inside 7 AM–6 PM needs more rooms', () => {
+  // 12 two-hour classes, never more than 2 at once, but 24 hours of class on one day:
+  // a classroom holds 10 hours a day (7–12, 1–6), so at least 3 rooms are needed
+  const sessions = many(12, i => {
+    const start = 7 + 2 * Math.floor(i / 2) + (i >= 6 ? 1 : 0); // 7, 9, 11 … then 2 PM, 4 PM, 6 PM
+    const hh = (h: number) => `${String(h).padStart(2, '0')}:00`;
+    return s('Tuesday', hh(start), hh(start + 2), (i % 2) + 1);
+  });
+  const d = computeClassroomDemand(sessions, 2);
+  assert.equal(d.peak?.peak, 2);
+  assert.equal(d.days[0].class_minutes, 24 * 60);
+  assert.equal(d.days[0].rooms_by_hours, 3);
+  assert.equal(d.required, 3);
+  assert.equal(d.basis, 'hours');
+  assert.equal(d.hours_day?.day, 'Tuesday');
+  assert.equal(d.verdict, 'shortage');
+  assert.equal(d.additional, 1);
+});
+
+test('classes past 6:00 PM are listed as after-hours; the busiest moment still decides when it is higher', () => {
+  const sessions = [
+    ...many(5, i => s('Monday', '09:00', '10:30', i + 1)),
+    s('Monday', '17:30', '19:00', 1),
+    s('Wednesday', '18:00', '21:00', null),
+  ];
+  const d = computeClassroomDemand(sessions, 5);
+  assert.equal(d.required, 5);
+  assert.equal(d.basis, 'peak');
+  assert.deepEqual(d.after_hours.map(c => `${c.day} ${c.start}-${c.end}`), ['Monday 17:30-19:00', 'Wednesday 18:00-21:00']);
+});

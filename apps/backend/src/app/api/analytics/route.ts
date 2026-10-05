@@ -12,7 +12,7 @@ import {
  *
  * Room utilization is read off the timetable as it stood on a given date
  * (sessions created on or before it): a room's booked minutes per week ÷
- * bookable minutes per week (Mon–Sat, 7 AM–9 PM minus lunch). The range end
+ * bookable minutes per week (Mon–Sat, 7 AM–6 PM minus lunch). The range end
  * gives the current rate, the range start the "previous" one, and each month
  * end a trend point. Weekly patterns (by day / by time / class type) and
  * conflicts describe the timetable as it stands now.
@@ -20,8 +20,8 @@ import {
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const WEEK_CAPACITY_MIN = DAYS.length * (DAY_END_MIN - DAY_START_MIN - (LUNCH_END_MIN - LUNCH_START_MIN));
-/** Two-hour buckets 7–9 AM … 7–9 PM */
-const TIME_BUCKETS = Array.from({ length: (DAY_END_MIN - DAY_START_MIN) / 120 }, (_, i) => DAY_START_MIN + i * 120);
+/** Two-hour buckets 7–9 AM … 3–5 PM, then the last part of the day (5–6 PM) */
+const TIME_BUCKETS = Array.from({ length: Math.ceil((DAY_END_MIN - DAY_START_MIN) / 120) }, (_, i) => DAY_START_MIN + i * 120);
 const MAX_RANGE_DAYS = 366;
 const DAY_MS = 86_400_000;
 

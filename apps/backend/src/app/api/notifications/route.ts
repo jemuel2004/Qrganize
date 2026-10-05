@@ -21,7 +21,8 @@ export async function GET(req: NextRequest) {
 
     const { searchParams } = new URL(req.url);
     // Condition alerts come first (see ORDER BY), then the most recent events
-    const limit = Math.min(parseInt(searchParams.get('limit') || '50'), 300);
+    // A missing or unreadable limit (e.g. "abc" → NaN) falls back to 50 instead of reaching Postgres
+    const limit = Math.min(Math.max(parseInt(searchParams.get('limit') || '50', 10) || 50, 1), 300);
 
     let result;
     let countResult;

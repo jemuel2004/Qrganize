@@ -95,8 +95,14 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
       try {
         const res = await fetch('/api/realtime/versions', { cache: 'no-store', signal: ctrl.signal });
         if (res.status === 401) {
-          stopped = true; // signed out — pages handle that on their own requests
+          // The session ended while the page was open (expired, signed out elsewhere,
+          // password changed, account deactivated): go to sign-in instead of leaving
+          // a page whose every save would fail. A database outage never answers 401.
+          stopped = true;
           setStatus('off');
+          if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+            window.location.replace('/login');
+          }
           return;
         }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);

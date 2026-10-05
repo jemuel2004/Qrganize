@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query, transaction } from '@/database/db';
+import { parseId } from '@/database/ids';
 import { getAuthUser } from '@/auth/auth';
 import { releaseFacultyAssignments } from '@/services/releaseFacultyAssignments';
 import bcrypt from 'bcryptjs';
@@ -33,7 +34,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     await ensureFacultyProfileColumns();
-    const { id } = await params;
+    const id = parseId((await params).id);
+    if (id === null) return NextResponse.json({ error: 'Faculty not found.' }, { status: 404 });
 
     if (isScopedChair(auth)) {
       const ownerCheck = await query('SELECT program_id FROM faculty WHERE id = $1', [id]);
@@ -289,7 +291,8 @@ async function PATCH_handler(req: NextRequest, { params }: { params: Promise<{ i
     if (!auth || auth.role !== 'admin') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-    const { id } = await params;
+    const id = parseId((await params).id);
+    if (id === null) return NextResponse.json({ error: 'Faculty not found.' }, { status: 404 });
 
     const { designation_type, designation_units } = await req.json();
 
@@ -330,7 +333,8 @@ async function DELETE_handler(req: NextRequest, { params }: { params: Promise<{ 
     if (!auth || auth.role !== 'admin') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-    const { id } = await params;
+    const id = parseId((await params).id);
+    if (id === null) return NextResponse.json({ error: 'Faculty not found.' }, { status: 404 });
 
     // Fetch profile picture path before deletion so we can clean up the file
     const picRow = await query(

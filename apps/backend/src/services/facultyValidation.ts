@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/database/db';
+import { parseId } from '@/database/ids';
 import { EMAIL_ALREADY_REGISTERED } from '@/auth/emailIdentity';
 import { resetFacultyProfileColumns } from '@/database/schema-guard';
 
@@ -82,9 +83,7 @@ export function parsePosition(raw: unknown): { ok: true; position: string } | { 
 }
 
 export function parseFacultyId(raw: string): number | null {
-  const id = Number(raw);
-  if (!Number.isInteger(id) || id <= 0) return null;
-  return id;
+  return parseId(raw);
 }
 
 type PgError = Error & {

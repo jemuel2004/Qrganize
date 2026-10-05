@@ -384,11 +384,14 @@ export default function ProfileClient() {
     setLocalPicUrl(url);
     setHasCustom(true);
     updatePicUrl(url, { custom: true });
+    // Close the Profile Picture box — the "updated" check then plays over the page
+    setOpenSection(null);
   }
   function handlePicRemove(nextUrl?: string | null) {
     setLocalPicUrl(nextUrl ?? null);
     setHasCustom(false);
     updatePicUrl(nextUrl ?? null, { custom: false });
+    setOpenSection(null); // then the "removed" animation plays over the page
   }
 
   /* Security modals */

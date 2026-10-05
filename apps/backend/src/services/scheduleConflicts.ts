@@ -21,12 +21,15 @@
 
 export const WEEK_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
-/** Academic day: sessions start at/after 7:00 AM and end by 9:00 PM. */
-export const DAY_START_MIN = 7 * 60;
-export const DAY_END_MIN = 21 * 60;
-/** Lunch break for all faculty: 12:00–1:00 PM — no class may overlap it. */
-export const LUNCH_START_MIN = 12 * 60;
-export const LUNCH_END_MIN = 13 * 60;
+/** Academic day: sessions start at/after 7:00 AM and end by 6:00 PM (faculty are
+ *  out by 6 PM); lunch 12:00–1:00 PM — no class may overlap it. Shared definition. */
+import {
+  SCHOOL_DAY_START_MIN, SCHOOL_DAY_END_MIN, LUNCH_START_MIN, LUNCH_END_MIN, minutesLabel,
+} from '@shared/schoolDay';
+
+export const DAY_START_MIN = SCHOOL_DAY_START_MIN;
+export const DAY_END_MIN = SCHOOL_DAY_END_MIN;
+export { LUNCH_START_MIN, LUNCH_END_MIN };
 
 /** Statuses whose sessions occupy time. */
 const ACTIVE_STATUSES = ['Assigned', 'Scheduled', 'Completed'];
@@ -82,8 +85,10 @@ export function validateSessions(sessions: ConflictSessionInput[]): string | nul
     const h = parseFloat(String(s.hours));
     if (!Number.isFinite(h) || h <= 0 || h > 12) return `Session ${n}: hours must be between 0 and 12.`;
     const start = timeToMinutes(String(s.start_time));
-    if (start < DAY_START_MIN) return `Session ${n}: classes can't start before 7:00 AM.`;
-    if (start + Math.round(h * 60) > DAY_END_MIN) return `Session ${n}: classes must end by 9:00 PM.`;
+    if (start < DAY_START_MIN) return `Session ${n}: classes can't start before ${minutesLabel(DAY_START_MIN)}.`;
+    if (start + Math.round(h * 60) > DAY_END_MIN) {
+      return `Session ${n}: classes must end by ${minutesLabel(DAY_END_MIN)} — faculty are out by then.`;
+    }
     if (start < LUNCH_END_MIN && start + Math.round(h * 60) > LUNCH_START_MIN) {
       return `Session ${n}: overlaps the lunch break (12:00–1:00 PM).`;
     }
@@ -99,7 +104,7 @@ const minutesToTime = (min: number) =>
  * Monday 8:00–10:00 entered twice. The form already flags these while
  * editing; the save route refuses them too, so a request that skips the form
  * can't store a subject meeting twice at once. One entry per later session.
- * Run after validateSessions (valid days and times, nothing past 9:00 PM).
+ * Run after validateSessions (valid days and times, nothing past the end of the school day).
  */
 export function findOverlappingSessions(sessions: ConflictSessionInput[]): ScheduleConflict[] {
   const span = (s: ConflictSessionInput) => {

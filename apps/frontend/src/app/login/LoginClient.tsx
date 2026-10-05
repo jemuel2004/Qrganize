@@ -18,9 +18,10 @@ import { headingFont } from '@/lib/fonts';
  */
 type Role = 'admin_chair' | 'instructor';
 
-const ROLES: { id: Role; label: string }[] = [
-  { id: 'admin_chair', label: 'Administrator / Chair' },
-  { id: 'instructor',  label: 'Faculty' },
+/** `short` is shown on phones, where the full label would wrap inside its button */
+const ROLES: { id: Role; label: string; short: string }[] = [
+  { id: 'admin_chair', label: 'Administrator / Chair', short: 'Admin / Chair' },
+  { id: 'instructor',  label: 'Faculty', short: 'Faculty' },
 ];
 
 /* ── Component ────────────────────────────────────────────────────────── */
@@ -432,22 +433,22 @@ export default function LoginClient() {
               animate="center"
               exit="exit"
               onAnimationComplete={() => setCardShown(n => n + 1)}
-              className="relative w-full bg-white border border-[#E3E9F3] rounded-3xl"
+              // Phones: 24px / 20px inside — the fixed 40px squeezed every row on a 390px screen
+              className="relative w-full bg-white border border-[#E3E9F3] rounded-3xl px-5 pt-6 pb-6 sm:px-10 sm:pt-10 sm:pb-[34px]"
               style={{
                 boxShadow: '0 1px 3px rgba(11,42,91,0.05), 0 24px 60px -20px rgba(11,42,91,0.28)',
-                padding: '40px 40px 34px',
                 transformStyle: 'preserve-3d',
                 backfaceVisibility: 'hidden',
               }}
             >
-              <div className="mb-7">
+              <div className="mb-6 sm:mb-7">
                 <div className="flex items-center gap-3">
-                  <UserRound className="w-9 h-9 text-[#0B2A5B]" strokeWidth={1.9} aria-hidden="true" />
-                  <h2 className={`${headingFont.className} text-[30px] font-bold text-[#0B2A5B] leading-tight`}>
+                  <UserRound className="w-8 h-8 sm:w-9 sm:h-9 text-[#0B2A5B] flex-shrink-0" strokeWidth={1.9} aria-hidden="true" />
+                  <h2 className={`${headingFont.className} text-[26px] sm:text-[30px] font-bold text-[#0B2A5B] leading-tight`}>
                     {step === 'otp' ? 'Verify Login' : 'Sign In'}
                   </h2>
                 </div>
-                <p className="text-[15px] text-[#5B6F8C] mt-2">
+                <p className="text-[14px] sm:text-[15px] text-[#5B6F8C] mt-2">
                   {step === 'otp'
                     ? 'A 6-digit authentication code was sent to your verified email.'
                     : 'Enter your credentials to continue.'}
@@ -539,10 +540,9 @@ export default function LoginClient() {
                             aria-pressed={active}
                             className={[
                               // min-w-0 + wrapping on phones: long labels never push the card wider
-                              'relative flex-1 min-w-0 px-2 inline-flex items-center justify-center gap-2 text-[14px] leading-tight text-center font-semibold rounded-[10px] sm:whitespace-nowrap transition-colors duration-300',
+                              'relative flex-1 min-w-0 min-h-[44px] px-2 py-1.5 inline-flex items-center justify-center gap-2 text-[14px] leading-tight text-center font-semibold rounded-[10px] sm:whitespace-nowrap transition-colors duration-300',
                               active ? 'text-[#1D5BD6]' : 'text-[#0B2A5B] hover:text-[#1D5BD6]',
                             ].join(' ')}
-                            style={{ height: '44px' }}
                           >
                             {active && (
                               <span
@@ -551,8 +551,9 @@ export default function LoginClient() {
                               />
                             )}
                             <span className="relative inline-flex items-center gap-1.5 min-w-0">
-                              {active && <UserRound className="w-4 h-4 flex-shrink-0" aria-hidden="true" />}
-                              {r.label}
+                              {active && <UserRound className="hidden sm:inline-block w-4 h-4 flex-shrink-0" aria-hidden="true" />}
+                              <span className="sm:hidden">{r.short}</span>
+                              <span className="hidden sm:inline">{r.label}</span>
                             </span>
                           </button>
                         );
@@ -613,7 +614,7 @@ export default function LoginClient() {
                     </div>
 
                     {/* Remember Me + Forgot Password */}
-                    <div className="flex items-center justify-between mb-6">
+                    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 mb-6">
                       <label className="flex items-center gap-2 cursor-pointer select-none group">
                         <input
                           type="checkbox"

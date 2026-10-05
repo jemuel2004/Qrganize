@@ -54,16 +54,30 @@ function fmt12(t: string): string {
   if (h === 0) h = 12;
   return `${h}:${m} ${ampm}`;
 }
+/**
+ * The school's time zone. Class times, "today" (from the API) and the greeting all
+ * follow it, so the server render (UTC on Vercel) and the browser show the same
+ * greeting — otherwise React throws a hydration error and rebuilds the page.
+ */
+const SCHOOL_TZ = 'Asia/Manila';
+const schoolHourFmt = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: 'numeric', hourCycle: 'h23', timeZone: SCHOOL_TZ });
+/** Minutes since midnight at the school */
+function schoolMinutes(d = new Date()): number {
+  const parts = schoolHourFmt.formatToParts(d);
+  const get = (t: string) => Number(parts.find(p => p.type === t)?.value ?? 0);
+  return (get('hour') % 24) * 60 + get('minute');
+}
+const schoolHour = () => Math.floor(schoolMinutes() / 60);
 function sessionMins(t: string) {
   const [h, m] = t.split(':').map(Number);
   return h * 60 + m;
 }
 function isOngoing(sess: TodaySession) {
-  const nowM = new Date().getHours() * 60 + new Date().getMinutes();
+  const nowM = schoolMinutes();
   return sessionMins(sess.start_time) <= nowM && nowM < sessionMins(sess.end_time);
 }
 function isUpcoming(sess: TodaySession) {
-  return sessionMins(sess.start_time) > new Date().getHours() * 60 + new Date().getMinutes();
+  return sessionMins(sess.start_time) > schoolMinutes();
 }
 function greeting(h: number) {
   if (h < 12) return 'Good morning';
@@ -76,7 +90,7 @@ function LiveClock() {
   const [time, setTime] = useState('');
   useEffect(() => {
     const update = () =>
-      setTime(new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      setTime(new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: SCHOOL_TZ }));
     update();
     const t = setInterval(update, 1000);
     return () => clearInterval(t);
@@ -356,7 +370,7 @@ export default function InstructorDashboard() {
   const [data, setData]                   = useState<DashboardData | null>(null);
   const [loading, setLoading]             = useState(true);
   const [loadError, setLoadError]         = useState(false);
-  const [nowHour, setNowHour]             = useState(new Date().getHours());
+  const [nowHour, setNowHour]             = useState(schoolHour);
   const [dateStr, setDateStr]             = useState('');
 
   const [releasing, setReleasing]   = useState(false);
@@ -368,8 +382,8 @@ export default function InstructorDashboard() {
 
   const stampDate = useCallback(() => {
     const d = new Date();
-    setNowHour(d.getHours());
-    setDateStr(d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }));
+    setNowHour(Math.floor(schoolMinutes(d) / 60));
+    setDateStr(d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: SCHOOL_TZ }));
   }, []);
   useEffect(() => { stampDate(); }, [stampDate]);
 

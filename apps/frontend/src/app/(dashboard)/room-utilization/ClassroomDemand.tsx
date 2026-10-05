@@ -18,6 +18,7 @@ import Modal from '@/components/ui/Modal';
 import { Skeleton } from '@/components/ui/skeletons';
 import { useSchoolYear } from '@/context/SchoolYearContext';
 import type { ClassroomDemand, DemandClassStatus } from '@shared/classroomDemand';
+import { SCHOOL_DAY_CLASS_MIN, SCHOOL_DAY_END_MIN, SCHOOL_DAY_START_MIN, minutesLabel } from '@shared/schoolDay';
 import { AnimatePresence, EASE, fmt12, motion, WHITE } from './shared';
 
 interface DemandResponse {
@@ -29,6 +30,10 @@ interface DemandResponse {
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : /(s|sh|ch|x)$/.test(word) ? 'es' : 's'}`;
 const fmtRange = (start: string, end: string) => `${fmt12(start)} – ${fmt12(end)}`;
+/** The school day (shared with Scheduling): "7:00 AM", "6:00 PM", 10 hours of class per room */
+const SCHOOL_START = minutesLabel(SCHOOL_DAY_START_MIN);
+const SCHOOL_END = minutesLabel(SCHOOL_DAY_END_MIN);
+const ROOM_DAY_HOURS = SCHOOL_DAY_CLASS_MIN / 60;
 
 /* Room status of a class, in plain words */
 const STATUS_TONE: Record<DemandClassStatus, string> = {
@@ -183,6 +188,14 @@ export default function ClassroomDemandSection({ refreshKey = 0 }: { refreshKey?
   const none = demand.verdict === 'none';
   /** Lab classes (or lectures held in a lab) — they never use a regular classroom */
   const hasLabClasses = demand.excluded_lab + demand.lec_in_lab_room > 0;
+  /** The day's class hours decide (more than fit 7 AM–6 PM in the rooms the busiest moment needs) */
+  const byHours = demand.basis === 'hours' && !!demand.hours_day;
+  const hoursDay = demand.hours_day;
+  const hoursText = hoursDay ? `${Math.round(hoursDay.class_minutes / 6) / 10}` : '0';
+  /** Why the number is what it is, in one sentence */
+  const needText = byHours && hoursDay
+    ? `${hoursDay.day}'s classes add up to ${hoursText} hours. Faculty are out by ${SCHOOL_END}, so a classroom holds ${ROOM_DAY_HOURS} hours of classes a day — that needs ${plural(demand.required, 'classroom')}`
+    : `At the busiest time, ${plural(demand.required, 'class')} ${demand.required === 1 ? 'needs' : 'need'} a classroom`;
 
   /* The answer, first and in plain words */
   const answer = none
@@ -195,14 +208,16 @@ export default function ClassroomDemandSection({ refreshKey = 0 }: { refreshKey?
     : shortage
       ? {
           title: `${plural(demand.additional, 'more classroom')} needed`,
-          text: `At the busiest time, ${plural(demand.required, 'class')} ${demand.required === 1 ? 'needs' : 'need'} a classroom, but ${
+          text: `${needText}, but ${
             demand.usable === 0 ? 'there are no usable classrooms' : `only ${plural(demand.usable, 'classroom')} can be used`}.`,
         }
       : {
           title: 'No new classrooms needed',
-          text: demand.surplus > 0
-            ? `Even at the busiest time, ${demand.surplus} of your ${plural(demand.usable, 'classroom')} ${demand.surplus === 1 ? 'is' : 'are'} still free.`
-            : 'At the busiest time every classroom is in use, so there are none to spare.',
+          text: byHours
+            ? `${needText}, and you have ${plural(demand.usable, 'usable classroom')}.`
+            : demand.surplus > 0
+              ? `Even at the busiest time, ${demand.surplus} of your ${plural(demand.usable, 'classroom')} ${demand.surplus === 1 ? 'is' : 'are'} still free.`
+              : 'At the busiest time every classroom is in use, so there are none to spare.',
         };
 
   const day = demand.days.find(d => d.day === pickedDay) ?? peak;
@@ -252,8 +267,13 @@ export default function ClassroomDemandSection({ refreshKey = 0 }: { refreshKey?
               <p className="text-xs font-semibold uppercase tracking-wide text-[#64748B]">The busiest time of the week</p>
               <p className="text-[17px] font-bold text-[#0B2A5B] mt-0.5">{peakWhen}</p>
               <p className="text-sm text-[#475569]">
-                {plural(demand.required, 'class')} at the same time · you have {plural(demand.usable, 'usable classroom')}
+                {plural(peak.peak, 'class')} at the same time · you have {plural(demand.usable, 'usable classroom')}
               </p>
+              {byHours && hoursDay && (
+                <p className="text-sm text-[#475569] mt-1">
+                  {hoursDay.day}&apos;s classes add up to {hoursText} hours — fitted between {SCHOOL_START} and {SCHOOL_END}, they need {plural(demand.required, 'classroom')}.
+                </p>
+              )}
             </div>
             <RoomTiles
               inUse={Math.min(demand.required, demand.usable)}
@@ -282,6 +302,13 @@ export default function ClassroomDemandSection({ refreshKey = 0 }: { refreshKey?
         {doubleBooked > 0 && (
           <Notice tone="red">
             {doubleBooked} classes are booked in the same room at the busiest time. Fix this room conflict in Scheduling.
+          </Notice>
+        )}
+        {demand.after_hours.length > 0 && (
+          <Notice tone="amber" action={{ href: '/scheduling', label: 'Move them' }}>
+            {plural(demand.after_hours.length, 'class')} {demand.after_hours.length === 1 ? 'runs' : 'run'} outside {SCHOOL_START}–{SCHOOL_END}, but faculty are out by {SCHOOL_END}:{' '}
+            {demand.after_hours.slice(0, 4).map(c => `${c.subject_code ?? '—'}${c.block ? ` ${c.block}` : ''} (${c.day.slice(0, 3)} ${fmtRange(c.start, c.end)})`).join(', ')}
+            {demand.after_hours.length > 4 ? ` and ${demand.after_hours.length - 4} more` : ''}. Moving them into the day adds to the classrooms needed.
           </Notice>
         )}
 
@@ -320,6 +347,12 @@ export default function ClassroomDemandSection({ refreshKey = 0 }: { refreshKey?
                           ? `: ${demand.surplus} would still be free, so no more are needed.`
                           : ': every one would be in use, so no more are needed.'
                     }
+                  </li>
+                  <li>
+                    Classes must fit between {SCHOOL_START} and {SCHOOL_END} (faculty are out by {SCHOOL_END}; lunch 12:00–1:00 PM stays free), so one
+                    classroom holds at most <b>{ROOM_DAY_HOURS} hours</b> of classes a day. If a day&apos;s classes add up to more than the
+                    busiest moment&apos;s classrooms can hold, that day decides
+                    {hoursDay ? ` — the most is ${hoursDay.day}, ${hoursText} hours, which needs ${plural(hoursDay.rooms_by_hours, 'classroom')}` : ''}.
                   </li>
                   <li>Laboratory classes, and lectures already held in a laboratory, don&apos;t use a regular classroom, so they aren&apos;t counted. The number of faculty or of classes doesn&apos;t matter.</li>
                   {demand.invalid > 0 && <li>{plural(demand.invalid, 'schedule')} skipped for an invalid day or time.</li>}
@@ -445,7 +478,9 @@ export default function ClassroomDemandSection({ refreshKey = 0 }: { refreshKey?
             <div className="rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3 text-sm text-[#475569] space-y-1">
               <p>
                 <span className="font-semibold text-[#0B2A5B]">Why {plural(demand.required, 'classroom')}? </span>
-                That is the most classes needing a regular classroom at the same time{peak ? ` (${peakWhen})` : ''}. Classrooms are shared, so classes at other times reuse them.
+                {byHours && hoursDay
+                  ? `${hoursDay.day}'s classes add up to ${hoursText} hours, and a classroom holds ${ROOM_DAY_HOURS} hours of classes between ${SCHOOL_START} and ${SCHOOL_END}. At the busiest moment${peak ? ` (${peakWhen})` : ''} ${plural(peak?.peak ?? 0, 'class')} meet at once.`
+                  : `That is the most classes needing a regular classroom at the same time${peak ? ` (${peakWhen})` : ''}. Classrooms are shared, so classes at other times reuse them.`}
               </p>
               {hasLabClasses && (
                 <p>Not counted: {plural(demand.excluded_lab, 'lab class')} and {plural(demand.lec_in_lab_room, 'lecture')} already held in a laboratory.</p>

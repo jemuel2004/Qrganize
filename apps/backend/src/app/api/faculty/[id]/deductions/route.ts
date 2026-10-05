@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/database/db';
+import { parseId } from '@/database/ids';
 import { getAuthUser } from '@/auth/auth';
 import { formatLoadCap, maxDeductionUnits, shownUnitsCap } from '@shared/regularLoad';
 import { getWorkloadPolicy } from '@/services/workloadPolicy';
@@ -39,7 +40,8 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     if (isScopedChair(auth)) {
-      const { id: fid } = await params;
+      const fid = parseId((await params).id);
+      if (fid === null) return NextResponse.json({ error: 'Faculty not found.' }, { status: 404 });
       const ownerCheck = await query('SELECT program_id FROM faculty WHERE id = $1', [fid]);
       if (ownerCheck.rows.length === 0) return NextResponse.json({ error: 'Faculty not found.' }, { status: 404 });
       if (!(await canAccessProgram(auth, ownerCheck.rows[0].program_id))) {
@@ -48,7 +50,8 @@ export async function GET(
     }
 
     await ensureTable();
-    const { id } = await params;
+    const id = parseId((await params).id);
+    if (id === null) return NextResponse.json({ error: 'Faculty not found.' }, { status: 404 });
     const { searchParams } = new URL(req.url);
     const semester   = searchParams.get('semester')    || '';
     const schoolYear = searchParams.get('school_year') || '';
@@ -79,7 +82,8 @@ async function POST_handler(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     if (isScopedChair(authPost)) {
-      const { id: fid } = await params;
+      const fid = parseId((await params).id);
+      if (fid === null) return NextResponse.json({ error: 'Faculty not found.' }, { status: 404 });
       const ownerCheck = await query('SELECT program_id FROM faculty WHERE id = $1', [fid]);
       if (ownerCheck.rows.length === 0) return NextResponse.json({ error: 'Faculty not found.' }, { status: 404 });
       if (!(await canAccessProgram(authPost, ownerCheck.rows[0].program_id))) {
@@ -88,7 +92,8 @@ async function POST_handler(
     }
 
     await ensureTable();
-    const { id } = await params;
+    const id = parseId((await params).id);
+    if (id === null) return NextResponse.json({ error: 'Faculty not found.' }, { status: 404 });
     const body = await req.json();
     const { deductions, semester, school_year } = body;
 

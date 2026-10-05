@@ -593,6 +593,8 @@ export default function WorkloadPage({
   const [praiseFromOtherTarget, setPraiseFromOtherTarget] = useState<WorkloadLoad | null>(null);
   /** Lec or Lab only (Lec+Lab subject) — like Overload, the other component stays Regular. */
   const [praiseFromOtherComponent, setPraiseFromOtherComponent] = useState<'lec' | 'lab' | 'full'>('full');
+  /** The Lec / Lab row whose Praise button was clicked — the dialog can switch between it and the whole subject */
+  const [praiseClickedPart, setPraiseClickedPart] = useState<'lec' | 'lab' | 'full'>('full');
   const [praiseFromOtherProcessing, setPraiseFromOtherProcessing] = useState(false);
   const [returnToOverloadConfirm, setReturnToOverloadConfirm] = useState<{ ids: number[]; total: number } | null>(null);
   const [returnToOverloadProcessing, setReturnToOverloadProcessing] = useState(false);
@@ -1278,36 +1280,23 @@ export default function WorkloadPage({
         loadFacultySummaries();
         return;
       }
-      const overloadRes = await fetch('/api/workload/move-to-overload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          faculty_id: selectedFaculty.id,
-          master_schedule_id: load.ms_id,
-          component: 'full',
-        }),
-      });
-      const overloadData = await overloadRes.json();
-      if (!overloadRes.ok) {
-        toast.error(overloadData.error || 'Failed to classify subject.');
-        return;
-      }
-
+      // One step straight to Praise — going through Overload applied the Overload limit to a Praise move
       const praiseRes = await fetch('/api/workload/move-to-praise', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           faculty_id: selectedFaculty.id,
-          master_schedule_ids: [load.ms_id],
+          master_schedule_id: load.ms_id,
+          whole_subject: true,
         }),
       });
-      const praiseData = await praiseRes.json();
+      const praiseData = await praiseRes.json().catch(() => ({}));
       if (!praiseRes.ok) {
         toast.error(praiseData.error || 'Failed to move subject to Praise Load.');
         return;
       }
 
-      toast.success('Subject moved to Praise Load.');
+      toast.success(praiseData.message || 'Subject moved to Praise Load.');
       setPraiseFromOtherTarget(null);
       const [freshAll, freshWorkload] = await Promise.all([
         loadAllFacultyLoads(),
@@ -3356,6 +3345,7 @@ export default function WorkloadPage({
               </>
             );
           })()}
+          <p className="text-xs text-[#64748B]">Its days, times and rooms stay as scheduled — only the workload classification changes.</p>
         </div>
       </Modal>
 
@@ -3629,6 +3619,7 @@ export default function WorkloadPage({
                                         const lec2 = parseFloat(String(load.lecture_hours)) || 0;
                                         const lab2 = parseFloat(String(load.laboratory_hours)) || 0;
                                         setPraiseFromOtherComponent((lec2 > 0 && lab2 > 0) ? row.type : 'full');
+                                        setPraiseClickedPart((lec2 > 0 && lab2 > 0) ? row.type : 'full');
                                         setPraiseFromOtherTarget(load);
                                       }}
                                       className={actionPraise}
@@ -3929,8 +3920,52 @@ export default function WorkloadPage({
         /* Actual Load: every subject of the term at its full Lec/Lab value — the same
            lines as the printed Actual Load form, with the Regular form's summary lines. */
         const actualLines = actualLoadLines(termLoads, isP);
+        /* Actual Load lists every subject, so it can move one too — the same buttons as
+           its own tab (Workload / Overload / Praise). Moving never touches its days,
+           times or rooms. A subject already split between two loads is changed on those tabs. */
+        const seenActualMs = new Set<number>();
+        function actualRowAction(load: WorkloadLoad, row: SplitRow): React.ReactNode {
+          const first = !seenActualMs.has(load.ms_id);
+          seenActualMs.add(load.ms_id);
+          // Split = a Regular subject with part of it in Overload / Praise (a whole Overload subject has its own row too)
+          const isSplit = load.load_category === 'Regular' && (
+            (parseFloat(String(load.split_overload_units)) || 0) > 0.001
+            || (parseFloat(String(load.split_overload_hours)) || 0) > 0.001);
+          if (isSplit || !extraLoads) return undefined;
+          const lec2 = parseFloat(String(load.lecture_hours)) || 0;
+          const lab2 = parseFloat(String(load.laboratory_hours)) || 0;
+          const part = lec2 > 0 && lab2 > 0 ? row.type : 'full';
+          if (load.load_category === 'Regular') return (
+            <div className="flex items-center justify-center gap-0.5 flex-wrap">
+              <button type="button" title="Move to Overload" onClick={() => handleMoveToOverload(load, part)} className={actionOverload}>
+                <ArrowRight className="w-3 h-3" /> Overload
+              </button>
+              <button type="button" title="Move to Praise Load" className={actionPraise}
+                onClick={() => { setPraiseFromOtherComponent(part); setPraiseClickedPart(part); setPraiseFromOtherTarget(load); }}>
+                <Award className="w-3 h-3" /> Praise
+              </button>
+            </div>
+          );
+          if (!first) return undefined;
+          if (load.load_category === 'Overload') return (
+            <div className="flex items-center justify-center gap-0.5 flex-wrap">
+              <button type="button" title="Return to Regular Load" onClick={() => handleReturnToRegular(load)} className={actionRegular}>
+                <ArrowLeft className="w-3 h-3" /> Regular
+              </button>
+              <button type="button" title="Move to Praise Load" onClick={() => requestMoveToPraise(termLoads, [load.ms_id])} className={actionPraise}>
+                <ArrowRight className="w-3 h-3" /> Praise
+              </button>
+            </div>
+          );
+          if (load.load_category === 'Praise') return (
+            <button type="button" title="Return to Overload" onClick={() => requestReturnToOverload(termLoads, [load.ms_id])} className={actionOverload}>
+              <ArrowLeft className="w-3 h-3" /> Overload
+            </button>
+          );
+          return undefined;
+        }
         const officialActualRows: OfficialFormRow[] = actualLines.map(({ row }) =>
-          ({ ...toOfficialRow(row.load, row, row.wu, row.hours), key: `${row.key}-actual` }));
+          ({ ...toOfficialRow(row.load, row, row.wu, row.hours, actualRowAction(row.load, row)), key: `${row.key}-actual` }));
         const actualWU = actualLines.reduce((sum, l) => sum + l.row.wu, 0);
         const actualHours = actualLines.reduce((sum, l) => sum + l.row.hours, 0);
         /** The form's Total No. of Units (Actual Load): teaching + deloading */
@@ -4259,12 +4294,13 @@ export default function WorkloadPage({
                 transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
                 className="min-w-0 max-w-full"
               >
-              {/* -- ACTUAL LOAD TABLE (every subject of the term; read-only) -- */}
+              {/* -- ACTUAL LOAD TABLE (every subject of the term; Permanent faculty can move any of them) -- */}
               {hasActualSection && (
                 <div style={{ display: effectiveModalTab === 'actual' ? '' : 'none' }} className="min-w-0 max-w-full">
                   <OfficialWorkloadFormTable
                     rows={officialActualRows}
                     summary={officialActualSummary}
+                    showActions={extraLoads}
                     variant="actual"
                     groups={formGroups}
                   />
@@ -4353,7 +4389,7 @@ export default function WorkloadPage({
           </p>
           <p className="text-xs text-slate-500">
             {praiseFromOtherComponent === 'full'
-              ? 'The subject stays assigned to the faculty. Only the workload classification changes.'
+              ? 'The subject stays assigned to the faculty with the same days, times and rooms. Only the workload classification changes.'
               : `Only the ${praiseFromOtherComponent === 'lec' ? 'Lecture' : 'Laboratory'} moves to Praise Load — the ${praiseFromOtherComponent === 'lec' ? 'Laboratory' : 'Lecture'} stays in Regular Load.`}
           </p>
         </div>
@@ -4393,6 +4429,34 @@ export default function WorkloadPage({
               {praiseFromOtherComponent === 'lec' ? ' (Lecture)' : praiseFromOtherComponent === 'lab' ? ' (Laboratory)' : ''}
             </span> as Praise Load?
           </p>
+          {/* A Lec + Lab subject: just the clicked part, or the whole subject in one step */}
+          {praiseClickedPart !== 'full' && (
+            <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="What moves to Praise Load">
+              {([
+                { value: praiseClickedPart, label: `Only the ${praiseClickedPart === 'lec' ? 'Lecture' : 'Laboratory'}` },
+                { value: 'full' as const, label: 'Whole subject' },
+              ]).map(o => {
+                const on = praiseFromOtherComponent === o.value;
+                return (
+                  <button
+                    key={o.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    disabled={praiseFromOtherProcessing}
+                    onClick={() => setPraiseFromOtherComponent(o.value)}
+                    className={`min-h-10 px-3 rounded-lg text-sm font-semibold border transition-colors ${
+                      on ? 'bg-violet-600 border-violet-600' : 'bg-white/5 border-white/15 text-slate-200 hover:bg-white/10'
+                    }`}
+                    // White set inline — the light theme repaints `text-white` as dark ink
+                    style={on ? { color: '#FFFFFF' } : undefined}
+                  >
+                    {o.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <p className="text-white">
             Workload:{' '}
             <span className="font-semibold tabular-nums">
@@ -4409,7 +4473,7 @@ export default function WorkloadPage({
             </span>
           </p>
           <p className="text-xs text-slate-500">
-            The subject stays assigned to the faculty. Only the workload classification changes.
+            The subject stays assigned to the faculty with the same days, times and rooms. Only the workload classification changes.
           </p>
         </div>
       </Modal>
@@ -4452,7 +4516,7 @@ export default function WorkloadPage({
             </span>
           </p>
           <p className="text-xs text-slate-500">
-            The subject stays assigned to the faculty. Only the workload classification changes.
+            The subject stays assigned to the faculty with the same days, times and rooms. Only the workload classification changes.
           </p>
         </div>
       </Modal>

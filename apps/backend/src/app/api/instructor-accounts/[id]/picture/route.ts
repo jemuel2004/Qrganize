@@ -1,6 +1,7 @@
 ﻿import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUser } from '@/auth/auth';
 import { query } from '@/database/db';
+import { parseId } from '@/database/ids';
 import { validateImageMagicBytes } from '@/infra/validateUpload';
 import { withAudit } from '@/services/audit';
 import { deleteUploadedFile, saveUpload } from '@/services/uploadStorage';
@@ -15,8 +16,8 @@ async function POST_handler(req: NextRequest, { params }: Params) {
     }
 
     const { id: rawId } = await params;
-    const facultyId = parseInt(rawId, 10);
-    if (!Number.isInteger(facultyId) || facultyId <= 0) {
+    const facultyId = parseId(rawId);
+    if (facultyId === null) {
       return NextResponse.json({ error: 'Invalid faculty ID.' }, { status: 400 });
     }
 
@@ -63,8 +64,8 @@ async function DELETE_handler(req: NextRequest, { params }: Params) {
     }
 
     const { id: rawId } = await params;
-    const facultyId = parseInt(rawId, 10);
-    if (!Number.isInteger(facultyId) || facultyId <= 0) {
+    const facultyId = parseId(rawId);
+    if (facultyId === null) {
       return NextResponse.json({ error: 'Invalid faculty ID.' }, { status: 400 });
     }
 

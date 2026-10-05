@@ -23,6 +23,7 @@ import DayCombinationsSection from './DayCombinationsSection';
 import WorkloadLimitsSection from './WorkloadLimitsSection';
 import { roleLabel } from '@/lib/roleAccess';
 import { ProfilePictureUpload } from '@/components/ui/ProfilePictureUpload';
+import SaveSuccessOverlay, { useSaveSuccess } from '@/components/ui/SaveSuccessOverlay';
 import TrustedDevicesPanel from '@/components/security/TrustedDevicesPanel';
 import OtpPreferencePanel from '@/components/security/OtpPreferencePanel';
 
@@ -39,6 +40,7 @@ function LogoUploadContent() {
   const [cropSrc,     setCropSrc]     = useState<string | null>(null);
   const [cropFileName, setCropFileName] = useState('logo.png');
   const fileRef = useRef<HTMLInputElement>(null);
+  const saved = useSaveSuccess();
 
   useEffect(() => {
     return () => {
@@ -96,9 +98,9 @@ function LogoUploadContent() {
       const data = await res.json();
       if (preview) URL.revokeObjectURL(preview);
       setPreview(null); setPreviewFile(null);
-      setSuccess('Logo updated successfully.');
-      toast.success('Logo updated successfully.');
       window.dispatchEvent(new CustomEvent('system-logo-changed', { detail: { logoUrl: data.logoUrl } }));
+      // The check draws itself over the logo card, then the toast confirms it
+      saved.play(() => toast.success('Logo updated successfully.'));
     } catch {
       setError('Connection error. Please try again.');
       toast.error('Connection error. Please try again.');
@@ -121,7 +123,8 @@ function LogoUploadContent() {
   }
 
   return (
-    <div>
+    <div className="relative">
+      {saved.shown && <SaveSuccessOverlay title="Logo saved" compact />}
       {/* Feedback banners */}
       {success && (
         <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-xl text-sm mb-4">
@@ -377,7 +380,8 @@ function InlineAlert({ type, msg, onClose }: { type: 'error' | 'success'; msg: s
 }
 
 // ── Sub-section: Admin Profile Picture ────────────────────────────
-function AdminProfilePicture() {
+/** `onSaved` closes the dialog after a new photo — the check then plays over the page */
+function AdminProfilePicture({ onSaved }: { onSaved?: () => void }) {
   const [picUrl, setPicUrl] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState('');
   const [loaded, setLoaded] = useState(false);
@@ -407,8 +411,8 @@ function AdminProfilePicture() {
       currentUrl={picUrl}
       uploadEndpoint="/api/account/me/picture"
       deleteEndpoint="/api/account/me/picture"
-      onSuccess={url => setPicUrl(url)}
-      onRemove={() => setPicUrl(null)}
+      onSuccess={url => { setPicUrl(url); onSaved?.(); }}
+      onRemove={() => { setPicUrl(null); onSaved?.(); }}
       theme="light"
       compact
       displayName={displayName}
@@ -1426,14 +1430,14 @@ const ALL_SECTIONS = SECTION_GROUPS.flatMap(g => g.items);
 const EASE_S = [0.4, 0, 0.2, 1] as const;
 const WHITE_TEXT = { color: '#FFFFFF' } as const;
 
-function SectionBody({ id }: { id: SettingsSectionId }) {
+function SectionBody({ id, onClose }: { id: SettingsSectionId; onClose: () => void }) {
   switch (id) {
     case 'profile':
       return (
         <div className="space-y-8">
           <div>
             <p className="text-sm font-bold text-[#0B2A5B] mb-3">Profile Picture</p>
-            <AdminProfilePicture />
+            <AdminProfilePicture onSaved={onClose} />
           </div>
           <div className="border-t border-[#EEF2F8] pt-7">
             <p className="text-sm font-bold text-[#0B2A5B] mb-3">Account Details</p>
@@ -1545,7 +1549,7 @@ function SettingDialog({ section, onClose }: { section: SectionDef | null; onClo
               </div>
             </header>
             <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 sm:px-8 py-7">
-              <SectionBody id={section.id} />
+              <SectionBody id={section.id} onClose={onClose} />
             </div>
           </motion.div>
         </motion.div>

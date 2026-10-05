@@ -1,5 +1,6 @@
 ﻿import { NextRequest, NextResponse } from 'next/server';
 import { query, transaction } from '@/database/db';
+import { parseId } from '@/database/ids';
 import { getAuthUser } from '@/auth/auth';
 import { releaseFacultyAssignments } from '@/services/releaseFacultyAssignments';
 import bcrypt from 'bcryptjs';
@@ -21,7 +22,8 @@ export async function GET(req: NextRequest, { params }: Params) {
     }
 
     await ensureFacultyProfileColumns();
-    const { id } = await params;
+    const id = parseId((await params).id);
+    if (id === null) return NextResponse.json({ error: 'Account not found.' }, { status: 404 });
     const result = await query(`
       SELECT
         ia.id AS account_id, ia.faculty_id, ia.username, ia.email, ia.role,
@@ -59,7 +61,8 @@ async function PUT_handler(req: NextRequest, { params }: Params) {
 
     await ensureInstructorGooglePicture();
 
-    const { id } = await params;
+    const id = parseId((await params).id);
+    if (id === null) return NextResponse.json({ error: 'Account not found.' }, { status: 404 });
     const { first_name, last_name, middle_name, program_id, position, username, email, password, priority_subjects } = await req.json();
 
     // Required field validation
@@ -211,7 +214,8 @@ async function PATCH_handler(req: NextRequest, { params }: Params) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
-    const { id } = await params;
+    const id = parseId((await params).id);
+    if (id === null) return NextResponse.json({ error: 'Account not found.' }, { status: 404 });
     const body = await req.json();
 
     // --- Toggle active ---
@@ -271,7 +275,8 @@ async function DELETE_handler(req: NextRequest, { params }: Params) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
-    const { id } = await params;
+    const id = parseId((await params).id);
+    if (id === null) return NextResponse.json({ error: 'Account not found.' }, { status: 404 });
 
     await transaction(async (client) => {
       await releaseFacultyAssignments(client, Number(id));

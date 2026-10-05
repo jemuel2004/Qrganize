@@ -3,11 +3,7 @@ import { query, transaction } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { canManageRooms, roomNameTaken, ROOM_STATUSES, validateRoom } from '@/services/rooms';
 import { withAudit } from '@/services/audit';
-
-function parseId(raw: string): number | null {
-  const id = Number.parseInt(raw, 10);
-  return Number.isInteger(id) && id > 0 ? id : null;
-}
+import { parseId } from '@/database/ids';
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {

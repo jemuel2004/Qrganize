@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { ChevronDown, Clock, Moon, Sun, Sunset } from 'lucide-react';
 import AnchoredPopover from './AnchoredPopover';
+import { SCHOOL_DAY_END_MIN, SCHOOL_DAY_START_MIN } from '@shared/schoolDay';
 
 /*
  * Start-time picker for the Scheduling session table.
@@ -40,10 +41,10 @@ const GROUPS = [
 
 const EASE = [0.4, 0, 0.2, 1] as const;
 
-/** Thin 7 AM–9 PM bar: the instructor's classes (grey) and where this
+/** Thin 7 AM–6 PM bar (the school day): the instructor's classes (grey) and where this
  *  session would land (blue, or red when it overlaps). Hover a block to see it. */
-const TL_START = 7 * 60;
-const TL_END = 21 * 60;
+const TL_START = SCHOOL_DAY_START_MIN;
+const TL_END = SCHOOL_DAY_END_MIN;
 function DayTimeline({ busy, breaks = [], preview, conflict }: {
   busy: { start: number; end: number; label: string }[];
   breaks?: { start: number; end: number; label: string }[];
@@ -82,8 +83,8 @@ function DayTimeline({ busy, breaks = [], preview, conflict }: {
         />
       </div>
       <div className="relative h-3 mt-0.5 text-[9px] font-semibold text-[#94A3B8] tabular-nums">
-        {[7, 10, 13, 16, 19].map(h => (
-          <span key={h} className="absolute -translate-x-1/2 first:translate-x-0" style={{ left: pct(h * 60) }}>
+        {[7, 9, 11, 13, 15, 18].map(h => (
+          <span key={h} className="absolute -translate-x-1/2 first:translate-x-0 last:-translate-x-full" style={{ left: pct(h * 60) }}>
             {h % 12 || 12}{h < 12 ? 'a' : 'p'}
           </span>
         ))}

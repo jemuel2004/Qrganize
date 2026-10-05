@@ -85,7 +85,7 @@ export const clock = (m: number) => {
 };
 const toTime = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 
-/** Same academic-day rules as saving a schedule (7:00 AM–9:00 PM, no lunch overlap) */
+/** Same academic-day rules as saving a schedule (7:00 AM–6:00 PM, no lunch overlap) */
 export function sessionsAreValid(sessions: Pick<PlannedSession, 'day' | 'start' | 'end'>[]): boolean {
   if (sessions.some(s => s.end <= s.start)) return false;
   return validateSessions(sessions.map(s => ({ day: s.day, start_time: toTime(s.start), hours: (s.end - s.start) / 60 }))) === null;

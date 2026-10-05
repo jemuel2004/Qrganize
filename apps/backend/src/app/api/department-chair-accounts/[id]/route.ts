@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUser } from '@/auth/auth';
 import { query } from '@/database/db';
+import { parseId } from '@/database/ids';
 import { DEPARTMENT_CHAIR_ACCOUNT_SELECT, ensureUsersSchema } from '@/database/ensure-users-schema';
 import bcrypt from 'bcryptjs';
 import { deleteUploadedFile } from '@/services/uploadStorage';
@@ -32,8 +33,8 @@ export async function GET(req: NextRequest, { params }: Ctx) {
     if (adminOnly(auth)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { id } = await params;
-    const uid = parseInt(id, 10);
-    if (isNaN(uid)) return NextResponse.json({ error: 'Invalid ID.' }, { status: 400 });
+    const uid = parseId(id);
+    if (uid === null) return NextResponse.json({ error: 'Invalid ID.' }, { status: 400 });
 
     const account = await fetchChair(uid);
     if (!account) return NextResponse.json({ error: 'Account not found.' }, { status: 404 });
@@ -51,8 +52,8 @@ async function PUT_handler(req: NextRequest, { params }: Ctx) {
     if (adminOnly(auth)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { id } = await params;
-    const uid = parseInt(id, 10);
-    if (isNaN(uid)) return NextResponse.json({ error: 'Invalid ID.' }, { status: 400 });
+    const uid = parseId(id);
+    if (uid === null) return NextResponse.json({ error: 'Invalid ID.' }, { status: 400 });
 
     const body = await req.json();
     const { username, email, password } = body as {
@@ -149,8 +150,8 @@ async function PATCH_handler(req: NextRequest, { params }: Ctx) {
     if (adminOnly(auth)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { id } = await params;
-    const uid = parseInt(id, 10);
-    if (isNaN(uid)) return NextResponse.json({ error: 'Invalid ID.' }, { status: 400 });
+    const uid = parseId(id);
+    if (uid === null) return NextResponse.json({ error: 'Invalid ID.' }, { status: 400 });
 
     const body = await req.json();
 
@@ -198,8 +199,8 @@ async function DELETE_handler(req: NextRequest, { params }: Ctx) {
     if (adminOnly(auth)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { id } = await params;
-    const uid = parseInt(id, 10);
-    if (isNaN(uid)) return NextResponse.json({ error: 'Invalid ID.' }, { status: 400 });
+    const uid = parseId(id);
+    if (uid === null) return NextResponse.json({ error: 'Invalid ID.' }, { status: 400 });
 
     if (auth?.id === uid) {
       return NextResponse.json({ error: 'You cannot delete your own account.' }, { status: 403 });

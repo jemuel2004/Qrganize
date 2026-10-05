@@ -31,6 +31,7 @@ import { useDayCombinations } from '@/lib/dayCombinations';
 import { dayCombinationError, daysCode, daysLabel, matchCombination, type WeekDay } from '@shared/dayCombination';
 import { blockCode, programBlockCode } from '@shared/blockCode';
 import { LOAD_GRACE_UNITS, formatLoadCap } from '@shared/regularLoad';
+import { LUNCH_END_MIN, LUNCH_START_MIN, SCHOOL_DAY_END_MIN, SCHOOL_DAY_START_MIN } from '@shared/schoolDay';
 import { asSessionList, fmt12, normTime, parseDays } from '@/lib/scheduleTime';
 import SubjectFacultyPreview from '@/components/SubjectFacultyPreview';
 
@@ -229,18 +230,18 @@ interface TimetableBlockView {
   room_name: string | null;
 }
 
-/** Academic day: 7:00 AM – 9:00 PM. Classes must end by DAY_END_MIN (no
- *  sessions into midnight); the timetable only stretches past 9 PM if an
+/** Academic day: 7:00 AM – 6:00 PM (faculty are out by 6 PM) — the shared school day.
+ *  Classes must end by DAY_END_MIN; the timetable only stretches past 6 PM if an
  *  older class saved before this rule still runs later. */
-const DAY_END_MIN  = 21 * 60;   // 9:00 PM — latest end time for a session
+const DAY_END_MIN  = SCHOOL_DAY_END_MIN;   // 6:00 PM — latest end time for a session
 /** Lunch break for all faculty (12:00–1:00 PM) — no class may overlap it. */
-const LUNCH = { start: 12 * 60, end: 13 * 60, label: 'Lunch break · 12:00–1:00 PM', kind: 'Lunch' as const };
+const LUNCH = { start: LUNCH_START_MIN, end: LUNCH_END_MIN, label: 'Lunch break · 12:00–1:00 PM', kind: 'Lunch' as const };
 
 /** Why a time is taken — shown on struck-out times, e.g. "Instructor + Room conflict". */
 type BusyKind = 'Instructor' | 'Block' | 'Room' | 'Lunch';
 interface BusyRange { start: number; end: number; label: string; kind: BusyKind }
 const BUSY_KIND_ORDER: BusyKind[] = ['Instructor', 'Block', 'Room', 'Lunch'];
-const TT_START_MIN = 7 * 60;    // 7:00 AM
+const TT_START_MIN = SCHOOL_DAY_START_MIN;    // 7:00 AM
 const TT_END_MIN   = DAY_END_MIN;
 /** Taller hours so class cards have room for readable text (1 hr ≈ 78 px). */
 const TT_PX_PER_MIN = 1.3;
@@ -384,7 +385,7 @@ function WeeklyTimetableGrid({
   /** Click a class block → its schedule details */
   onOpen?: (load: WorkloadLoad, component: 'lec' | 'lab') => void;
 }) {
-  // Ends at 9 PM, unless a legacy class runs later (then round up to its hour)
+  // Ends at 6 PM, unless an older class runs later (then round up to its hour)
   const gridEnd = Math.min(24 * 60, Math.max(
     TT_END_MIN,
     ...blocks.map(b => Math.ceil(sessionEndMinutes(b.start_time, b.end_time) / 60) * 60),
@@ -426,7 +427,7 @@ function WeeklyTimetableGrid({
           })}
         </div>
 
-        {/* 7:00 AM – 9:00 PM canvas (longer only for legacy classes that end later) */}
+        {/* 7:00 AM – 6:00 PM canvas (longer only for older classes that end later) */}
         <div className="relative bg-white" style={{ height: TT_HEIGHT }}>
           <div
             className="absolute inset-0 pointer-events-none"
@@ -1582,6 +1583,19 @@ export default function SchedulingClient() {
     return '';
   }
 
+  /** Major subject whose other part has no times yet: minutes each of its sessions
+   *  will need — its weekly hours over this part's days (both parts meet on the same
+   *  days, in the same room). 0 = nothing to keep room for. */
+  const otherPartSessionMin = (() => {
+    if (!selLoad || !oneRoom || pairDays) return 0;
+    const weekly = toNum(selLoad.component === 'lab' ? selLoad.load.lecture_hours : selLoad.load.laboratory_hours);
+    const days = new Set(sessions.map(s => s.day).filter(Boolean)).size || sessions.length || 1;
+    return weekly > 0 ? Math.round((weekly / days) * 60) : 0;
+  })();
+  const otherPartLength = otherPartSessionMin
+    ? `${otherPartSessionMin % 60 === 0 ? otherPartSessionMin / 60 : (otherPartSessionMin / 60).toFixed(1)} hr${otherPartSessionMin === 60 ? '' : 's'}`
+    : '';
+
   /** Why a room can't be used for this session ('' = free). Ignores the
    *  component being edited (saving replaces its sessions). */
   function roomBusyWith(sess: SessionItem, roomId: number): string {
@@ -1633,6 +1647,41 @@ export default function SchedulingClient() {
     }
     return byDay;
   }, [workload, semester, schoolYear, selLoad]);
+
+  /** Major subject: can its other part still fit in this room on this session's day,
+   *  next to this session — clear of the instructor's and block's other classes, the
+   *  room's bookings, lunch and the end of the school day? e.g. Lab 1 free only
+   *  1:00–2:30 PM holds a 1.5 hr Lab but leaves nothing for its 1 hr Lecture. */
+  function otherPartFits(sess: SessionItem, roomId: number): boolean {
+    if (!otherPartSessionMin || !selLoad || !sess.day || !sess.start_time) return true;
+    const blockId = selLoad.load.block_id;
+    const taken: { start: number; end: number }[] = [
+      LUNCH,
+      ...(instructorBusy.get(sess.day) ?? []),
+      ...sessions.filter(o => o.day === sess.day && o.start_time).map(o => o.id === sess.id ? sess : o)
+        .map(o => ({ start: timeToMinutes(o.start_time), end: sessionEndMinutes(o.start_time, o.end_time) })),
+    ];
+    if (!sessions.some(o => o.id === sess.id)) {
+      taken.push({ start: timeToMinutes(sess.start_time), end: sessionEndMinutes(sess.start_time, sess.end_time) });
+    }
+    for (const b of roomBookings) {
+      if (b.day !== sess.day || Number(b.ms_id) === selLoad.load.ms_id) continue;
+      if (Number(b.room_id) === roomId || (blockId != null && Number(b.block_id) === blockId)) {
+        taken.push({ start: timeToMinutes(normTime(b.start_time)), end: sessionEndMinutes(b.start_time, b.end_time) });
+      }
+    }
+    return TIME_SLOTS.some(t => {
+      const start = timeToMinutes(t);
+      const end = start + otherPartSessionMin;
+      return end <= DAY_END_MIN && taken.every(x => end <= x.start || start >= x.end);
+    });
+  }
+  /** Struck start time — the picker shows it as "Runs into …" */
+  const otherPartTimeClash = (day: string, roomName?: string) =>
+    `the ${otherPartLength} its ${otherPartName} needs${roomName ? ` in ${roomName}` : ''} on ${day}`;
+  /** Picked room that can't take both parts — shown as "Busy · …" */
+  const otherPartRoomClash = (day: string) => `${day} has no ${otherPartLength} left here for its ${otherPartName}`;
+
 
   /** Other classes on this day that would clash — same rules as the server
    *  check (findScheduleConflicts): this block's classes (any instructor) and,
@@ -1696,7 +1745,11 @@ export default function SchedulingClient() {
   function slotConflicts(sess: SessionItem, all: SessionItem[] = sessions): { value: string; conflict: string }[] {
     const dur = Math.round(toNum(sess.hours) * 60);
     const taken = takenRanges(sess, all);
-    // Only starts that finish by 9:00 PM (no sessions running into the night)
+    /* Major subject with a room picked: also rule out starts that would leave its
+       other part no time in that room that day */
+    const fitRoomId = otherPartSessionMin && sess.room_id ? Number(sess.room_id) : null;
+    const fitRoomName = fitRoomId != null ? rooms.find(r => r.id === fitRoomId)?.room_name : undefined;
+    // Only starts that finish by 6:00 PM (faculty are out by then)
     // and that don't fall inside lunch; starts that would run INTO lunch stay
     // listed but struck out, with the reason.
     return TIME_SLOTS.filter(t => {
@@ -1707,7 +1760,12 @@ export default function SchedulingClient() {
       const end = start + dur;
       // Every clash, not just the first: "Instructor + Room conflict — …"
       const hits = [LUNCH, ...taken].filter(b => start < b.end && end > b.start);
-      if (hits.length === 0) return { value: t, conflict: '' };
+      if (hits.length === 0) {
+        if (fitRoomId != null && !otherPartFits({ ...sess, start_time: t, end_time: addMinutes(t, dur) }, fitRoomId)) {
+          return { value: t, conflict: otherPartTimeClash(sess.day, fitRoomName) };
+        }
+        return { value: t, conflict: '' };
+      }
       const kinds = BUSY_KIND_ORDER.filter(k => hits.some(h => h.kind === k));
       if (kinds.length === 1 && kinds[0] === 'Lunch') return { value: t, conflict: LUNCH.label };
       const names = kinds.filter(k => k !== 'Lunch');
@@ -1718,7 +1776,7 @@ export default function SchedulingClient() {
 
   /** Start times (TIME_SLOTS) that fit this session on its day. */
   function freeStartTimes(sess: SessionItem, all: SessionItem[] = sessions): string[] {
-    // Lunch + the 9 PM cut-off apply even before a day is picked
+    // Lunch + the 6 PM cut-off apply even before a day is picked
     return slotConflicts(sess, all).filter(x => !x.conflict).map(x => x.value);
   }
 
@@ -2985,7 +3043,9 @@ export default function SchedulingClient() {
                           {sessions.length > 1 ? 'Session 1’s time fills the others · ' : ''}
                           {lockedRoom
                             ? <>Major subject — same room as its {otherPartName}: <b className="text-[#0B2A5B]">{lockedRoom.room_name}</b></>
-                            : 'Major subject — one room for every Lecture and Laboratory session.'}
+                            : otherPartSessionMin
+                              ? <>Major subject — one room for both parts. Only rooms with {otherPartLength} still free for its {otherPartName} on the same days are shown.</>
+                              : 'Major subject — one room for every Lecture and Laboratory session.'}
                         </span>
                       ) : sessions.length > 1 && (
                         <span className="text-xs text-[#64748B]">Session 1&apos;s time and room fill the others — change any row on its own.</span>
@@ -3064,7 +3124,20 @@ export default function SchedulingClient() {
                                 <RoomPicker
                                   value={sess.room_id}
                                   onChange={v => updateSession(sess.id, 'room_id', v)}
-                                  rooms={activeRooms.map(r => ({ ...r, busyWith: roomBusyWith(sess, r.id) || otherPartBusyWith(r.id) || null }))}
+                                  rooms={activeRooms
+                                    .map(r => {
+                                      // Major subject: one room for both parts, so a room is only offered
+                                      // when its other part still fits there on every session day
+                                      const misfit = otherPartSessionMin ? sessions.find(s => !otherPartFits(s, r.id)) : undefined;
+                                      return { r, misfit };
+                                    })
+                                    // Rooms that can't take both parts aren't shown — unless already picked (then say why)
+                                    .filter(({ r, misfit }) => !misfit || String(r.id) === sess.room_id)
+                                    .map(({ r, misfit }) => ({
+                                      ...r,
+                                      busyWith: roomBusyWith(sess, r.id) || otherPartBusyWith(r.id)
+                                        || (misfit ? otherPartRoomClash(misfit.day) : '') || null,
+                                    }))}
                                   preferred={pairRoom ? { id: pairRoom.id, label: selLoad.component === 'lab' ? "Lecture's room" : "Laboratory's room" } : null}
                                   component={selLoad.component}
                                   day={sess.day}

@@ -4,9 +4,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { ChevronDown, Clock, Moon, Sun, Sunset } from 'lucide-react';
 import AnchoredPopover from './AnchoredPopover';
+import { SCHOOL_DAY_END_MIN, SCHOOL_DAY_START_MIN } from '@shared/schoolDay';
 
 /*
- * Plain time picker: a button that opens 30-minute chips (7:00 AM – 9:00 PM)
+ * Plain time picker: a button that opens 30-minute chips (7:00 AM – 6:00 PM, the school day)
  * grouped Morning / Afternoon / Evening. `after` greys out times at or before
  * it — used for an end time so it can never come before the start.
  */
@@ -15,7 +16,8 @@ const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return h
 const toHM = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 export const fmtTime = (t: string) => { const m = toMin(t); const h = Math.floor(m / 60); return `${h % 12 || 12}:${String(m % 60).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`; };
 
-const SLOTS = Array.from({ length: (21 * 60 - 7 * 60) / 30 + 1 }, (_, i) => toHM(7 * 60 + i * 30));
+// 7:00 AM … 6:00 PM inclusive — the last chip is an end time ("To 6:00 PM")
+const SLOTS = Array.from({ length: (SCHOOL_DAY_END_MIN - SCHOOL_DAY_START_MIN) / 30 + 1 }, (_, i) => toHM(SCHOOL_DAY_START_MIN + i * 30));
 const GROUPS = [
   { label: 'Morning', Icon: Sun, test: (m: number) => m < 12 * 60 },
   { label: 'Afternoon', Icon: Sunset, test: (m: number) => m >= 12 * 60 && m < 17 * 60 },

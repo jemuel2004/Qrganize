@@ -11,8 +11,13 @@ import {
 } from 'framer-motion';
 import {
   ChevronDown, Home, Settings, CalendarDays, DoorOpen, Shield,
+  LayoutDashboard, BookOpen, Users, Layers, Briefcase, CalendarPlus, CalendarRange, ClipboardList,
+  CalendarClock, MonitorCheck, BarChart3, Inbox, QrCode, UserCog, UserCheck, LineChart, FileText,
+  ScrollText, Bug, CircleUser,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { DrawerLink, DrawerSection, MobileNavDrawer } from '@/components/layout/MobileNavDrawer';
+import { roleLabel } from '@/lib/roleAccess';
 import {
   getNavSections,
   isChildPathActive,
@@ -337,111 +342,6 @@ function DesktopMenuItem({
   );
 }
 
-function MobileSection({
-  section,
-  pathname,
-  onNavigate,
-  onPrefetch,
-  pendingCounts,
-}: {
-  section: NavSection;
-  pathname: string;
-  onNavigate?: () => void;
-  onPrefetch: (href: string) => void;
-  pendingCounts?: SchedulingPendingCounts;
-}) {
-  const [open, setOpen] = useState(isSectionActive(pathname, section));
-
-  if (section.id === 'main' && section.items.length === 1) {
-    const item = section.items[0];
-    return (
-      <Link
-        href={item.href}
-        onClick={() => onNavigate?.()}
-        onMouseEnter={() => onPrefetch(item.href)}
-        className={[
-          'flex items-center gap-2 min-h-11 px-4 text-[14px] transition-colors duration-150 cursor-pointer',
-          isPathActive(pathname, item.href)
-            ? 'text-[#164BB5] font-medium bg-[#E8F1FB]'
-            : 'text-[#475569] hover:text-[#1D5BD6] hover:bg-[#F8FAFC]',
-        ].join(' ')}
-      >
-        <Home className="w-4 h-4" />
-        {item.label}
-      </Link>
-    );
-  }
-
-  const SectionIcon = SECTION_ICON[section.id] ?? Settings;
-  const sectionBadgeTotal = pendingCounts
-    ? section.items.reduce((sum, item) => sum + (item.badgeKey ? pendingCounts[item.badgeKey] : 0), 0)
-    : 0;
-
-  return (
-    <div className="border-t border-[#E4E4E7]">
-      <button
-        type="button"
-        onClick={() => setOpen(v => !v)}
-        aria-expanded={open}
-        className="flex items-center justify-between w-full min-h-11 px-4 text-[14px] font-medium text-[#475569] hover:text-[#1D5BD6] transition-colors duration-150 cursor-pointer"
-      >
-        <span className="inline-flex items-center gap-2">
-          <SectionIcon className="w-4 h-4" />
-          {section.label}
-          <NavBadge count={sectionBadgeTotal} />
-        </span>
-        <ChevronDown className={`w-4 h-4 transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-      {open && (
-        <div className="pb-2">
-          {section.items.map(item => {
-            if (item.children?.length) {
-              return (
-                <div key={item.href}>
-                  <p className="px-4 pt-2 pb-1 text-xs font-medium uppercase tracking-wide text-[#A1A1AA]">
-                    {item.label}
-                  </p>
-                  {item.children.map(child => (
-                    <Link
-                      key={child.href}
-                      href={child.href}
-                      onClick={() => onNavigate?.()}
-                      className={[
-                        'flex items-center min-h-11 px-6 text-[14px] transition-colors duration-150 cursor-pointer',
-                        isChildPathActive(pathname, child)
-                          ? 'text-[#18181B] font-medium bg-[#F4F4F5]'
-                          : 'text-[#3F3F46] hover:text-[#1D5BD6] hover:bg-[#F8FAFC]',
-                      ].join(' ')}
-                    >
-                      {child.label}
-                    </Link>
-                  ))}
-                </div>
-              );
-            }
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={() => onNavigate?.()}
-                onMouseEnter={() => onPrefetch(item.href)}
-                className={[
-                  'flex items-center justify-between gap-2 min-h-11 px-6 text-[15px] transition-colors duration-150 cursor-pointer',
-                  isItemActive(pathname, item)
-                    ? 'text-[#18181B] font-medium bg-[#F4F4F5]'
-                    : 'text-[#3F3F46] hover:text-[#1D5BD6] hover:bg-[#F8FAFC]',
-                ].join(' ')}
-              >
-                <span className="truncate">{item.label}</span>
-                <NavBadge count={item.badgeKey && pendingCounts ? pendingCounts[item.badgeKey] : 0} />
-              </Link>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
 
 export default function Sidebar({ onNavigate, pendingCounts }: SidebarProps) {
   const pathname = usePathname();
@@ -537,48 +437,90 @@ export default function Sidebar({ onNavigate, pendingCounts }: SidebarProps) {
   );
 }
 
+/** An icon for every admin page — the phone menu shows one on each row, like the Faculty menu */
+const PAGE_ICON: Record<string, LucideIcon> = {
+  '/dashboard': LayoutDashboard,
+  '/dept-chair': LayoutDashboard,
+  '/program/curriculum': BookOpen,
+  '/program/faculty': Users,
+  '/program/blocks': Layers,
+  '/workload': Briefcase,
+  '/scheduling': CalendarPlus,
+  '/program/class-program': CalendarRange,
+  '/master-schedule': ClipboardList,
+  '/faculty-schedules': CalendarClock,
+  '/room-monitoring': MonitorCheck,
+  '/room-utilization': BarChart3,
+  '/room-requests': Inbox,
+  '/rooms': DoorOpen,
+  '/qr-generator': QrCode,
+  '/instructor-accounts': UserCog,
+  '/department-chair-accounts': UserCheck,
+  '/dept-chair-accounts': UserCheck,
+  '/analytics': LineChart,
+  '/reports': FileText,
+  '/audit-logs': ScrollText,
+  '/error-logs': Bug,
+  '/settings': Settings,
+  '/dept-chair/account': CircleUser,
+  '/department-chair/account': CircleUser,
+};
+
+/**
+ * Phone / tablet: the same slide-in sidebar as the Faculty side (MobileNavDrawer)
+ * with the admin menu — every page as a row, grouped by section. A page with
+ * sub-pages (Faculty Accounts) lists each sub-page as its own row.
+ */
 export function AdminMobileNav({
-  onNavigate,
+  open,
+  onClose,
+  role,
+  username,
   pendingCounts,
 }: {
-  onNavigate?: () => void;
+  open: boolean;
+  onClose: () => void;
+  role: string;
+  username?: string | null;
   pendingCounts?: SchedulingPendingCounts;
 }) {
   const pathname = usePathname();
-  const router = useRouter();
-  const [userRole, setUserRole] = useState('admin');
-
-  useEffect(() => {
-    fetch('/api/auth/me')
-      .then(r => (r.ok ? r.json() : null))
-      .then(data => {
-        if (data?.user) setUserRole(data.user.role ?? 'admin');
-      })
-      .catch(() => {});
-  }, []);
-
-  function prefetchIfPriority(href: string) {
-    if (PRIORITY_PREFETCH.has(href)) router.prefetch(href);
-  }
-
-  const navSections = getNavSections(userRole);
+  const navSections = getNavSections(role);
+  let row = 0;
 
   return (
-    <nav className="qr-nav-menu lg:hidden border-t border-[#E4E4E7] bg-white max-h-[min(70vh,calc(100dvh-3.5rem))] overflow-y-auto overscroll-contain" aria-label="Mobile" data-modal-root>
+    <MobileNavDrawer open={open} onClose={onClose} subtitle={roleLabel(role) || 'Administrator'} signedInAs={username}>
       {navSections.map(section => (
-        <MobileSection
-          key={section.id}
-          section={section}
-          pathname={pathname}
-          onNavigate={onNavigate}
-          onPrefetch={prefetchIfPriority}
-          pendingCounts={pendingCounts}
-        />
+        <DrawerSection key={section.id} label={section.label}>
+          {section.items.flatMap(item => (item.children?.length
+            ? item.children.map(child => (
+              <DrawerLink
+                key={child.href}
+                href={child.href}
+                label={child.label}
+                icon={PAGE_ICON[child.href] ?? Settings}
+                active={isChildPathActive(pathname, child)}
+                index={row++}
+                onClick={onClose}
+              />
+            ))
+            : [(
+              <DrawerLink
+                key={item.href}
+                href={item.href}
+                label={item.label}
+                icon={PAGE_ICON[item.href] ?? Settings}
+                active={isItemActive(pathname, item)}
+                badge={item.badgeKey && pendingCounts ? pendingCounts[item.badgeKey] : undefined}
+                index={row++}
+                onClick={onClose}
+              />
+            )]))}
+        </DrawerSection>
       ))}
-    </nav>
+    </MobileNavDrawer>
   );
 }
-
 export function adminHomeHref(role: string): string {
   return role === 'program_chair' ? '/dept-chair' : '/dashboard';
 }

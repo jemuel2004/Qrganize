@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/database/db';
+import { parseId } from '@/database/ids';
 import { getAuthUser } from '@/auth/auth';
 
 /**
@@ -11,8 +12,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const auth = await getAuthUser(req);
     if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const id = Number.parseInt((await params).id, 10);
-    if (!Number.isInteger(id) || id <= 0) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    const id = parseId((await params).id);
+    if (id === null) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
     const sessions = await query(`
       SELECT c.subject_code, COALESCE(ss.type, 'lec') AS type, b.block_name, p.code AS program_code,
