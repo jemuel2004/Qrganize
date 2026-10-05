@@ -6,7 +6,9 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import {
   ArrowLeft, ArrowRight, Eye, EyeOff, Lock, MapPin, UserRound,
 } from 'lucide-react';
-import SystemLogo from '@/components/ui/SystemLogo';
+import { LOGIN_FX_CSS } from './loginEffects';
+import FlippingLogo from './FlippingLogo';
+import RisingParticles from './RisingParticles';
 import { headingFont } from '@/lib/fonts';
 
 /* ── Types ────────────────────────────────────────────────────────────── */
@@ -293,7 +295,7 @@ export default function LoginClient() {
   const inputCls =
     'w-full border border-[#D6E0EF] rounded-xl pl-11 pr-4 text-[15px] text-[#0B2A5B] bg-[#FBFCFE] placeholder:text-[#94A3B8] transition-all duration-150 focus:outline-none focus:bg-white focus:border-[#1D5BD6] focus:ring-4 focus:ring-[#1D5BD6]/10';
   const primaryBtnCls =
-    'w-full font-semibold text-[15px] rounded-xl transition-all duration-150 flex items-center justify-center gap-2 shadow-[0_10px_24px_-10px_rgba(18,64,143,0.7)] hover:brightness-110 active:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed';
+    'qrfx-shine w-full font-semibold text-[15px] rounded-xl transition-all duration-150 flex items-center justify-center gap-2 shadow-[0_10px_24px_-10px_rgba(18,64,143,0.7)] hover:brightness-110 active:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed';
   // White label set inline — a `text-white` class gets repainted dark by the
   // light-mode override in globals.css.
   const primaryBtnStyle = { height: '52px', color: '#FFFFFF', backgroundImage: 'linear-gradient(90deg, #0E3F9E 0%, #1D5BD6 100%)' };
@@ -327,7 +329,10 @@ export default function LoginClient() {
   };
 
   return (
-    <div className="min-h-screen grid lg:grid-cols-2 bg-[#F4F7FC]">
+    <div className="qrfx-login relative min-h-screen grid lg:grid-cols-2 bg-[#F4F7FC]">
+      <style>{LOGIN_FX_CSS}</style>
+      {/* Glowing seam between the campus panel and the sign-in side */}
+      <div aria-hidden className="qrfx-seam hidden lg:block" />
       {role === 'instructor' && googleClientId && (
         <Script
           src="https://accounts.google.com/gsi/client"
@@ -362,12 +367,14 @@ export default function LoginClient() {
           aria-hidden="true"
           className="absolute -top-24 -left-24 w-[420px] h-[420px] object-contain opacity-[0.07] pointer-events-none select-none"
         />
+        <div aria-hidden className="qrfx-sweep" />
+        {/* Glowing particles rising up the campus panel */}
+        <RisingParticles count={22} tone="light" seed={7} />
 
         <div className="relative shrink-0" style={{ animation: 'loginFadeIn 0.45s ease both' }}>
           <div className="flex items-center gap-4 mb-14 [@media(max-height:820px)]:mb-8 [@media(max-height:680px)]:mb-5">
-            <div className="rounded-full shadow-[0_8px_24px_-8px_rgba(11,42,91,0.45)]">
-              <SystemLogo size={84} />
-            </div>
+            {/* The seal floats and flips over by itself */}
+            <FlippingLogo size={84} faceClassName="shadow-[0_8px_24px_-8px_rgba(11,42,91,0.45)]" />
             <div>
               <p className={`${headingFont.className} text-[32px] font-bold text-[#0B2A5B] leading-none`}>Qrganize</p>
               <p className="text-[15px] text-[#22406F] font-medium tracking-[0.45em] uppercase mt-2">NEMSU</p>
@@ -386,12 +393,14 @@ export default function LoginClient() {
 
         {/* White set inline (not `text-white`): the light-mode rule in
             globals.css repaints `text-white` as dark ink, and Login is always light */}
+        {/* One straight line at every width (qr-campus scales the text to fit);
+            the row may use part of the panel's right padding for room */}
         <div
-          className="relative shrink-0 flex items-center gap-3"
+          className="qr-campus-row relative shrink-0 flex items-center gap-3 lg:-mr-8 xl:-mr-12"
           style={{ color: '#FFFFFF', textShadow: '0 1px 8px rgba(11,42,91,0.45)' }}
         >
           <MapPin className="w-6 h-6 flex-shrink-0" fill="currentColor" stroke="#12408F" aria-hidden="true" />
-          <p className="text-[13px] font-semibold uppercase tracking-[0.14em] leading-snug">
+          <p className="qr-campus font-semibold uppercase leading-snug">
             North Eastern Mindanao State University – Cantilan Campus
           </p>
         </div>
@@ -399,13 +408,20 @@ export default function LoginClient() {
 
       {/* ════════ RIGHT — sign in ════════ */}
       <main
-        className="relative flex flex-col min-h-screen px-4 sm:px-8 py-6 sm:py-8"
+        className="relative flex flex-col min-h-screen px-4 sm:px-8 py-6 sm:py-8 overflow-x-clip"
         style={{ background: 'radial-gradient(900px 500px at 70% 30%, rgba(29,91,214,0.06), transparent 70%), #F4F7FC' }}
       >
+        {/* Soft blue lights drifting behind the card, over a faint dot texture */}
+        <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+          <div className="qrfx-dots" />
+          <RisingParticles count={14} tone="blue" seed={21} />
+          <div className="qrfx-orb qrfx-orb-a" style={{ width: 440, height: 440, top: '6%', right: -90, background: 'rgba(29,91,214,0.22)' }} />
+          <div className="qrfx-orb qrfx-orb-b" style={{ width: 380, height: 380, bottom: '4%', left: '6%', background: 'rgba(127,168,240,0.30)' }} />
+        </div>
         {/* Mobile branding */}
-        <div className="lg:hidden flex flex-col items-center text-center mt-6 mb-6">
+        <div className="relative lg:hidden flex flex-col items-center text-center mt-6 mb-6">
           <div className="flex items-center gap-3 mb-2">
-            <SystemLogo size={48} />
+            <FlippingLogo size={48} />
             <div className="text-left">
               <p className={`${headingFont.className} text-[22px] font-bold text-[#0B2A5B] leading-none`}>Qrganize</p>
               <p className="text-[11px] text-[#22406F] font-medium tracking-[0.4em] uppercase mt-1">NEMSU</p>
@@ -416,11 +432,13 @@ export default function LoginClient() {
           </p>
         </div>
 
-        <div className="flex-1 flex items-center justify-center">
+        <div className="relative flex-1 flex items-center justify-center">
           <div
-            className="relative w-full max-w-[460px]"
+            className="qrfx-stage relative w-full max-w-[460px]"
             style={{ animation: 'loginFadeIn 0.35s ease both', perspective: '1600px' }}
           >
+            {/* Soft halo around the card — brightens while typing */}
+            <div aria-hidden className="qrfx-halo" />
             {/* ── Sign In card — turns over when the role changes ── */}
             {/* `custom` hands the NEW direction to the exiting card too, so both
                 halves of the turn go the same way */}
@@ -539,8 +557,9 @@ export default function LoginClient() {
                             onClick={() => { if (!active) selectRole(r.id); }}
                             aria-pressed={active}
                             className={[
-                              // min-w-0 + wrapping on phones: long labels never push the card wider
-                              'relative flex-1 min-w-0 min-h-[44px] px-2 py-1.5 inline-flex items-center justify-center gap-2 text-[14px] leading-tight text-center font-semibold rounded-[10px] sm:whitespace-nowrap transition-colors duration-300',
+                              // Each button as wide as its label needs ("Administrator / Chair" is longer than "Faculty"),
+                              // the rest shared; min-w-0 + wrapping on phones keeps the card from widening
+                              'relative flex-auto min-w-0 min-h-[44px] px-2 py-1.5 inline-flex items-center justify-center gap-2 text-[14px] leading-tight text-center font-semibold rounded-[10px] sm:whitespace-nowrap transition-colors duration-300',
                               active ? 'text-[#1D5BD6]' : 'text-[#0B2A5B] hover:text-[#1D5BD6]',
                             ].join(' ')}
                           >
@@ -721,7 +740,7 @@ export default function LoginClient() {
           </button>
         )}
 
-        <p className="lg:hidden mt-8 text-center text-[11px] text-[#94A3B8] font-medium tracking-[0.14em] uppercase leading-relaxed">
+        <p className="relative lg:hidden mt-8 text-center text-[11px] text-[#94A3B8] font-medium tracking-[0.14em] uppercase leading-relaxed">
           North Eastern Mindanao State University – Cantilan Campus
         </p>
       </main>
