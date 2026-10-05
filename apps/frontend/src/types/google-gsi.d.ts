@@ -23,6 +23,8 @@ declare global {
         shape?: 'rectangular' | 'pill' | 'circle' | 'square';
         width?: number;
         logo_alignment?: 'left' | 'center';
+        /** Button language, e.g. 'en' — otherwise Google follows the browser's language */
+        locale?: string;
       }
     ): void;
   }

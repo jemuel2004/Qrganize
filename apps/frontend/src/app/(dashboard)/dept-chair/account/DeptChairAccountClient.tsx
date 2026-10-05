@@ -300,6 +300,7 @@ function GoogleVerificationSection() {
       size: 'large',
       text: 'continue_with',
       width: 280,
+      locale: 'en', // always English, whatever the phone's language
     });
   }, [gisReady, clientId, googleVerified, showChange, handleCredential]);
 
@@ -338,7 +339,7 @@ function GoogleVerificationSection() {
     <div className="space-y-4">
       {clientId && (
         <Script
-          src="https://accounts.google.com/gsi/client"
+          src="https://accounts.google.com/gsi/client?hl=en"
           strategy="afterInteractive"
           onLoad={() => setGisReady(true)}
         />

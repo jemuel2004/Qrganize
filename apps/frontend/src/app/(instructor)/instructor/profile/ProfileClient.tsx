@@ -498,6 +498,7 @@ export default function ProfileClient() {
       size: 'large',
       text: 'continue_with',
       width,
+      locale: 'en', // always English, whatever the phone's language
     });
   }, [gisReady, googleVerified, showChangeGoogle, openSection, handleGoogleCredential]);
 
@@ -598,7 +599,7 @@ export default function ProfileClient() {
   return (
     <div className="min-h-full bg-[#0f172a] p-5 md:p-7">
       <Script
-        src="https://accounts.google.com/gsi/client"
+        src="https://accounts.google.com/gsi/client?hl=en"
         strategy="afterInteractive"
         onLoad={() => setGisReady(true)}
       />

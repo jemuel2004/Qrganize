@@ -52,6 +52,11 @@ export const LOGIN_FX_CSS = `
   background: radial-gradient(circle, rgba(120, 165, 245, 1) 0%, rgba(29, 91, 214, 0.65) 45%, rgba(29, 91, 214, 0) 75%);
   box-shadow: 0 0 10px 2px rgba(29, 91, 214, 0.35);
 }
+/* Phones: particles float over the white card too — a stronger glow so they show */
+.qrfx-particles-strong .qrfx-particle-blue {
+  background: radial-gradient(circle, rgba(140, 180, 250, 1) 0%, rgba(29, 91, 214, 0.85) 50%, rgba(29, 91, 214, 0) 78%);
+  box-shadow: 0 0 14px 4px rgba(29, 91, 214, 0.45);
+}
 
 /* Soft blue lights drifting behind the sign-in card */
 .qrfx-orb { position: absolute; border-radius: 9999px; filter: blur(72px); pointer-events: none; }

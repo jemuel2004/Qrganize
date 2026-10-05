@@ -279,6 +279,8 @@ export default function LoginClient() {
         text: 'continue_with',
         shape: 'rectangular',
         width,
+        // Always English ("Continue with Google"), whatever language the phone is set to
+        locale: 'en',
       });
     };
     render();
@@ -335,7 +337,7 @@ export default function LoginClient() {
       <div aria-hidden className="qrfx-seam hidden lg:block" />
       {role === 'instructor' && googleClientId && (
         <Script
-          src="https://accounts.google.com/gsi/client"
+          src="https://accounts.google.com/gsi/client?hl=en"
           strategy="afterInteractive"
           onLoad={() => setGisReady(true)}
         />
@@ -414,7 +416,10 @@ export default function LoginClient() {
         {/* Soft blue lights drifting behind the card, over a faint dot texture */}
         <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
           <div className="qrfx-dots" />
-          <RisingParticles count={14} tone="blue" seed={21} />
+          {/* Behind the card only — never over the form (floating over the fields was distracting).
+              Phones: bigger and brighter, since only the space around the card shows them */}
+          <div className="hidden lg:block"><RisingParticles count={14} tone="blue" seed={21} /></div>
+          <div className="lg:hidden"><RisingParticles count={22} tone="blue" seed={33} sizeScale={1.5} strong /></div>
           <div className="qrfx-orb qrfx-orb-a" style={{ width: 440, height: 440, top: '6%', right: -90, background: 'rgba(29,91,214,0.22)' }} />
           <div className="qrfx-orb qrfx-orb-b" style={{ width: 380, height: 380, bottom: '4%', left: '6%', background: 'rgba(127,168,240,0.30)' }} />
         </div>

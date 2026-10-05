@@ -17,15 +17,19 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
  * fading in and out. Clipped to the panel (never changes the page size);
  * hidden for "reduce motion". Styles: .qrfx-particle* in loginEffects.ts.
  */
-export default function RisingParticles({ count, tone, seed }: {
+export default function RisingParticles({ count, tone, seed, sizeScale = 1, strong = false }: {
   count: number;
   /** light = white-blue sparks (blue campus panel); blue = royal-blue (light sign-in side) */
   tone: 'light' | 'blue';
   seed: number;
+  /** Bigger particles (e.g. 1.5 on phones, where they float over the card) */
+  sizeScale?: number;
+  /** Stronger glow, so they stand out on white */
+  strong?: boolean;
 }) {
   const rand = seeded(seed);
   const particles = Array.from({ length: count }, (_, i) => {
-    const size = 3 + rand() * 5;
+    const size = (3 + rand() * 5) * sizeScale;
     const dur = 10 + rand() * 10;
     return {
       key: i,
@@ -43,7 +47,7 @@ export default function RisingParticles({ count, tone, seed }: {
     };
   });
   return (
-    <div aria-hidden className="qrfx-particles">
+    <div aria-hidden className={`qrfx-particles ${strong ? 'qrfx-particles-strong' : ''}`}>
       {particles.map(p => (
         <span key={p.key} className="qrfx-particle" style={p.style}>
           <i className={`qrfx-particle-dot qrfx-particle-${tone}`} />
