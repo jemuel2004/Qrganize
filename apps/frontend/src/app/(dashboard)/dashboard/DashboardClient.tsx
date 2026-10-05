@@ -20,7 +20,8 @@ import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
 import { useRealtime } from '@/context/RealtimeContext';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import { DashboardSkeleton } from '@/components/ui/skeletons';
-import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
+import { PageLoadTransition, revealProps } from '@/components/ui/PageLoadTransition';
+import { useSkeletonRefresh } from '@/hooks/useSkeletonRefresh';
 import LoadBreakdownDonut from '@/components/charts/LoadBreakdownDonut';
 import { RefreshButton } from '@/app/(dashboard)/room-utilization/shared';
 
@@ -105,7 +106,8 @@ const DashboardHeader = memo(function DashboardHeader({ name, term, onRefresh, l
             <CalendarCheck className="w-4 h-4 text-[#1D5BD6]" /> {term}
           </span>
         )}
-        <RefreshButton onRefresh={onRefresh} loading={loading} />
+        {/* The cards below show skeletons while it reloads — no centred card */}
+        <RefreshButton overlay={false} onRefresh={onRefresh} loading={loading} />
       </div>
     </div>
   );
@@ -274,6 +276,7 @@ export default function DashboardClient() {
   const [an, setAn] = useState<Analytics | null>(null);
   const [loading, setLoading] = useState(true);
 
+  /** Resolves to false when the dashboard could not be read */
   const load = useCallback(async (signal?: AbortSignal, silent = false) => {
     if (!silent) setLoading(true);
     try {
@@ -283,8 +286,9 @@ export default function DashboardClient() {
       ]);
       if (d.ok) setData(await d.json());
       if (a.ok) setAn(await a.json());
-    } catch (e) {
-      if ((e as Error)?.name === 'AbortError') return;
+      return d.ok && a.ok;
+    } catch {
+      return false;
     } finally {
       if (!silent) setLoading(false);
     }
@@ -315,7 +319,10 @@ export default function DashboardClient() {
   }, [loading, data, retry, load]);
   const reduceMotion = useReducedMotion();
 
-  const showSkeleton = useMinLoading(loading && !data, LOADING_DELAY);
+  // Refresh button: the whole dashboard (and the bell) reloads behind its skeleton
+  const reloadAll = useCallback(() => load(undefined, true), [load]);
+  const { refreshing, refresh } = useSkeletonRefresh(reloadAll);
+  const showSkeleton = useMinLoading((loading && !data) || refreshing, LOADING_DELAY);
   const term = [an?.term.semester, an?.term.school_year ? `AY ${an.term.school_year}` : null].filter(Boolean).join(' · ');
   const st = data?.stats;
   const todayName = new Date().toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Manila' });
@@ -329,18 +336,21 @@ export default function DashboardClient() {
     { label: 'Schedule Conflicts', count: an.kpis.conflicts, href: '/scheduling', icon: AlertTriangle },
     { label: 'Unassigned Subjects', count: an.scheduling.unassigned, href: '/master-schedule?status=Unassigned', icon: ClipboardList },
     { label: 'Room Requests Pending', count: st.pending_requests, href: '/room-requests', icon: DoorOpen },
-    { label: 'Incomplete Faculty Load', count: incompleteLoad, href: '/workload', icon: Users },
+    // Opens Faculty Workload on its Unassigned button (faculty with no subject yet)
+    { label: 'Incomplete Faculty Load', count: incompleteLoad, href: '/workload?show=unassigned', icon: Users },
   ] : [];
 
   return (
     <div className="flex flex-col px-4 sm:px-6 py-6 gap-5 min-w-0 w-full max-w-7xl mx-auto">
-      <PageLoadTransition showSkeleton={showSkeleton} skeleton={<DashboardSkeleton />} className="flex flex-col gap-5">
+      {/* The greeting and Refresh stay put while a refresh reloads the cards below */}
+      {data && st && (
+        <DashboardHeader name={displayName(data.user?.username)} term={term} onRefresh={refresh} loading={refreshing || showSkeleton} />
+      )}
+      <PageLoadTransition showSkeleton={showSkeleton} skeleton={<DashboardSkeleton header={!(data && st)} />} className="flex flex-col gap-5">
         {data && st ? (
           <>
-            <DashboardHeader name={displayName(data.user?.username)} term={term} onRefresh={() => load(undefined)} loading={loading} />
-
             {/* ── Today strip ── */}
-            <section className="relative bg-gradient-to-br from-[#EFF6FF] to-white rounded-2xl border border-[#D6E4FA] p-5 sm:p-6 overflow-hidden">
+            <motion.section {...revealProps(0, reduceMotion)} className="relative bg-gradient-to-br from-[#EFF6FF] to-white rounded-2xl border border-[#D6E4FA] p-5 sm:p-6 overflow-hidden">
               <span aria-hidden className="absolute left-0 top-5 bottom-5 w-1 rounded-r bg-[#1D5BD6]" />
               <p className="inline-flex items-center gap-2 text-[13px] font-bold uppercase tracking-[0.1em] text-[#0B2A5B] mb-4">
                 <CalendarDays className="w-4 h-4 text-[#1D5BD6]" /> Today
@@ -365,9 +375,10 @@ export default function DashboardClient() {
                   </Link>
                 ))}
               </div>
-            </section>
+            </motion.section>
 
             {/* ── Room status ── */}
+            <motion.div {...revealProps(1, reduceMotion)}>
             <Section icon={DoorOpen} title="Room Status" action={<ViewLink href="/rooms">View Room Management</ViewLink>}>
               <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,9fr)_minmax(0,11fr)] gap-6 lg:gap-8 items-center">
                 <div className="min-w-0 flex justify-center">
@@ -430,8 +441,10 @@ export default function DashboardClient() {
                 </div>
               </div>
             </Section>
+            </motion.div>
 
             {/* ── Today's schedule ── */}
+            <motion.div {...revealProps(2, reduceMotion)}>
             <Section icon={CalendarDays} title="Today's Schedule" action={<ViewLink href="/master-schedule">View Full Schedule</ViewLink>}>
               {data.today_schedule.length === 0 ? (
                 <div className="py-3 flex items-center justify-center gap-4 text-left">
@@ -445,9 +458,10 @@ export default function DashboardClient() {
                 <TodayScheduleCarousel classes={data.today_schedule} />
               )}
             </Section>
+            </motion.div>
 
             {/* ── Workload overview · Scheduling alerts ── */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-stretch">
+            <motion.div {...revealProps(3, reduceMotion)} className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-stretch">
               <Section icon={Users} title="Workload Overview" action={<ViewLink href="/workload">View Workload</ViewLink>} center>
                 {an && (
                   <div className="w-full max-w-[520px]">
@@ -482,7 +496,7 @@ export default function DashboardClient() {
                   })}
                 </ul>
               </Section>
-            </div>
+            </motion.div>
           </>
         ) : (
           <div className="bg-white rounded-2xl border border-[#E3E9F3] px-5 py-16 text-center">

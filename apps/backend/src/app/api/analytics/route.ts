@@ -19,7 +19,8 @@ import {
  */
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-const WEEK_CAPACITY_MIN = DAYS.length * (DAY_END_MIN - DAY_START_MIN - (LUNCH_END_MIN - LUNCH_START_MIN));
+const DAY_CAPACITY_MIN = DAY_END_MIN - DAY_START_MIN - (LUNCH_END_MIN - LUNCH_START_MIN);
+const WEEK_CAPACITY_MIN = DAYS.length * DAY_CAPACITY_MIN;
 /** Two-hour buckets 7–9 AM … 3–5 PM, then the last part of the day (5–6 PM) */
 const TIME_BUCKETS = Array.from({ length: Math.ceil((DAY_END_MIN - DAY_START_MIN) / 120) }, (_, i) => DAY_START_MIN + i * 120);
 const MAX_RANGE_DAYS = 366;
@@ -239,17 +240,53 @@ export async function GET(req: NextRequest) {
     for (const o of offerings) {
       if (!scheduledIds.has(o.id)) unscheduledByProgram.set(o.program_code, (unscheduledByProgram.get(o.program_code) ?? 0) + 1);
     }
-    const unassigned = offerings.filter(o => o.status === 'Unassigned' || o.faculty_id == null).length;
+    const noFaculty = (o: { status: string; faculty_id: number | null }) => o.status === 'Unassigned' || o.faculty_id == null;
+    const unassigned = offerings.filter(noFaculty).length;
+    // Where each class stands — the three stages never overlap and add up to the total
+    const notScheduled = offerings.filter(o => !scheduledIds.has(o.id));
+    const stages = {
+      scheduled: offerings.length - notScheduled.length,
+      needs_schedule: notScheduled.filter(o => !noFaculty(o)).length,
+      no_faculty: notScheduled.filter(noFaculty).length,
+    };
 
-    /* ── Weekly occupancy heatmap: % of active rooms in use, day × hour ── */
+    /* ── Weekly occupancy heatmap: rooms in use, day × hour (all / lecture / lab) ── */
     const HEAT_HOURS = Array.from({ length: (DAY_END_MIN - DAY_START_MIN) / 60 }, (_, i) => DAY_START_MIN / 60 + i);
-    const heatmap = DAYS.map(day => ({
-      day,
-      values: HEAT_HOURS.map(h => {
-        const inUse = new Set(roomSessions.filter(x => x.day === day && x.start < (h + 1) * 60 && x.end > h * 60).map(x => x.room_id));
-        return active.length ? Math.round((inUse.size / active.length) * 100) : 0;
-      }),
-    }));
+    const heatmap = DAYS.map(day => {
+      const cells = HEAT_HOURS.map(h => {
+        const inUse = new Set(roomSessions.filter(x => x.day === day && x.start < (h + 1) * 60 && x.end > h * 60).map(x => x.room_id!));
+        const lab = [...inUse].filter(id => roomKind.get(id) === 'lab').length;
+        return { all: inUse.size, lec: inUse.size - lab, lab };
+      });
+      return {
+        day,
+        // % of active rooms in use (kept for older callers)
+        values: cells.map(c => (active.length ? Math.round((c.all / active.length) * 100) : 0)),
+        all: cells.map(c => c.all),
+        lec: cells.map(c => c.lec),
+        lab: cells.map(c => c.lab),
+      };
+    });
+    const roomsOfKind = (k: Kind) => active.filter(r => kindOf(r.room_type) === k);
+    /* Share of each day's bookable room time that is booked (same rule as the overall rate) */
+    const usageByDayPct = DAYS.map(day => {
+      const mins = { lec: 0, lab: 0 };
+      for (const x of roomSessions) {
+        if (x.day !== day || x.created_on > to) continue;
+        mins[roomKind.get(x.room_id!) ?? 'lec'] += x.end - x.start;
+      }
+      return {
+        day,
+        all: pct(mins.lec + mins.lab, DAY_CAPACITY_MIN * active.length),
+        lec: pct(mins.lec, DAY_CAPACITY_MIN * roomsOfKind('lec').length),
+        lab: pct(mins.lab, DAY_CAPACITY_MIN * roomsOfKind('lab').length),
+      };
+    });
+    const kindRate = (k: Kind) => {
+      const list = roomsOfKind(k);
+      const booked = list.reduce((s, r) => s + (current.perRoom.get(r.id) ?? 0), 0);
+      return pct(booked, WEEK_CAPACITY_MIN * list.length);
+    };
     const buckets: [string, (p: number) => boolean][] = [
       ['Under 50%', p => p < 50],
       ['50–75%', p => p >= 50 && p <= 75],
@@ -264,6 +301,7 @@ export async function GET(req: NextRequest) {
         rooms: { total: active.length, lec: active.filter(r => kindOf(r.room_type) === 'lec').length, lab: active.filter(r => kindOf(r.room_type) === 'lab').length },
         utilization: current.rate,
         utilization_change: Math.round((current.rate - previous.rate) * 10) / 10,
+        utilization_by_kind: { lec: kindRate('lec'), lab: kindRate('lab') },
         instructors: { total: facultyList.length, permanent, contractual: facultyList.length - permanent },
         conflicts: clash.instructor + clash.room + clash.block,
       },
@@ -273,6 +311,7 @@ export async function GET(req: NextRequest) {
         inactive: rooms.length - active.length,
       },
       usage_by_day: DAYS.map(d => ({ day: d, ...byDay[d] })),
+      usage_by_day_pct: usageByDayPct,
       usage_by_time: byTime,
       most_used: mostUsed,
       least_used: perRoom.filter(r => !mostUsed.includes(r)).reverse().slice(0, 5),
@@ -288,6 +327,7 @@ export async function GET(req: NextRequest) {
         total: offerings.length,
         scheduled: scheduledIds.size,
         conflicted: [...scheduledIds].filter(id => conflicted.has(id)).length,
+        stages,
         unscheduled_by_program: [...unscheduledByProgram].map(([program, count]) => ({ program, count })).sort((a, b) => b.count - a.count),
       },
       conflict_counts: { room: clash.room, faculty: clash.instructor, block: clash.block },
@@ -306,7 +346,11 @@ export async function GET(req: NextRequest) {
           needs_schedule: needsSchedule.has(f.faculty_id),
         }));
       })(),
-      heatmap: { hours: HEAT_HOURS, days: heatmap },
+      heatmap: {
+        hours: HEAT_HOURS,
+        rooms: { all: active.length, lec: roomsOfKind('lec').length, lab: roomsOfKind('lab').length },
+        days: heatmap,
+      },
       capacity: buckets.map(([label, test]) => ({ label, rooms: perRoom.filter(r => test(r.pct)).length })),
       trends,
       // Detail lists for the summary-card pop-ups

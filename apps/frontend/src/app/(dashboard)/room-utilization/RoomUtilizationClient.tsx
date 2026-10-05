@@ -27,7 +27,8 @@ import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import CalendarModal from '@/components/ui/CalendarModal';
 import FriendlySelect from '@/components/ui/FriendlySelect';
 import CountFilterTabs from '@/components/ui/CountFilterTabs';
-import { ListSkeleton } from '@/components/ui/skeletons';
+import { CardSkeleton, ListSkeleton } from '@/components/ui/skeletons';
+import { useSkeletonRefresh } from '@/hooks/useSkeletonRefresh';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
 import {
@@ -135,7 +136,9 @@ export default function RoomUtilizationClient() {
 
   const { data, loading, error, reload } = useUtilization(date, view);
   const [applying, startApplying, applied] = useApplyingDate(loading, () => setCalOpen(false));
-  const showSkeleton = useMinLoading(loading && !data, PAGE_SKELETON_MIN_MS);
+  // Refresh button: the cards and lists reload behind their skeletons (live updates stay quiet)
+  const { refreshing, refresh } = useSkeletonRefresh(reload);
+  const showSkeleton = useMinLoading((loading && !data) || refreshing, PAGE_SKELETON_MIN_MS);
 
   const liveDay = !!data && data.view === 'daily' && data.date === data.today;
 
@@ -278,7 +281,7 @@ export default function RoomUtilizationClient() {
               ]}
             />
           </div>
-          <RefreshButton className="!h-12" onRefresh={reload} loading={loading} />
+          <RefreshButton className="!h-12" overlay={false} onRefresh={refresh} loading={refreshing || showSkeleton} />
         </div>
         <div className="flex flex-col lg:flex-row lg:items-end gap-4 lg:gap-8 pt-4 border-t border-[#EEF2F7]">
           <div className="min-w-0">
@@ -313,7 +316,18 @@ export default function RoomUtilizationClient() {
         {error && <p className="text-sm text-red-600">{error}</p>}
       </div>
 
-      <PageLoadTransition showSkeleton={showSkeleton} skeleton={<ListSkeleton rows={8} />}>
+      <PageLoadTransition
+        showSkeleton={showSkeleton}
+        skeleton={
+          // Status cards, then the room list — the same shape as the page
+          <div className="space-y-5" role="status" aria-label="Loading room utilization">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+              {[0, 1, 2, 3].map(i => <CardSkeleton key={i} className="h-[132px] rounded-2xl" />)}
+            </div>
+            <ListSkeleton rows={6} />
+          </div>
+        }
+      >
         {/* Status cards — click to list just those rooms */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
           <StatCard icon={<DoorClosed className="w-5 h-5" />} label="Occupied Rooms" value={counts.Occupied}

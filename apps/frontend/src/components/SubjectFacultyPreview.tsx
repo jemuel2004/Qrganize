@@ -6,6 +6,7 @@ import { BookOpen, ChevronLeft, ChevronRight, Clock, Loader2, MapPin, Monitor, U
 import { blockCode } from '@shared/blockCode';
 import { useRealtime } from '@/context/RealtimeContext';
 import { useScrollLock } from '@/hooks/useScrollLock';
+import AutoHeight from '@/components/ui/AutoHeight';
 import { asSessionList, fmt12, normTime, parseDays } from '@/lib/scheduleTime';
 
 /*
@@ -112,32 +113,6 @@ async function fetchInstructors(query: string, signal?: AbortSignal): Promise<Su
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Unable to load faculty.');
   return Array.isArray(data.instructors) ? data.instructors : [];
-}
-
-/** Animates its height to fit its content, so a panel glides instead of
- *  jumping when what's inside changes size. */
-function AutoHeight({ children, className, reduceMotion }: {
-  children: ReactNode; className?: string; reduceMotion: boolean;
-}) {
-  const innerRef = useRef<HTMLDivElement>(null);
-  const [height, setHeight] = useState<number | 'auto'>('auto');
-  useEffect(() => {
-    const el = innerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setHeight(el.offsetHeight));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  return (
-    <motion.div
-      className={className}
-      initial={false}
-      animate={{ height }}
-      transition={{ duration: reduceMotion ? 0 : 0.32, ease: EASE }}
-    >
-      <div ref={innerRef}>{children}</div>
-    </motion.div>
-  );
 }
 
 function Chip({ children }: { children: ReactNode }) {
@@ -363,7 +338,7 @@ export default function SubjectFacultyPreview({
 
               {/* Body height glides between the list and a schedule; the views
                   slide sideways — forward to a schedule, back to the list. */}
-              <AutoHeight className="min-h-0 overflow-y-auto overflow-x-hidden" reduceMotion={!!reduceMotion}>
+              <AutoHeight className="min-h-0 overflow-y-auto overflow-x-hidden">
                 <AnimatePresence mode="wait" initial={false} custom={navDir}>
                   <motion.div
                     key={viewing ? `sched-${viewing.faculty_id}` : 'list'}

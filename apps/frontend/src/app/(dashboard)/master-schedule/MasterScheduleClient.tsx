@@ -36,11 +36,17 @@ interface Schedule {
 }
 
 type BlockPage = {
+  /** Unique per block (same-named blocks of different programs stay apart) */
+  key: string;
+  program_code: string;
   year_level: string;
   semester: string;
   block_name: string;
   subjects: Schedule[];
 };
+
+/** Program filter value for every program in the term */
+const ALL_PROGRAMS = 'all';
 
 /* ── Constants ───────────────────────────────────────────────────── */
 
@@ -91,38 +97,42 @@ function statusOf(s: Schedule): string {
 
 /* ── Data grouping ───────────────────────────────────────────────── */
 
-function buildGroups(data: Schedule[]) {
-  return YEAR_ORDER
-    .filter(y => data.some(s => s.year_level === y))
-    .map(year => ({
-      year_level: year,
-      semesters: SEM_ORDER
-        .filter(sem => data.some(s => s.year_level === year && s.block_semester === sem))
-        .map(sem => {
-          const rows   = data.filter(s => s.year_level === year && s.block_semester === sem);
-          const blocks = [...new Set(rows.map(s => s.block_name))].sort();
-          return {
-            semester: sem,
-            blocks: blocks.map(block => ({
-              block_name: block,
-              subjects: rows
-                .filter(s => s.block_name === block)
-                .sort((a, b) => a.subject_code.localeCompare(b.subject_code)),
-            })),
-          };
-        }),
-    }));
+/** One page per block — by program, then year, semester and block name */
+function buildBlockPages(data: Schedule[]): BlockPage[] {
+  const byBlock = new Map<number, Schedule[]>();
+  for (const s of data) byBlock.set(s.block_id, [...(byBlock.get(s.block_id) ?? []), s]);
+  const rank = (order: string[], v: string) => { const i = order.indexOf(v); return i < 0 ? order.length : i; };
+  return [...byBlock.entries()]
+    .map(([blockId, rows]) => ({
+      key: String(blockId),
+      program_code: rows[0].program_code,
+      year_level: rows[0].year_level,
+      semester: rows[0].block_semester,
+      block_name: rows[0].block_name,
+      subjects: [...rows].sort((a, b) => a.subject_code.localeCompare(b.subject_code)),
+    }))
+    .sort((a, b) =>
+      a.program_code.localeCompare(b.program_code)
+      || rank(YEAR_ORDER, a.year_level) - rank(YEAR_ORDER, b.year_level)
+      || rank(SEM_ORDER, a.semester) - rank(SEM_ORDER, b.semester)
+      || a.block_name.localeCompare(b.block_name));
 }
+
+/** "BSCS · 1st Year — Block A" (program shown when every program is listed) */
+const blockTitle = (b: BlockPage, withProgram: boolean) =>
+  `${withProgram ? `${b.program_code} · ` : ''}${b.year_level} — Block ${b.block_name}`;
 
 /* ── Block subject table (shared between paged and all-years views) ─ */
 
-function BlockTable({ block, onOpenSubject }: { block: BlockPage; onOpenSubject: (s: Schedule) => void }) {
+function BlockTable({ block, onOpenSubject, withProgram = false }: {
+  block: BlockPage; onOpenSubject: (s: Schedule) => void; withProgram?: boolean;
+}) {
   return (
     <>
       {/* Year + Block header */}
       <div className="mb-4 min-w-0">
         <h2 className="text-base sm:text-lg font-bold text-[#0B2A5B] truncate">
-          {block.year_level} — Block {block.block_name}
+          {blockTitle(block, withProgram)}
         </h2>
         <p className="text-sm text-[#64748B] mt-0.5 truncate">
           {block.semester}
@@ -298,10 +308,12 @@ export default function MasterSchedulePage() {
               status: paramStatus && STATUSES.includes(paramStatus) ? paramStatus : f.status,
             }));
           }
-        } else if (paramProgramId) {
+        } else if (paramProgramId || (paramStatus && STATUSES.includes(paramStatus))) {
+          // A status link without a program (e.g. the Dashboard's "Unassigned Subjects")
+          // counts every program, so it opens on All Programs
           setFilters(f => ({
             ...f,
-            program_id: paramProgramId,
+            program_id: paramProgramId || ALL_PROGRAMS,
             status: paramStatus && STATUSES.includes(paramStatus) ? paramStatus : f.status,
           }));
         }
@@ -321,7 +333,9 @@ export default function MasterSchedulePage() {
   useEffect(() => {
     if (!filters.program_id) { listQuery.current = ''; setSchedules([]); return; }
     setLoading(true);
-    const params = new URLSearchParams({ program_id: filters.program_id });
+    const params = new URLSearchParams(
+      filters.program_id === ALL_PROGRAMS ? { all_programs: '1' } : { program_id: filters.program_id },
+    );
     if (filters.year_level) params.set('year_level',    filters.year_level);
     if (globalSemester)     params.set('semester',      globalSemester);
     if (globalYear)         params.set('academic_year', globalYear);
@@ -354,6 +368,7 @@ export default function MasterSchedulePage() {
   }
 
   const programSelected = !!filters.program_id;
+  const isAllPrograms = filters.program_id === ALL_PROGRAMS;
   const showPageSkeleton = useMinLoading(booting, LOADING_DELAY);
   const showScheduleSkeleton = useMinLoading(
     !showPageSkeleton && loading && programSelected,
@@ -368,7 +383,8 @@ export default function MasterSchedulePage() {
     s.subject_code.toLowerCase().includes(filters.search.toLowerCase()) ||
     s.subject_name.toLowerCase().includes(filters.search.toLowerCase()) ||
     (s.faculty_name || '').toLowerCase().includes(filters.search.toLowerCase()) ||
-    s.block_name.toLowerCase().includes(filters.search.toLowerCase())
+    s.block_name.toLowerCase().includes(filters.search.toLowerCase()) ||
+    (isAllPrograms && s.program_code.toLowerCase().includes(filters.search.toLowerCase()))
   );
   /* Status narrows only the list below — the count tiles keep counting every
      status, so choosing Unassigned never turns Assigned into 0 (and back). */
@@ -384,19 +400,8 @@ export default function MasterSchedulePage() {
     completed:  searched.filter(s => statusOf(s) === 'Completed').length,
   };
 
-  const groups          = buildGroups(filtered);
-  const blockPages: BlockPage[] = groups.flatMap(y =>
-    y.semesters.flatMap(s =>
-      s.blocks.map(b => ({
-        year_level: y.year_level,
-        semester: s.semester,
-        block_name: b.block_name,
-        subjects: b.subjects,
-      })),
-    ),
-  );
+  const blockPages = buildBlockPages(filtered);
   const selectedProgram = programs.find(p => String(p.id) === filters.program_id);
-  const isAllYears = !filters.year_level;
 
   /* Reset to first block page when filters / term / result size change */
   useEffect(() => {
@@ -435,16 +440,37 @@ export default function MasterSchedulePage() {
     ? { duration: 0 }
     : { duration: 0.15, ease: BLOCK_PAGE_EASE };
 
+  /* The pager sits under the block's table — after a page change, bring the new
+     block's heading back into view if the page had scrolled past it */
+  const blockTopRef = useRef<HTMLDivElement>(null);
+  function revealBlockTop() {
+    requestAnimationFrame(() => {
+      const el = blockTopRef.current;
+      if (el && el.getBoundingClientRect().top < 80) el.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+    });
+  }
+
   function goToPrevBlock() {
     if (safePageIndex <= 0) return;
     setPageDirection(-1);
     setBlockPageIndex(i => Math.max(0, i - 1));
+    revealBlockTop();
   }
 
   function goToNextBlock() {
     if (safePageIndex >= totalBlockPages - 1) return;
     setPageDirection(1);
     setBlockPageIndex(i => Math.min(totalBlockPages - 1, i + 1));
+    revealBlockTop();
+  }
+
+  /** "Go to block" list — jump straight to any block (slides the way it lies) */
+  function goToBlock(key: string) {
+    const to = blockPages.findIndex(b => b.key === key);
+    if (to < 0 || to === safePageIndex) return;
+    setPageDirection(to > safePageIndex ? 1 : -1);
+    setBlockPageIndex(to);
+    revealBlockTop();
   }
 
   /* Status buttons — same colours as the status pills in the table:
@@ -537,7 +563,10 @@ export default function MasterSchedulePage() {
                 guide={!filters.program_id}
                 showHintInTrigger
                 minPanelWidth={380}
-                options={programs.map(p => ({ value: String(p.id), label: p.code, hint: p.name }))}
+                options={[
+                  { value: ALL_PROGRAMS, label: 'All Programs', hint: 'Every program this term' },
+                  ...programs.map(p => ({ value: String(p.id), label: p.code, hint: p.name })),
+                ]}
               />
             )}
           </div>
@@ -610,32 +639,14 @@ export default function MasterSchedulePage() {
             </div>
           )}
 
-          {/* All Year Levels selected — list every block, no pagination */}
-          {isAllYears && blockPages.length > 0 && (
-            <div className="mb-4 space-y-6 min-w-0">
-              {blockPages.map(block => (
-                <motion.div
-                  key={`${block.year_level}|${block.semester}|${block.block_name}`}
-                  className="min-w-0"
-                  initial={reduceMotion ? false : { opacity: 0, y: 16 }}
-                  whileInView={{ opacity: 1, y: 0 }}
-                  viewport={{ once: true, amount: 0.15, margin: '0px 0px -60px 0px' }}
-                  transition={{ duration: 0.65, ease: BLOCK_PAGE_EASE }}
-                >
-                  <BlockTable block={block} onOpenSubject={setSubjectPreview} />
-                </motion.div>
-              ))}
-            </div>
-          )}
-
-          {/* Specific year level — single block page, paginated by block */}
-          {!isAllYears && currentBlock && (
-            <div className="mb-4 min-w-0">
+          {/* One block per page — every view (a single year, all years, all programs) */}
+          {currentBlock && (
+            <div ref={blockTopRef} className="mb-4 min-w-0 scroll-mt-24">
               {/* Animated block header + schedule only — pager stays stable below */}
               <div className="min-w-0 overflow-x-hidden">
                 <AnimatePresence mode="wait" initial={false} custom={pageDirection}>
                   <motion.div
-                    key={`${currentBlock.year_level}|${currentBlock.semester}|${currentBlock.block_name}`}
+                    key={currentBlock.key}
                     custom={pageDirection}
                     initial={
                       reduceMotion
@@ -651,7 +662,7 @@ export default function MasterSchedulePage() {
                     transition={blockPageTransition}
                     className="min-w-0"
                   >
-                    <BlockTable block={currentBlock} onOpenSubject={setSubjectPreview} />
+                    <BlockTable block={currentBlock} onOpenSubject={setSubjectPreview} withProgram={isAllPrograms} />
                   </motion.div>
                 </AnimatePresence>
               </div>
@@ -659,19 +670,21 @@ export default function MasterSchedulePage() {
               {/* Block pagination — stable while content transitions */}
               {totalBlockPages >= 1 && (
                 <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between min-w-0">
-                  <div className="text-sm text-[#64748B] min-w-0 order-2 sm:order-1 overflow-hidden">
-                    <AnimatePresence mode="wait" initial={false}>
-                      <motion.p
-                        key={`${currentBlock.year_level}|${currentBlock.block_name}`}
-                        initial={reduceMotion ? false : { opacity: 0, y: 4 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={reduceMotion ? undefined : { opacity: 0, y: -4 }}
-                        transition={pageLabelTransition}
-                        className="font-medium text-[#0B2A5B] truncate"
-                      >
-                        {currentBlock.year_level} — Block {currentBlock.block_name}
-                      </motion.p>
-                    </AnimatePresence>
+                  {/* Go to block — jump to any block instead of clicking through every page */}
+                  <div className="w-full sm:w-[22rem] min-w-0 order-2 sm:order-1">
+                    <FriendlySelect
+                      value={currentBlock.key}
+                      onChange={goToBlock}
+                      label="Go to block"
+                      searchable={blockPages.length > 8}
+                      searchPlaceholder="Type a block, e.g. BSIT 2nd Year Block B"
+                      minPanelWidth={340}
+                      options={blockPages.map(b => ({
+                        value: b.key,
+                        label: blockTitle(b, isAllPrograms),
+                        hint: `${b.semester} · ${b.subjects.length} subject${b.subjects.length !== 1 ? 's' : ''}`,
+                      }))}
+                    />
                   </div>
                   <div className="flex items-center justify-between sm:justify-end gap-2 flex-wrap order-1 sm:order-2">
                     <button
@@ -713,7 +726,7 @@ export default function MasterSchedulePage() {
           {/* Footer count */}
           {filtered.length > 0 && (
             <p className="text-sm text-[#94A3B8] text-right mt-2 pb-2">
-              {filtered.length} subject{filtered.length !== 1 ? 's' : ''} · {selectedProgram?.code}
+              {filtered.length} subject{filtered.length !== 1 ? 's' : ''} · {isAllPrograms ? 'All Programs' : selectedProgram?.code}
             </p>
           )}
         </>

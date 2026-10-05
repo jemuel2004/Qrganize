@@ -421,11 +421,14 @@ function hasAtMostThreeNumericDigits(raw: unknown): boolean {
 
 export default function WorkloadPage({
   initialFacultyQuery = '',
+  initialAssignFilter = 'all',
   assignMsId = null,
   assignBlockId = null,
   assignFrom = 'master-schedule',
 }: {
   initialFacultyQuery?: string;
+  /** All / Assigned / Unassigned button the faculty list opens on (`?show=unassigned`) */
+  initialAssignFilter?: 'all' | 'assigned' | 'unassigned';
   /** Master Schedule / Block → Assign: the class to assign, and the block it lives in. */
   assignMsId?: number | null;
   assignBlockId?: number | null;
@@ -445,7 +448,7 @@ export default function WorkloadPage({
   const [search, setSearch] = useState('');
   const [filterEmploymentType, setFilterEmploymentType] = useState('');
   /** Faculty list: everyone, only those with a subject this term, or those still needing one */
-  const [assignFilter, setAssignFilter] = useState<'all' | 'assigned' | 'unassigned'>('all');
+  const [assignFilter, setAssignFilter] = useState<'all' | 'assigned' | 'unassigned'>(initialAssignFilter);
   /** Faculty list page (from 1) — back to the first page when the search or a filter changes */
   const [facultyPage, setFacultyPage] = useState(1);
   useEffect(() => { setFacultyPage(1); }, [search, filterEmploymentType, assignFilter]);

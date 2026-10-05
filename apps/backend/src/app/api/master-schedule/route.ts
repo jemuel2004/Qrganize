@@ -21,9 +21,11 @@ export async function GET(req: NextRequest) {
     const semester     = searchParams.get('semester');
     const academicYear = searchParams.get('academic_year');
     const status       = searchParams.get('status');
+    /** "All Programs" on the Master Schedule page — only together with a term */
+    const allPrograms  = searchParams.get('all_programs') === '1' && !!semester && !!academicYear;
 
-    // Require at least a program or a block — returning everything at once is expensive
-    if (!programId && !blockId) {
+    // Require a program, a block, or one whole term (All Programs) — never every term at once
+    if (!programId && !blockId && !allPrograms) {
       return NextResponse.json({ schedules: [] });
     }
     // Ids must be whole numbers in range — anything else used to reach Postgres and come back as a 500

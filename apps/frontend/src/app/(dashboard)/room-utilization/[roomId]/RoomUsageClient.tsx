@@ -12,7 +12,8 @@ import { useReducedMotion } from 'framer-motion';
 import BackButton from '@/components/ui/BackButton';
 import CalendarModal from '@/components/ui/CalendarModal';
 import { FilterSelect } from '@/components/ui/SearchFilter';
-import { ListSkeleton } from '@/components/ui/skeletons';
+import { CardSkeleton, ListSkeleton } from '@/components/ui/skeletons';
+import { useSkeletonRefresh } from '@/hooks/useSkeletonRefresh';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
 import { CheckCircle2, Clock, QrCode, Users, XCircle } from 'lucide-react';
@@ -54,6 +55,9 @@ export default function RoomUsageClient() {
   const { data, loading, error, reload } = useUtilization(date, view, roomId);
   const [applying, startApplying, applied] = useApplyingDate(loading, () => setCalOpen(false));
   const showSkeleton = useMinLoading(loading && !data, PAGE_SKELETON_MIN_MS);
+  // Refresh: the room header stays; the figures and lists below reload behind skeletons
+  const { refreshing, refresh } = useSkeletonRefresh(reload);
+  const bodySkeleton = useMinLoading(refreshing, PAGE_SKELETON_MIN_MS);
 
   // Keep the URL in step so refresh / back returns to the same period
   const sync = (d: string, v: View) => router.replace(`/room-utilization/${roomId}?${new URLSearchParams({ date: d, view: v })}`, { scroll: false });
@@ -108,11 +112,24 @@ export default function RoomUsageClient() {
                     <option value="weekly">Weekly</option>
                     <option value="monthly">Monthly</option>
                   </FilterSelect>
-                  <RefreshButton onRefresh={reload} loading={loading} className="px-4" />
+                  <RefreshButton overlay={false} onRefresh={refresh} loading={refreshing || bodySkeleton} className="px-4" />
                 </div>
               </div>
             </div>
 
+            <PageLoadTransition
+              showSkeleton={bodySkeleton}
+              skeleton={
+                <div className="space-y-5" role="status" aria-label="Refreshing room usage">
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+                    {[0, 1, 2, 3].map(i => <CardSkeleton key={i} className="h-[104px] rounded-2xl" />)}
+                  </div>
+                  <ListSkeleton rows={6} />
+                  <ListSkeleton rows={3} />
+                </div>
+              }
+            >
+            <div className="space-y-5">
             {/* Stats */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
               <Stat icon={<Clock className="w-5 h-5" />} label="Scheduled Classes" value={scheduled.length} tone={{ bar: '#1D5BD6', soft: '#EFF6FF' }} />
@@ -211,6 +228,8 @@ export default function RoomUsageClient() {
                 </ul>
               )}
             </section>
+            </div>
+            </PageLoadTransition>
           </div>
         )}
       </PageLoadTransition>

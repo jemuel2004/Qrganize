@@ -3,8 +3,10 @@
  * Safe in Server Components — no client hooks.
  */
 
-export function Skeleton({ className = '' }: { className?: string }) {
-  return <div className={`qr-skeleton ${className}`} aria-hidden />;
+import type { CSSProperties, ReactNode } from 'react';
+
+export function Skeleton({ className = '', style }: { className?: string; style?: CSSProperties }) {
+  return <div className={`qr-skeleton ${className}`} style={style} aria-hidden />;
 }
 
 export function CardSkeleton({ className = '' }: { className?: string }) {
@@ -62,7 +64,7 @@ export function TableSkeleton({
   );
 }
 
-/** Matches Dashboard MetricCard dimensions. */
+/** A small stat card (label, icon tile, value) — used by the generic page skeleton */
 export function DashboardSkeletonCard() {
   return (
     <div className="bg-[var(--surface-elevated)] border border-[color:var(--border)] rounded-xl h-[132px] overflow-hidden shadow-[0_1px_3px_rgba(15,23,42,0.06)]">
@@ -78,84 +80,115 @@ export function DashboardSkeletonCard() {
   );
 }
 
-/** Matches Dashboard SectionShell (title, optional badge, rows, optional footer). */
-export function DashboardSkeletonPanel({
-  rows = 5,
-  footer = false,
-  badge = false,
-  className = '',
-}: {
-  rows?: number;
-  footer?: boolean;
-  badge?: boolean;
-  className?: string;
-}) {
+/** One Dashboard card (Section): title + link pill, then its body */
+function DashboardSkeletonSection({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
-    <div
-      className={[
-        'bg-[var(--surface-elevated)] border border-[color:var(--border)] rounded-xl overflow-hidden flex flex-col min-w-0 shadow-[0_1px_3px_rgba(15,23,42,0.06)]',
-        className,
-      ].join(' ')}
-    >
-      <div className="px-4 sm:px-5 py-3.5 border-b border-[color:var(--border-subtle)] flex items-center gap-2 flex-shrink-0">
-        <Skeleton className="h-5 w-40 rounded" />
-        {badge ? <Skeleton className="h-5 w-5 rounded-full flex-shrink-0" /> : null}
+    <div className={`bg-white rounded-2xl border border-[#E3E9F3] shadow-[0_1px_3px_rgba(11,42,91,0.06)] p-5 sm:p-6 min-w-0 overflow-hidden ${className}`}>
+      <div className="flex items-center justify-between gap-3 mb-5">
+        <Skeleton className="h-5 w-44 rounded" />
+        <Skeleton className="h-9 w-40 rounded-full hidden sm:block" />
       </div>
-      <div className="divide-y divide-[color:var(--border-subtle)]">
-        {Array.from({ length: rows }, (_, i) => (
-          <div key={i} className="px-4 sm:px-5 py-3.5 flex items-start justify-between gap-3">
-            <div className="flex-1 min-w-0 space-y-2">
-              <Skeleton className="h-3.5 w-[72%] rounded" />
-              <Skeleton className="h-3 w-[48%] rounded" />
-            </div>
-            <Skeleton className="h-7 w-8 rounded-md flex-shrink-0" />
+      {children}
+    </div>
+  );
+}
+
+/** Donut + its three legend rows (Room Status, Workload Overview) */
+function DashboardSkeletonDonut({ size }: { size: number }) {
+  return (
+    <div className="flex flex-col sm:flex-row items-center justify-center gap-6">
+      <Skeleton className="rounded-full flex-shrink-0" style={{ width: size, height: size }} />
+      <div className="w-full max-w-[260px] space-y-5">
+        {[0, 1, 2].map(i => (
+          <div key={i} className="space-y-2">
+            <Skeleton className="h-4 w-full rounded" />
+            <Skeleton className="h-1.5 w-full rounded-full" />
           </div>
         ))}
       </div>
-      {footer ? (
-        <div className="px-4 sm:px-5 py-3 border-t border-[color:var(--border-subtle)] flex-shrink-0">
-          <Skeleton className="h-4 w-36 rounded" />
-        </div>
-      ) : null}
     </div>
   );
 }
 
 /**
- * Full dashboard body skeleton (greeting through panels).
- * Does not include the app navbar — only content below navigation.
+ * Admin Dashboard body, shaped like the real page: greeting (first load only —
+ * on Refresh the real header stays), Today strip, Room Status, Today's
+ * Schedule, then Workload Overview beside Scheduling Alerts.
  */
-export function DashboardSkeleton() {
+export function DashboardSkeleton({ header = true }: { header?: boolean }) {
   return (
     <div className="flex flex-col gap-5" role="status" aria-live="polite" aria-label="Loading dashboard">
-      {/* Greeting + Refresh */}
-      <div className="flex items-start sm:items-center justify-between gap-4 flex-wrap">
-        <div className="min-w-0 space-y-2 flex-1">
-          <Skeleton className="h-7 sm:h-8 w-[min(100%,22rem)] max-w-full rounded-md" />
-          <Skeleton className="h-4 w-[min(100%,20rem)] max-w-full rounded" />
-          <Skeleton className="h-3.5 w-[min(100%,16rem)] max-w-full rounded" />
+      {header && (
+        <div className="flex items-start sm:items-center justify-between gap-4 flex-wrap">
+          <div className="min-w-0 space-y-2.5 flex-1">
+            <Skeleton className="h-8 w-[min(100%,20rem)] rounded-md" />
+            <Skeleton className="h-4 w-[min(100%,22rem)] rounded" />
+            <Skeleton className="h-3.5 w-[min(100%,17rem)] rounded" />
+          </div>
+          <div className="flex items-center gap-2.5">
+            <Skeleton className="h-11 w-56 rounded-xl hidden sm:block" />
+            <Skeleton className="h-[42px] w-[110px] rounded-xl" />
+          </div>
         </div>
-        <Skeleton className="h-10 w-[6.75rem] rounded-lg flex-shrink-0" />
+      )}
+
+      {/* Today strip — three figures */}
+      <div className="bg-white rounded-2xl border border-[#D6E4FA] p-5 sm:p-6">
+        <Skeleton className="h-4 w-20 rounded mb-5" />
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-y-5">
+          {[0, 1, 2].map(i => (
+            <div key={i} className="flex items-center gap-3.5 px-2 sm:px-5">
+              <Skeleton className="w-12 h-12 rounded-2xl flex-shrink-0" />
+              <div className="space-y-2">
+                <Skeleton className="h-3.5 w-28 rounded" />
+                <Skeleton className="h-7 w-14 rounded" />
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
-      {/* Metric cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 flex-shrink-0">
-        {Array.from({ length: 4 }, (_, i) => (
-          <DashboardSkeletonCard key={i} />
+      {/* Room Status — donut · room table */}
+      <DashboardSkeletonSection>
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,9fr)_minmax(0,11fr)] gap-6 lg:gap-8 items-center">
+          <DashboardSkeletonDonut size={180} />
+          <div className="min-w-0">
+            <Skeleton className="h-4 w-2/3 rounded mb-3" />
+            {Array.from({ length: 5 }, (_, i) => (
+              <div key={i} className="flex items-center gap-4 py-3.5 border-t border-[#F1F5F9]">
+                <Skeleton className="h-4 w-24 rounded flex-shrink-0" />
+                <Skeleton className="h-6 w-20 rounded-full flex-shrink-0" />
+                <Skeleton className="h-4 flex-1 rounded" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </DashboardSkeletonSection>
+
+      {/* Today's Schedule — five rows */}
+      <DashboardSkeletonSection>
+        <Skeleton className="h-4 w-full rounded mb-3" />
+        {Array.from({ length: 5 }, (_, i) => (
+          <div key={i} className="h-14 flex items-center gap-4 border-t border-[#F1F5F9]">
+            <Skeleton className="h-4 w-[20%] rounded" />
+            <Skeleton className="h-4 w-[12%] rounded" />
+            <Skeleton className="h-4 w-[15%] rounded" />
+            <Skeleton className="h-4 w-[12%] rounded" />
+            <Skeleton className="h-4 flex-1 rounded" />
+          </div>
         ))}
-      </div>
+      </DashboardSkeletonSection>
 
-      {/* Content: 2-col main + sidebar */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
-        <div className="lg:col-span-2 flex flex-col gap-5 min-w-0">
-          <DashboardSkeletonPanel rows={4} badge footer />
-          <DashboardSkeletonPanel rows={3} badge footer />
-          <DashboardSkeletonPanel rows={4} footer />
-        </div>
-        <div className="flex flex-col gap-5 min-w-0">
-          <DashboardSkeletonPanel rows={3} footer />
-          <DashboardSkeletonPanel rows={4} footer />
-        </div>
+      {/* Workload Overview · Scheduling Alerts */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <DashboardSkeletonSection>
+          <DashboardSkeletonDonut size={176} />
+        </DashboardSkeletonSection>
+        <DashboardSkeletonSection>
+          <div className="space-y-2.5">
+            {Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-[62px] w-full rounded-xl" />)}
+          </div>
+        </DashboardSkeletonSection>
       </div>
     </div>
   );

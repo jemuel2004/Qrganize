@@ -3,7 +3,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Search, CheckCircle2, XCircle, AlertTriangle, Loader2,
+  Search, CheckCircle2, AlertTriangle, Loader2,
   Users, Monitor, BookOpen, CalendarDays, Building2, ArrowRight, ChevronDown, Check,
 } from 'lucide-react';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
@@ -24,18 +24,10 @@ const ROOM_TYPES = [
   { value: 'Laboratory', label: 'Laboratory', color: '#D97706', Icon: Monitor },
 ];
 
-interface ConflictInfo {
-  subject_code: string; subject_name: string;
-  block_name: string; year_level: string; program_code: string;
-  faculty_name: string | null; start_time: string; end_time: string;
-}
-interface OccupancyInfo { status: string; faculty_name: string; }
 interface Room {
   id: number; room_name: string; room_type: string;
   capacity: number; building: string | null;
   is_available: boolean;
-  occupancy: OccupancyInfo | null;
-  schedule_conflict: ConflictInfo | null;
 }
 
 function fmt12(t: string): string {
@@ -171,8 +163,8 @@ export default function AvailableRoomsClient() {
       .catch(() => {});
   }, { enabled: !loading });
 
-  const available   = rooms?.filter(r => r.is_available)   ?? [];
-  const unavailable = rooms?.filter(r => !r.is_available)  ?? [];
+  // Faculty only see rooms they can use — taken rooms are left out
+  const available = rooms?.filter(r => r.is_available) ?? [];
 
   return (
     <div className="min-h-full p-4 sm:p-6 lg:p-8 overflow-x-hidden min-w-0">
@@ -307,10 +299,6 @@ export default function AvailableRoomsClient() {
               <CheckCircle2 className="w-3.5 h-3.5 text-[#059669]" />
               <span className="text-[#065F46] font-semibold text-sm">{available.length} Available</span>
             </div>
-            <div className="inline-flex items-center gap-1.5 bg-[#FEF2F2] border border-[#FECACA] rounded-xl px-3.5 py-2">
-              <XCircle className="w-3.5 h-3.5 text-[#DC2626]" />
-              <span className="text-[#991B1B] font-semibold text-sm">{unavailable.length} Unavailable</span>
-            </div>
             <div className="inline-flex items-center gap-1.5 bg-white border border-[#E2E8F0] rounded-xl px-3.5 py-2 min-w-0">
               <CalendarDays className="w-3.5 h-3.5 text-[#1D5BD6] flex-shrink-0" />
               <span className="text-[#475569] font-medium text-sm break-words">
@@ -319,14 +307,18 @@ export default function AvailableRoomsClient() {
             </div>
           </div>
 
-          {rooms.length === 0 ? (
+          {available.length === 0 ? (
             <div className="bg-white border border-[#E2E8F0] rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.06)] px-6 py-10 flex flex-col items-center gap-3 text-center">
               <div className="w-12 h-12 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-center">
                 <AlertTriangle className="w-5 h-5 text-[#94A3B8]" />
               </div>
               <div>
-                <p className="text-[#0B2A5B] font-semibold text-base mb-1">No rooms found</p>
-                <p className="text-[#64748B] text-sm">No active rooms match your filter. Try a different room type.</p>
+                <p className="text-[#0B2A5B] font-semibold text-base mb-1">No free rooms</p>
+                <p className="text-[#64748B] text-sm">
+                  {rooms.length === 0
+                    ? 'No active rooms match your filter. Try a different room type.'
+                    : 'Every room is taken at this time. Try another time or room type.'}
+                </p>
               </div>
             </div>
           ) : (
@@ -375,73 +367,6 @@ export default function AvailableRoomsClient() {
                     </span>
                   </div>
                 </motion.button>
-              ))}
-
-              {unavailable.map((room, i) => (
-                <motion.div
-                  key={room.id}
-                  initial={reduceMotion ? false : { opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0, transition: { duration: 0.35, ease: [0.4, 0, 0.2, 1], delay: reduceMotion ? 0 : Math.min(available.length + i, 9) * 0.05 } }}
-                  className="bg-white border border-[#E2E8F0] rounded-2xl p-5 shadow-[0_1px_3px_rgba(0,0,0,0.06)]"
-                >
-                  <div className="flex items-start justify-between gap-3 mb-3">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <div className="w-9 h-9 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-center flex-shrink-0">
-                        {room.room_type === 'Laboratory'
-                          ? <Monitor className="w-4 h-4 text-[#94A3B8]" />
-                          : <BookOpen className="w-4 h-4 text-[#94A3B8]" />}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-base font-bold text-[#475569] leading-tight break-words">{room.room_name}</p>
-                        <p className="text-xs text-[#94A3B8] font-semibold mt-0.5">{room.room_type}</p>
-                      </div>
-                    </div>
-                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#DC2626] bg-[#FEF2F2] border border-[#FECACA] px-2.5 py-1 rounded-lg flex-shrink-0">
-                      <XCircle className="w-3 h-3" /> Unavailable
-                    </span>
-                  </div>
-
-                  {room.occupancy && (
-                    <div className="mt-2 flex items-start gap-2 bg-[#FEF2F2] border border-[#FECACA] rounded-xl px-3 py-2">
-                      <AlertTriangle className="w-3.5 h-3.5 text-[#DC2626] flex-shrink-0 mt-0.5" />
-                      <div className="text-xs text-[#991B1B]">
-                        <span className="font-semibold">
-                          {room.occupancy.status === 'Occupied' ? 'Currently Occupied' : 'Reserved'}
-                        </span>
-                        {room.occupancy.faculty_name && (
-                          <span className="text-[#B91C1C]"> by {room.occupancy.faculty_name}</span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                  {room.schedule_conflict && (
-                    <div className="mt-2 flex items-start gap-2 bg-[#FFFBEB] border border-[#FDE68A] rounded-xl px-3 py-2 min-w-0">
-                      <CalendarDays className="w-3.5 h-3.5 text-[#D97706] flex-shrink-0 mt-0.5" />
-                      <div className="text-xs text-[#92400E] min-w-0">
-                        <span className="font-semibold">Scheduled class</span>
-                        <span className="break-words">
-                          {' '}— {room.schedule_conflict.subject_code}: {room.schedule_conflict.program_code} {room.schedule_conflict.year_level}{room.schedule_conflict.block_name}
-                        </span>
-                        <div className="text-[#A16207] mt-0.5 break-words">
-                          {fmt12(room.schedule_conflict.start_time)} – {fmt12(room.schedule_conflict.end_time)}
-                          {room.schedule_conflict.faculty_name && ` · ${room.schedule_conflict.faculty_name}`}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs text-[#64748B]">
-                    {room.building && (
-                      <span className="inline-flex items-center gap-1">
-                        <Building2 className="w-3.5 h-3.5 text-[#94A3B8]" /> {room.building}
-                      </span>
-                    )}
-                    {room.capacity > 0 && (
-                      <span className="inline-flex items-center gap-1">
-                        <Users className="w-3.5 h-3.5 text-[#94A3B8]" /> Capacity: {room.capacity}
-                      </span>
-                    )}
-                  </div>
-                </motion.div>
               ))}
             </div>
           )}

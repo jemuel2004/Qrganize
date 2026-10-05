@@ -7,7 +7,7 @@ import { useSchoolYear } from '@/context/SchoolYearContext';
 import { useRealtime } from '@/context/RealtimeContext';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
-import { AlertTriangle, CalendarDays, Eye, Loader2, Printer, Trash2, X } from 'lucide-react';
+import { AlertTriangle, CalendarDays, Eye, FileSpreadsheet, Loader2, Printer, RotateCcw, Trash2, X } from 'lucide-react';
 import Modal from '@/components/ui/Modal';
 import WorkloadPrintMenu from '@/components/WorkloadPrintMenu';
 import { SearchInput } from '@/components/ui/SearchFilter';
@@ -20,7 +20,10 @@ import { EmploymentBadge } from '@/components/ui/EmploymentBadge';
 import { Skeleton, TableSkeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import { byPosition } from '@/lib/positionRank';
-import { printWorkloadSummary } from '@/lib/workloadSummaryPrint';
+import {
+  DEFAULT_SUMMARY_SIGNATORIES, downloadWorkloadSummaryExcel, loadSummarySignatories, printWorkloadSummary, saveSummarySignatories,
+  type SummarySignatories,
+} from '@/lib/workloadSummaryPrint';
 import { blockCode } from '@shared/blockCode';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
@@ -76,6 +79,10 @@ interface FacultyOption {
 
 /** Field label + read-only term box — same height as the dropdown beside it. */
 const FS_LABEL = 'text-xs font-semibold uppercase tracking-wide text-[#475569] mb-1.5';
+/** Print Summary signatory fields — 16px text so phones don't zoom in */
+const SIGNER_FIELD =
+  'w-full h-11 rounded-xl border border-[#CBD5E1] bg-white px-3.5 text-base text-[#0B2A5B] placeholder:text-[#94A3B8] ' +
+  'hover:border-[#94A3B8] focus:outline-none focus:border-[#1D5BD6] focus:ring-4 focus:ring-[#1D5BD6]/15 transition';
 const FS_READONLY =
   'flex items-center gap-2 min-h-[48px] bg-[#F4F7FC] border border-[#D6E0EF] rounded-xl px-3.5 select-none min-w-0';
 
@@ -495,19 +502,44 @@ export default function FacultySchedulesClient({
 
   /* Print Summary — the Summary of Faculty Workload for the term: every faculty with
      subjects, Permanent then Contractual, each line from their own official forms. */
-  const [summaryProgress, setSummaryProgress] = useState<{ done: number; total: number } | null>(null);
-  async function printSummary() {
+  const [summaryProgress, setSummaryProgress] = useState<{ done: number; total: number; excel: boolean } | null>(null);
+  /* Print Summary first shows the names in the summary's footer — they can be
+     edited (remembered in this browser for next time). Download Excel, its own
+     button, gives the same sheet with those saved names. */
+  const [signers, setSigners] = useState<SummarySignatories | null>(null);
+  function openSummaryDialog() {
+    if (summaryProgress) return;
+    if (allGroups.length === 0) { toast.info('No faculty have subjects this term yet.'); return; }
+    setSigners(loadSummarySignatories());
+  }
+  function printFromDialog() {
+    if (!signers) return;
+    saveSummarySignatories(signers);
+    setSigners(null);
+    // Same click — the print window opens straight away, so pop-up blockers allow it
+    void makeSummary(signers, false);
+  }
+  function downloadSummaryExcel() {
+    void makeSummary(loadSummarySignatories(), true);
+  }
+  async function makeSummary(signatories: SummarySignatories, excel: boolean) {
     if (summaryProgress) return;
     const ids = allGroups.map(g => g.facultyId);
     if (ids.length === 0) { toast.info('No faculty have subjects this term yet.'); return; }
-    setSummaryProgress({ done: 0, total: ids.length });
+    setSummaryProgress({ done: 0, total: ids.length, excel });
+    const opts = {
+      facultyIds: ids, semester: globalSemester, academicYear: globalYear, signatories,
+      onProgress: (done: number, total: number) => setSummaryProgress({ done, total, excel }),
+    };
     try {
-      const result = await printWorkloadSummary({
-        facultyIds: ids, semester: globalSemester, academicYear: globalYear,
-        onProgress: (done, total) => setSummaryProgress({ done, total }),
-      });
-      if (!result.ok) toast.error('Could not open the print window. Allow pop-ups for this site and try again.');
-      else if (result.method === 'download') toast.info('The summary was downloaded — open the file to print it.');
+      if (excel) {
+        await downloadWorkloadSummaryExcel(opts);
+        toast.success('Summary of Faculty Workload downloaded as Excel.');
+      } else {
+        const result = await printWorkloadSummary(opts);
+        if (!result.ok) toast.error('Could not open the print window. Allow pop-ups for this site and try again.');
+        else if (result.method === 'download') toast.info('The summary was downloaded — open the file to print it.');
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not prepare the summary. Please try again.');
     } finally {
@@ -626,10 +658,24 @@ export default function FacultySchedulesClient({
         <div className="mt-4 sm:mt-7 mb-4">
           <WatermarkTitle>Faculty Schedule</WatermarkTitle>
         </div>
-        <div className="flex justify-end">
+        <div className="flex flex-wrap justify-end gap-3">
+          {/* Excel: the same sheet as the print, with the names saved from Print Summary */}
           <motion.button
             type="button"
-            onClick={() => { void printSummary(); }}
+            onClick={downloadSummaryExcel}
+            disabled={!!summaryProgress}
+            whileHover={reduceMotion || summaryProgress ? undefined : { y: -1 }}
+            whileTap={reduceMotion || summaryProgress ? undefined : { scale: 0.96 }}
+            title="Download the Summary of Faculty Workload as an Excel file"
+            className="group inline-flex items-center justify-center gap-2 h-11 px-4 rounded-xl text-[15px] font-semibold border-2 border-[#1D5BD6] text-[#1D5BD6] bg-white hover:bg-[#EFF6FF] transition-colors disabled:cursor-wait disabled:opacity-70"
+          >
+            {summaryProgress?.excel
+              ? <><Loader2 className="w-4 h-4 animate-spin" /> Preparing Excel… {summaryProgress.done} of {summaryProgress.total}</>
+              : <><FileSpreadsheet className="w-4 h-4 transition-transform duration-200 group-hover:-translate-y-px" style={{ color: '#1D6F42' }} /> Download Excel</>}
+          </motion.button>
+          <motion.button
+            type="button"
+            onClick={openSummaryDialog}
             disabled={!!summaryProgress}
             whileHover={reduceMotion || summaryProgress ? undefined : { y: -1 }}
             whileTap={reduceMotion || summaryProgress ? undefined : { scale: 0.96 }}
@@ -638,7 +684,7 @@ export default function FacultySchedulesClient({
             // White set inline — the light-mode rule repaints `text-white` as dark ink
             style={{ color: '#FFFFFF' }}
           >
-            {summaryProgress
+            {summaryProgress && !summaryProgress.excel
               ? <><Loader2 className="w-4 h-4 animate-spin" /> Preparing… {summaryProgress.done} of {summaryProgress.total}</>
               : <><Printer className="w-4 h-4 transition-transform duration-200 group-hover:-translate-y-px" /> Print Summary</>}
           </motion.button>
@@ -1137,6 +1183,88 @@ export default function FacultySchedulesClient({
 
       {/* ── Remove Subject confirmation (same as Faculty Workload) — outside the
           Schedule Details overlay, so Esc here only closes this ── */}
+      {/* ── Print Summary: names in the footer (editable, remembered in this browser) ── */}
+      <Modal
+        open={!!signers}
+        onClose={() => setSigners(null)}
+        title="Print Summary"
+        subtitle="Check the names at the bottom of the summary, then print."
+        icon={Printer}
+        size="lg"
+        footer={
+          <div className="flex gap-3">
+            <motion.button
+              type="button"
+              onClick={() => setSigners(null)}
+              whileTap={reduceMotion ? undefined : { scale: 0.97 }}
+              className="flex-1 h-11 border border-[#CBD5E1] text-[#334155] rounded-xl text-[15px] font-semibold hover:bg-[#F8FAFC] transition"
+            >
+              Cancel
+            </motion.button>
+            <motion.button
+              type="submit"
+              form="summary-signers"
+              whileTap={reduceMotion ? undefined : { scale: 0.97 }}
+              className="flex-1 h-11 rounded-xl text-[15px] font-bold bg-[#1D5BD6] hover:bg-[#164BB5] transition inline-flex items-center justify-center gap-2"
+              style={{ color: '#FFFFFF' }}
+            >
+              <Printer className="w-4 h-4" /> Print Summary
+            </motion.button>
+          </div>
+        }
+      >
+        {signers && (
+          <form id="summary-signers" onSubmit={e => { e.preventDefault(); printFromDialog(); }} className="space-y-4">
+            {([
+              ['preparedBy', 'Prepared by'],
+              ['recommending', 'Recommending Approval'],
+              ['approved', 'Approved'],
+            ] as const).map(([key, label], i) => (
+              <motion.fieldset
+                key={key}
+                initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0, transition: { duration: 0.3, delay: reduceMotion ? 0 : 0.05 + i * 0.06 } }}
+                className="rounded-xl border border-[#E2E8F0] px-4 pb-4 pt-2"
+              >
+                <legend className="px-1.5 text-sm font-bold text-[#0B2A5B]">{label}</legend>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="block min-w-0">
+                    <span className="mb-1 block text-[13px] font-semibold text-[#475569]">Name</span>
+                    <input
+                      value={signers[key].name}
+                      onChange={e => setSigners(s => s && { ...s, [key]: { ...s[key], name: e.target.value } })}
+                      placeholder="Full name, e.g. JUAN A. DELA CRUZ, Ph.D."
+                      className={SIGNER_FIELD}
+                    />
+                  </label>
+                  <label className="block min-w-0">
+                    <span className="mb-1 block text-[13px] font-semibold text-[#475569]">Position</span>
+                    <input
+                      value={signers[key].title}
+                      onChange={e => setSigners(s => s && { ...s, [key]: { ...s[key], title: e.target.value } })}
+                      placeholder="e.g. Campus Director"
+                      className={SIGNER_FIELD}
+                    />
+                  </label>
+                </div>
+              </motion.fieldset>
+            ))}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[13px] text-[#64748B]">Changes are remembered on this computer and used for Download Excel too.</p>
+              {JSON.stringify(signers) !== JSON.stringify(DEFAULT_SUMMARY_SIGNATORIES) && (
+                <button
+                  type="button"
+                  onClick={() => setSigners(DEFAULT_SUMMARY_SIGNATORIES)}
+                  className="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg text-[13px] font-semibold text-[#1D5BD6] hover:bg-[#EFF6FF] transition-colors"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" /> Reset to the original names
+                </button>
+              )}
+            </div>
+          </form>
+        )}
+      </Modal>
+
       <Modal
         open={!!removeTarget}
         onClose={() => { if (!removing) setRemoveTarget(null); }}

@@ -20,6 +20,7 @@ import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import { ListSkeleton } from '@/components/ui/skeletons';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
+import { useSkeletonRefresh } from '@/hooks/useSkeletonRefresh';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
 import { useRealtime } from '@/context/RealtimeContext';
 import { ArrowRight, BookOpen, Check, ChevronDown, Clock, Monitor, X, XCircle } from 'lucide-react';
@@ -132,7 +133,10 @@ export default function RoomRequestsAdminClient() {
   }), { enabled: !loading });
   useVisibilityAwareInterval(() => load(true), 60_000);
 
-  const showSkeleton = useMinLoading(loading && requests.length === 0, PAGE_SKELETON_MIN_MS);
+  // Refresh button: both panels reload behind their skeletons (live updates stay quiet)
+  const reloadAll = useCallback(() => load().then(fresh => fresh !== null), [load]);
+  const { refreshing, refresh } = useSkeletonRefresh(reloadAll);
+  const showSkeleton = useMinLoading((loading && requests.length === 0) || refreshing, PAGE_SKELETON_MIN_MS);
 
   const counts = useMemo(() => {
     const c: Record<Group, number> = { Pending: 0, Approved: 0, Rejected: 0 };
@@ -318,10 +322,19 @@ export default function RoomRequestsAdminClient() {
             );
           })}
         </div>
-        <RefreshButton onRefresh={() => load()} loading={loading} />
+        <RefreshButton overlay={false} onRefresh={refresh} loading={refreshing || showSkeleton} />
       </div>
 
-      <PageLoadTransition showSkeleton={showSkeleton} skeleton={<ListSkeleton rows={8} />}>
+      <PageLoadTransition
+        showSkeleton={showSkeleton}
+        skeleton={
+          // Same two panels as the page: Lecture rooms · Laboratory rooms
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start" role="status" aria-label="Loading room requests">
+            <ListSkeleton rows={4} />
+            <ListSkeleton rows={4} />
+          </div>
+        }
+      >
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
           {renderPanel(false)}
           {renderPanel(true)}
