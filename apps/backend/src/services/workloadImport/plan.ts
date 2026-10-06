@@ -878,6 +878,8 @@ export function buildCategoryPlan(
   const single = moved.length === 1 && moved[0].component !== 'whole' && Math.abs(moved[0].value - value(moved[0].component)) <= 0.011;
   const component: 'full' | SessionType = single ? (moved[0].component as SessionType) : 'full';
   const isPraise = P > 0;
+  // The Lecture's share of the moved part (a Lec + Lab subject split any way between the forms)
+  const lecPart = comps.length === 2 ? round2(moved.filter(p => p.component === 'lec').reduce((s, p) => s + p.value, 0)) : null;
   const reason = isPraise
     ? (single ? `Praise Load — ${component === 'lec' ? 'Lecture' : 'Laboratory'} portion` : `Praise Load — ${fmtNum(movedValue)} ${unit} of ${describe('Praise')}`)
     : `Split load — ${R.toFixed(2)} ${unit} Regular, ${movedValue.toFixed(2)} ${unit} Overload`;
@@ -886,7 +888,7 @@ export function buildCategoryPlan(
       loadCategory: 'Regular',
       loadValue: R,
       overloadComponent: component,
-      overloadRow: { value: movedValue, isPraise, reason },
+      overloadRow: { value: movedValue, isPraise, reason, lecPart },
       portions,
       label: `Regular ${fmtNum(R)} (${describe('Regular')}) + ${isPraise ? 'Praise' : 'Overload'} ${fmtNum(movedValue)} (${describe(isPraise ? 'Praise' : 'Overload')})`,
     },

@@ -1,10 +1,10 @@
 'use client';
 
 /**
- * Settings → Day Combinations — the meeting-day sets (MWF, TTh, MTh, …) that
- * Scheduling may use in the active school year + semester. Saved per term;
- * no active combinations means scheduling is not restricted. Changing the
- * list never alters existing schedules — it governs new scheduling only.
+ * Settings → Day Combinations — the common meeting-day sets (MWF, TTh, MTh, …)
+ * of the active school year + semester, saved per term. They are quick picks in
+ * Scheduling and the day sections of the workload forms — not a limit: classes
+ * may meet on any days (each program follows its own patterns).
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -132,15 +132,15 @@ export default function DayCombinationsSection() {
         {rows && (
           <span className="text-sm text-[#64748B]">
             {activeCount > 0
-              ? `${activeCount} allowed combination${activeCount !== 1 ? 's' : ''}`
-              : 'No combinations switched on — scheduling may use any days.'}
+              ? `${activeCount} combination${activeCount !== 1 ? 's' : ''} switched on`
+              : 'No combinations switched on.'}
           </span>
         )}
       </div>
 
-      {/* Allowed Day Combinations */}
+      {/* Day Combinations */}
       <div>
-        <p className="text-sm font-bold text-[#0B2A5B] mb-2.5">Allowed Day Combinations</p>
+        <p className="text-sm font-bold text-[#0B2A5B] mb-2.5">Day Combinations</p>
         {rows === null ? (
           <div className="flex items-center gap-2 text-sm text-[#64748B] py-4"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div>
         ) : rows.length === 0 ? (
@@ -263,7 +263,7 @@ export default function DayCombinationsSection() {
 
       <p className="flex items-start gap-2 text-xs text-[#64748B]">
         <Info className="w-4 h-4 flex-shrink-0 text-[#1D5BD6]" />
-        Scheduling for this semester can only use the combinations switched on. Existing schedules are not changed.
+        Quick picks in Scheduling and the day sections of the workload forms. Classes can still meet on any days.
       </p>
 
       {error && <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</p>}

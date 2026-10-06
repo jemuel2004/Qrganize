@@ -5,6 +5,7 @@
  */
 
 import type { WeekDay } from '@shared/dayCombination';
+import { isSplitLoad, loadParts, partOf } from '@shared/loadSplit';
 import { fetchDayCombinations } from '@/lib/dayCombinations';
 import type { WorkloadDocumentKind } from '@/lib/workloadPrintStorage';
 import {
@@ -62,6 +63,8 @@ export type PrintWorkloadLoad = {
   /** Split-off Lec/Lab portion is Praise Load (not Overload). */
   split_is_praise?: boolean;
   overload_component?: string;
+  /** The Lecture's share of the moved part (overloads.lec_part) — see @shared/loadSplit */
+  split_lec_part?: number | string | null;
   lec_scheduled?: boolean;
   lab_scheduled?: boolean;
   lec_start_time?: string | null;
@@ -165,110 +168,54 @@ function calcWorkloadUnits(lec: number, lab: number): number {
   return lec + lab * 0.75;
 }
 
-function splitLoad(load: PrintWorkloadLoad, isPermanent = false): SplitRow[] {
-  const lec     = parseFloat(String(load.lecture_hours)) || 0;
-  const lab     = parseFloat(String(load.laboratory_hours)) || 0;
-  const storedU = parseFloat(String(load.units)) || 0;
-  const storedH = parseFloat(String(load.hours)) || 0;
-  const oc      = (load.overload_component || 'full') as 'lec' | 'lab' | 'full';
-  const isSplit = isPermanent
-    ? (parseFloat(String(load.split_overload_units)) || 0) > 0.001
-    : (parseFloat(String(load.split_overload_hours)) || 0) > 0.001;
-
-  function splitLabHours(stored: number): number {
-    if (stored <= 0) return lab;
-    const labPortion = Math.max(0, stored - lec);
-    return isPermanent ? Math.round(labPortion / 0.75) : labPortion;
-  }
+/** The subject's Lec / Lab lines at their full values (split amounts: loadParts). */
+function splitLoad(load: PrintWorkloadLoad): SplitRow[] {
+  const lec = parseFloat(String(load.lecture_hours)) || 0;
+  const lab = parseFloat(String(load.laboratory_hours)) || 0;
 
   if (lec > 0 && lab > 0) {
-    const lecSched = load.lec_scheduled !== false;
-    const labSched = load.lab_scheduled !== false;
-    const stored = isPermanent ? storedU : storedH;
-    const labH = isSplit && oc !== 'lec' ? splitLabHours(stored) : lab;
-    const rows: SplitRow[] = [];
-    if (lecSched) {
-      rows.push({
-        key: `${load.id}-lec`, load, type: 'lec', hours: lec, wu: lec,
-        description: `${load.subject_name} (Lec)`, room_name: load.lec_room_name,
-      });
-    }
-    if (labSched) {
-      rows.push({
-        key: `${load.id}-lab`, load, type: 'lab', hours: labH, wu: labH * 0.75,
-        description: `${load.subject_name} (Lab)`, room_name: load.lab_room_name,
-      });
-    }
-    if (rows.length > 0) return rows;
-    return [
-      {
-        key: `${load.id}-lec`, load, type: 'lec', hours: lec, wu: lec,
-        description: `${load.subject_name} (Lec)`, room_name: load.lec_room_name,
-      },
-      {
-        key: `${load.id}-lab`, load, type: 'lab', hours: labH, wu: labH * 0.75,
-        description: `${load.subject_name} (Lab)`, room_name: load.lab_room_name,
-      },
+    const lecRow: SplitRow = {
+      key: `${load.id}-lec`, load, type: 'lec', hours: lec, wu: lec,
+      description: `${load.subject_name} (Lec)`, room_name: load.lec_room_name,
+    };
+    const labRow: SplitRow = {
+      key: `${load.id}-lab`, load, type: 'lab', hours: lab, wu: lab * 0.75,
+      description: `${load.subject_name} (Lab)`, room_name: load.lab_room_name,
+    };
+    const rows = [
+      ...(load.lec_scheduled !== false ? [lecRow] : []),
+      ...(load.lab_scheduled !== false ? [labRow] : []),
     ];
+    return rows.length > 0 ? rows : [lecRow, labRow];
   }
 
   const isLab = lab > 0 && lec === 0;
-  const stored = isPermanent ? storedU : storedH;
-  const labH = isLab && isSplit && stored > 0
-    ? (isPermanent ? Math.round(stored / 0.75) : stored)
-    : lab;
   return [{
     key: `${load.id}`,
     load,
     type: lec > 0 ? 'lec' : 'lab',
-    hours: lec > 0 ? lec : labH,
-    wu: calcWorkloadUnits(lec, isLab ? labH : lab),
+    hours: lec > 0 ? lec : lab,
+    wu: calcWorkloadUnits(lec, lab),
     description: lec > 0 ? `${load.subject_name} (Lec)` : `${load.subject_name} (Lab)`,
     room_name: isLab ? (load.lab_room_name ?? load.room_name) : (load.lec_room_name ?? load.room_name),
   }];
 }
 
+/** A Regular line's units / hours — only what stays Regular of a split subject. */
 function computeRegularRowValues(
   load: PrintWorkloadLoad,
   row: SplitRow,
   isP: boolean
 ): { displayWU: number; displayHours: number } {
-  const splitOvU = parseFloat(String(load.split_overload_units)) || 0;
-  const splitOvH = parseFloat(String(load.split_overload_hours)) || 0;
-  const isSplitLoad = isP ? splitOvU > 0.001 : splitOvH > 0.001;
-  const oc = (load.overload_component || 'full') as 'lec' | 'lab' | 'full';
-  const lec2 = parseFloat(String(load.lecture_hours)) || 0;
-  const lab2 = parseFloat(String(load.laboratory_hours)) || 0;
-  const hasBoth2 = lec2 > 0 && lab2 > 0;
-  const isCompSplit = isSplitLoad && hasBoth2 && oc !== 'full';
-  const totalStored = isP ? parseFloat(String(load.units)) || 0 : parseFloat(String(load.hours)) || 0;
-  const otherCompVal = isCompSplit ? (oc === 'lab' ? lec2 : (isP ? lab2 * 0.75 : lab2)) : 0;
-  const splitCompReg = isCompSplit ? Math.max(0, totalStored - otherCompVal) : 0;
-  const totalCurrH = lec2 + lab2;
-  let displayWU: number;
-  let displayHours: number;
-  if (!isSplitLoad) {
-    displayWU = row.wu;
-    displayHours = row.hours;
-  } else if (isCompSplit) {
-    if (row.type === oc) {
-      displayWU = splitCompReg;
-      displayHours = !isP ? splitCompReg : row.type === 'lab' ? Math.round(splitCompReg / 0.75) : splitCompReg;
-    } else {
-      displayWU = row.wu;
-      displayHours = row.hours;
-    }
-  } else {
-    displayWU = totalStored;
-    displayHours = !isP
-      ? totalStored
-      : (totalStored + splitOvU > 0.001
-        ? parseFloat(((totalStored / (totalStored + splitOvU)) * totalCurrH).toFixed(2))
-        : totalCurrH);
-  }
-  // Contractual loads are kept in hours: a split part's units are those hours in work units
-  if (!isP && isSplitLoad) displayWU = hoursToUnits(displayHours, row.type);
-  return { displayWU, displayHours };
+  if (!isSplitLoad(load, isP)) return { displayWU: row.wu, displayHours: row.hours };
+  const part = partOf(loadParts(load, isP), row.type);
+  return part ? { displayWU: part.regularUnits, displayHours: part.regularHours } : { displayWU: 0, displayHours: 0 };
+}
+
+/** An Overload / Praise line's units / hours — all of a whole subject, or its moved part. */
+function movedRowValues(load: PrintWorkloadLoad, row: SplitRow, isP: boolean): { wu: number; hours: number } {
+  const part = partOf(loadParts(load, isP), row.type);
+  return part ? { wu: part.movedUnits, hours: part.movedHours } : { wu: 0, hours: 0 };
 }
 
 /** Work units of `hours` of one component — Lecture 1 : 1, Laboratory × 0.75. */
@@ -295,7 +242,7 @@ export function actualLoadLines<L extends PrintWorkloadLoad>(loads: L[], isP: bo
     const lec = parseFloat(String(load.lecture_hours)) || 0;
     const lab = parseFloat(String(load.laboratory_hours)) || 0;
     const hasBoth = lec > 0 && lab > 0;
-    for (const row of splitLoad(load, isP)) {
+    for (const row of splitLoad(load)) {
       const wu = hasBoth ? (row.type === 'lec' ? lec : lab * 0.75) : calcWorkloadUnits(lec, lab);
       const hours = hasBoth ? (row.type === 'lec' ? lec : lab) : lec + lab;
       if (isP ? wu < 0.001 : hours < 0.001) continue;
@@ -361,7 +308,7 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
     // Regular subjects only, as on screen — Overload and Praise have their own forms
     const regularLoads = loads.filter(l => l.load_category === 'Regular');
     for (const load of regularLoads) {
-      for (const row of splitLoad(load, isP)) {
+      for (const row of splitLoad(load)) {
         const startTime = row.type === 'lec'
           ? (load.lec_start_time ?? load.start_time)
           : (load.lab_start_time ?? load.start_time);
@@ -387,7 +334,7 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
     }
   } else if (documentKind === 'overload') {
     for (const load of loads) {
-      for (const row of splitLoad(load, isP)) {
+      for (const row of splitLoad(load)) {
         const startTime = row.type === 'lec'
           ? (load.lec_start_time ?? load.start_time)
           : (load.lab_start_time ?? load.start_time);
@@ -397,28 +344,8 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
         const dayPat = row.type === 'lec'
           ? (load.lec_day_pattern ?? load.day_pattern)
           : (load.lab_day_pattern ?? load.day_pattern);
-        const lec = parseFloat(String(load.lecture_hours)) || 0;
-        const lab = parseFloat(String(load.laboratory_hours)) || 0;
-        const hasBoth = lec > 0 && lab > 0;
-        // Only a Regular subject is split; a whole Overload subject also has an overload
-        // amount (its full value), which must not be put on each of its Lec and Lab lines.
-        const isSplit = load.load_category === 'Regular' && (isP
-          ? (parseFloat(String(load.split_overload_units)) || 0) > 0.001
-          : (parseFloat(String(load.split_overload_hours)) || 0) > 0.001);
-        const oc = (load.overload_component || 'full') as 'lec' | 'lab' | 'full';
-        if (isSplit && hasBoth && oc !== 'full' && row.type !== oc) continue;
-        // Units column = work units for everyone (Contractual subjects are kept in hours)
-        let wu = hasBoth
-          ? (row.type === 'lec' ? lec : lab * 0.75)
-          : (isP ? parseFloat(String(load.units)) || 0 : calcWorkloadUnits(lec, lab));
-        let hrs = row.hours;
-        if (isSplit) {
-          const part = isP
-            ? (parseFloat(String(load.split_overload_units)) || 0)
-            : (parseFloat(String(load.split_overload_hours)) || 0);
-          hrs = isP ? (oc === 'lab' ? Math.max(0, Math.round(part / 0.75)) : part) : part;
-          wu = isP ? part : hoursToUnits(part, row.type);
-        }
+        // A whole Overload subject at its full Lec / Lab values; a split subject only its moved part
+        const { wu, hours: hrs } = movedRowValues(load, row, isP);
         if (isP ? wu < 0.001 : hrs < 0.001) continue;
         totalRegularWU += wu;
         totalRegularHours += hrs;
@@ -449,29 +376,11 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
       }
     }
   } else if (documentKind === 'praise') {
-    /* Praise subjects in their schedule slots: whole subjects, or only the
-       Lec/Lab portion when just one component was moved to Praise. */
+    /* Praise subjects in their schedule slots: whole subjects, or the part of the
+       Lecture / Laboratory moved to Praise (the rest stays Regular). */
     for (const load of loads) {
-      const lec = parseFloat(String(load.lecture_hours)) || 0;
-      const lab = parseFloat(String(load.laboratory_hours)) || 0;
-      const hasBoth = lec > 0 && lab > 0;
-      const oc = (load.overload_component || 'full') as 'lec' | 'lab' | 'full';
-      const isPart = load.load_category !== 'Praise' && Boolean(load.split_is_praise);
-      const partVal = isP
-        ? (parseFloat(String(load.split_overload_units)) || 0)
-        : (parseFloat(String(load.split_overload_hours)) || 0);
-      for (const row of splitLoad(load, isP)) {
-        if (isPart && hasBoth && oc !== 'full' && row.type !== oc) continue;
-        let wu: number;
-        let hrs: number;
-        if (isPart) {
-          // Contractual parts are kept in hours — their units are those hours in work units
-          wu = isP ? partVal : hoursToUnits(partVal, row.type);
-          hrs = !isP ? partVal : (row.type === 'lab' ? lab : lec);
-        } else {
-          wu = hasBoth ? (row.type === 'lec' ? lec : lab * 0.75) : calcWorkloadUnits(lec, lab);
-          hrs = hasBoth ? (row.type === 'lec' ? lec : lab) : lec + lab;
-        }
+      for (const row of splitLoad(load)) {
+        const { wu, hours: hrs } = movedRowValues(load, row, isP);
         if (isP ? wu < 0.001 : hrs < 0.001) continue;
         praiseSubjectWU += wu;
         praiseSubjectHours += hrs;

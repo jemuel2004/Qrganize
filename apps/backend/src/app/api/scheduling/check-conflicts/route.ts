@@ -5,7 +5,6 @@ import { canAccessMasterSchedule } from '@/services/programScope';
 import { findScheduleConflicts, validateSessions, type ConflictSessionInput } from '@/services/scheduleConflicts';
 import { checkMajorLecLab } from '@/services/majorRoomRule';
 import { withAudit } from '@/services/audit';
-import { termDayCombinationError } from '@/services/dayCombinations';
 import { ensureFacultyActivitiesTable } from '@/database/facultyActivitiesSchema';
 
 /**
@@ -69,13 +68,6 @@ async function POST_handler(req: NextRequest) {
     });
 
     const conflicts = found.map(c => ({ ...c, session_index: complete[c.session_index].index }));
-    // Same day-combination rule as the save route, once every session has a day
-    const day_combination_error = complete.length === sessions.length
-      ? await termDayCombinationError(
-          String(sched.academic_year || academic_year || ''), String(sched.semester || semester || ''),
-          sessions.map(s => String(s.day ?? '')),
-        )
-      : null;
     // Major subject with a Lecture and a Laboratory: same days, one room (same check as the save)
     const majorRoom = await checkMajorLecLab(query, {
       masterScheduleId: Number(master_schedule_id),
@@ -91,7 +83,7 @@ async function POST_handler(req: NextRequest) {
       error: majorRoom.error,
       move: majorRoom.move ? { part: majorRoom.move.part, room_name: majorRoom.move.roomName } : null,
     } : null;
-    return NextResponse.json({ conflicts, day_combination_error, room_rule });
+    return NextResponse.json({ conflicts, room_rule });
   } catch (error) {
     console.error('[POST /api/scheduling/check-conflicts]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

@@ -3,7 +3,7 @@ import { connectClient } from '@/database/db';
 import { FACULTY_ACTIVITIES_SQL } from '@/database/facultyActivitiesSchema';
 import { ensureAuditTable } from '@/database/auditSchema';
 import { ensureRealtimeTable } from '@/database/realtimeSchema';
-import { dayCombinationError, type WeekDay } from '@shared/dayCombination';
+import { type WeekDay } from '@shared/dayCombination';
 import { contractualLimitError, maxDeductionUnits, regularLoadLimit } from '@shared/regularLoad';
 import { parseWorkloadSheet, roomKey } from '@shared/workloadImport';
 import { needsOneRoomSql } from '@shared/subjectCategory';
@@ -399,10 +399,11 @@ export async function runWorkloadImport(options: ImportOptions): Promise<ImportR
 async function ensureSchema(q: Q) {
   const cols = await q(
     `SELECT table_name, column_name, is_nullable FROM information_schema.columns
-      WHERE (table_name, column_name) IN (('overloads','is_praise'), ('instructor_loads','overload_component'), ('schedule_sessions','type'),
+      WHERE (table_name, column_name) IN (('overloads','is_praise'), ('overloads','lec_part'), ('instructor_loads','overload_component'), ('schedule_sessions','type'),
                                           ('faculty','position'), ('rooms','qr_generated_at'))`);
   const has = (t: string, c: string) => cols.rows.some(r => r.table_name === t && r.column_name === c);
   if (!has('overloads', 'is_praise')) await q(`ALTER TABLE overloads ADD COLUMN IF NOT EXISTS is_praise BOOLEAN NOT NULL DEFAULT false`);
+  if (!has('overloads', 'lec_part')) await q('ALTER TABLE overloads ADD COLUMN IF NOT EXISTS lec_part NUMERIC(6,2)');
   if (!has('instructor_loads', 'overload_component')) await q(`ALTER TABLE instructor_loads ADD COLUMN IF NOT EXISTS overload_component VARCHAR(10) DEFAULT 'full'`);
   if (!has('schedule_sessions', 'type')) await q(`ALTER TABLE schedule_sessions ADD COLUMN IF NOT EXISTS type VARCHAR(3) DEFAULT 'lec'`);
   if (!has('rooms', 'qr_generated_at')) await q(`ALTER TABLE rooms ADD COLUMN IF NOT EXISTS qr_generated_at TIMESTAMPTZ`);
@@ -649,10 +650,10 @@ async function placeClassTimes(
     [facultyId, msId, c.loadCategory, isPermanent ? round2(c.loadValue) : 0, isPermanent ? 0 : round2(c.loadValue), term.academicYear, term.semester, c.overloadComponent]);
   if (c.overloadRow) {
     await q(
-      `INSERT INTO overloads (faculty_id, master_schedule_id, units, hours, reason, academic_year, semester, is_praise)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      `INSERT INTO overloads (faculty_id, master_schedule_id, units, hours, reason, academic_year, semester, is_praise, lec_part)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [facultyId, msId, isPermanent ? round2(c.overloadRow.value) : 0, isPermanent ? 0 : round2(c.overloadRow.value), c.overloadRow.reason,
-        term.academicYear, term.semester, c.overloadRow.isPraise]);
+        term.academicYear, term.semester, c.overloadRow.isPraise, c.overloadRow.lecPart ?? null]);
   }
   return { outcome, tasks };
 }
@@ -728,7 +729,7 @@ function takesAnotherClassTime(ctx: PlacementContext, cls: PlannedClass, key: st
     && sessions.some(s => s.day === w.day && w.start < s.end && w.end > s.start));
 }
 
-/** Nearest vacant options: same days first (30-minute steps out from the form time), then other day sets of the same size. */
+/** Nearest vacant options: same days first (30-minute steps out from the form time), then other day sets of the same size (the semester's combinations first choice). */
 function* vacantOptions(ctx: PlacementContext, base: PlannedSession[]): Generator<PlannedSession[]> {
   const baseDays = [...new Set(base.map(s => s.day))].sort((a, b) => dayIndex(a) - dayIndex(b));
   const allowed = ctx.combos.length ? ctx.combos : ctx.daySets;
@@ -754,10 +755,6 @@ async function tryTimes(
   msId: number, facultyId: number, blockId: number, vacantSearch: boolean,
 ): Promise<{ ok: boolean; timeConflicts: string[]; invalid?: string }> {
   if (!sessionsAreValid(sessions)) return { ok: false, timeConflicts: [], invalid: `outside ${SCHOOL_DAY_LABEL} or over the 12:00–1:00 PM lunch break` };
-  if (ctx.combos.length) {
-    const err = dayCombinationError(sessions.map(s => s.day), ctx.combos.map(days => ({ days })));
-    if (err) return { ok: false, timeConflicts: [], invalid: err };
-  }
   if (vacantSearch) {
     // A moved class also avoids the faculty's non-teaching time and the real
     // classes on the forms that were not imported (they still use the time).

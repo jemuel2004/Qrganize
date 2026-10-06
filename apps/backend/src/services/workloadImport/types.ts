@@ -132,7 +132,7 @@ export interface CategoryPlan {
   loadValue: number;
   overloadComponent: 'full' | SessionType;
   /** overloads row, when part or all of the subject is Overload or split Praise */
-  overloadRow: { value: number; isPraise: boolean; reason: string } | null;
+  overloadRow: { value: number; isPraise: boolean; reason: string; lecPart?: number | null } | null;
   /** Excel portions behind the decision, for the report */
   portions: { category: LoadCategory; value: number; component: SessionType | 'whole' }[];
   /** Short label for the report: "Regular", "Regular 2.00 + Overload 2.25 (Lab)", … */

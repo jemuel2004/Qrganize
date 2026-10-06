@@ -3,7 +3,7 @@ import { query, transaction } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { syncWorkloadMonitoringNotifications } from '@/services/workloadMonitoring';
 import { canAccessMasterSchedule } from '@/services/programScope';
-import { ensurePraiseSplitColumn } from '@/services/praiseSplit';
+import { describeMoved, ensurePraiseSplitColumn, parseMovedParts, saveSplit } from '@/services/praiseSplit';
 import { withAudit } from '@/services/audit';
 import { overloadCapError } from '@/services/overloadCap';
 import { canHaveOverloadOrPraise, OVERLOAD_PRAISE_PERMANENT_ONLY } from '@shared/regularLoad';
@@ -26,7 +26,7 @@ async function POST_handler(req: NextRequest) {
 
     await ensureSchema();
 
-    const { faculty_id, master_schedule_id, split_regular, component } = await req.json();
+    const { faculty_id, master_schedule_id, split_regular, component, parts } = await req.json();
     const overloadComponent: string = component || 'full';
 
     if (!faculty_id || !master_schedule_id) {
@@ -78,10 +78,12 @@ async function POST_handler(req: NextRequest) {
     `, [master_schedule_id]);
 
     let subjectTotal: number;
+    let lec = 0;
+    let lab = 0;
     if (curriculumResult.rows.length > 0) {
       const cur = curriculumResult.rows[0];
-      const lec = parseFloat(cur.lecture_hours) || 0;
-      const lab = parseFloat(cur.laboratory_hours) || 0;
+      lec = parseFloat(cur.lecture_hours) || 0;
+      lab = parseFloat(cur.laboratory_hours) || 0;
       const totalH = parseFloat(cur.total_hours) || 0;
       subjectTotal = isPermanent ? lec + lab * 0.75 : totalH;
     } else {
@@ -97,8 +99,43 @@ async function POST_handler(req: NextRequest) {
 
     const unit = isPermanent ? 'units' : 'hours';
 
+    // ── Parts mode: any amount of the Lecture and of the Laboratory ────────────
+    // (e.g. Lecture 2 + Laboratory 1.25 to Overload, Laboratory 1 stays Regular)
+    const movedParts = parseMovedParts(parts, lec, isPermanent ? lab * 0.75 : lab);
+    if (movedParts && 'error' in movedParts) return NextResponse.json({ error: movedParts.error }, { status: 400 });
+    if (movedParts && Math.abs(movedParts.lec + movedParts.lab - subjectTotal) > 0.001) {
+      if (loadRow.load_category !== 'Regular') {
+        return NextResponse.json({ error: 'Only a Regular Load subject can be split.' }, { status: 400 });
+      }
+      const moved = movedParts.lec + movedParts.lab;
+      const capError = await overloadCapError({
+        facultyId: Number(faculty_id), isPermanent,
+        semester: loadRow.semester, academicYear: loadRow.academic_year,
+        addUnits: moved, replacingMsIds: [Number(master_schedule_id)],
+      });
+      if (capError) return NextResponse.json({ error: capError, overload_limit_reached: true }, { status: 409 });
+      const what = describeMoved(movedParts.lec, movedParts.lab);
+      const regular = subjectTotal - moved;
+      await transaction(client => saveSplit(client, {
+        facultyId: Number(faculty_id), msId: Number(master_schedule_id), isPermanent,
+        total: subjectTotal, lecMoved: movedParts.lec, labMoved: movedParts.lab, isPraise: false,
+        reason: `Split load — ${regular.toFixed(2)} ${unit} Regular, ${what} ${unit} Overload`,
+        academicYear: loadRow.academic_year, semester: loadRow.semester,
+      }));
+      void syncWorkloadMonitoringNotifications(true);
+      return NextResponse.json({
+        success: true,
+        split: true,
+        regular_part: parseFloat(regular.toFixed(2)),
+        overload_part: parseFloat(moved.toFixed(2)),
+        unit,
+        message: `${what} ${unit} moved to Overload. The rest stays in Regular Load.`,
+      });
+    }
+    // All of both parts → the same as moving the whole subject (below)
+
     // ── Split mode ─────────────────────────────────────────────────────────────
-    if (split_regular !== undefined && split_regular !== null) {
+    if (!movedParts && split_regular !== undefined && split_regular !== null) {
       const regularPart = parseFloat(String(split_regular));
       if (isNaN(regularPart) || regularPart < 0) {
         return NextResponse.json({ error: 'Invalid split_regular value' }, { status: 400 });

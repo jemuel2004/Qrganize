@@ -1,7 +1,8 @@
 /*
- * Day combinations — the allowed meeting-day sets of a semester
- * (e.g. MWF, TTh, MTh). One definition shared by the backend (validation),
- * Settings, Scheduling, Class Program and the workload form (print/Excel).
+ * Day combinations — the common meeting-day sets of a semester (e.g. MWF,
+ * TTh, MTh). Quick picks and form sections only, never a limit. One definition
+ * shared by the backend, Settings, Scheduling, Class Program and the workload
+ * form (print/Excel).
  *
  * A class component's combination is the set of days its sessions meet on
  * (Mon + Thu sessions → "Mon/Thu"). Stored canonically as short day names in
@@ -115,20 +116,4 @@ export function matchCombination<T extends { days: readonly WeekDay[]; is_active
   const days = parseDays(sessionDays);
   if (!days) return null;
   return combos.find(c => c.is_active !== false && sameDays(c.days, days)) ?? null;
-}
-
-/**
- * Why these session days are not allowed this semester, or null when fine.
- * No active combinations configured → no restriction (every day set allowed).
- */
-export function dayCombinationError(
-  sessionDays: readonly string[], combos: readonly { days: readonly WeekDay[]; is_active?: boolean }[],
-): string | null {
-  const active = combos.filter(c => c.is_active !== false);
-  if (active.length === 0) return null;
-  const days = parseDays(sessionDays);
-  if (!days) return 'Choose a day for every session.';
-  if (matchCombination(days, active)) return null;
-  return `${daysLabel(days)} (${daysCode(days)}) is not an allowed day combination this semester. `
-    + `Allowed: ${active.map(c => daysCode(c.days as WeekDay[])).join(', ')}.`;
 }

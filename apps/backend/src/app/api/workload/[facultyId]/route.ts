@@ -6,6 +6,7 @@ import { computeRegularLoadStatus, regularLoadLimit as termRegularLoadLimit } fr
 import { getWorkloadPolicy } from '@/services/workloadPolicy';
 import { canAccessProgram } from '@/services/programScope';
 import { ensurePraiseSplitColumn } from '@/services/praiseSplit';
+import { isSplitLoad, loadParts, sumParts } from '@shared/loadSplit';
 import { ensureSessionTypes } from '@/services/sessionTypeRepair';
 import { needsOneRoomSql } from '@shared/subjectCategory';
 
@@ -106,6 +107,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ facu
          WHERE o2.faculty_id = il.faculty_id AND o2.master_schedule_id = il.master_schedule_id) AS split_overload_units,
         (SELECT COALESCE(SUM(o2.hours), 0) FROM overloads o2
          WHERE o2.faculty_id = il.faculty_id AND o2.master_schedule_id = il.master_schedule_id) AS split_overload_hours,
+        -- The Lecture's share of the moved part (empty on older rows — see @shared/loadSplit)
+        (SELECT SUM(o2.lec_part) FROM overloads o2
+         WHERE o2.faculty_id = il.faculty_id AND o2.master_schedule_id = il.master_schedule_id) AS split_lec_part,
         -- Split portion is Praise Load (only the Lec or Lab), not Overload
         EXISTS(SELECT 1 FROM overloads o3
                WHERE o3.faculty_id = il.faculty_id AND o3.master_schedule_id = il.master_schedule_id
@@ -188,10 +192,13 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ facu
       const labh = parseFloat(r.laboratory_hours) || 0;
       return sum + lh * 1.0 + labh * 0.75; // non-split: curriculum WU
     }, 0);
+    const isPerm = faculty.employment_status === 'Permanent';
     const totalRegularHours = regular.reduce((sum, r) => {
       // Split (Contractual): the row keeps only its regular hours — the rest is in
       // overloads, which is counted separately (same rule as the workload table)
       if ((parseFloat(r.split_overload_hours) || 0) > 0) return sum + (parseFloat(r.hours) || 0);
+      // Split (Permanent): the hours of the parts that stay Regular
+      if (isSplitLoad(r, isPerm)) return sum + sumParts(loadParts(r, isPerm)).regularHours;
       return sum + (parseFloat(r.curriculum_total_hours) || parseFloat(r.hours) || 0);
     }, 0);
 
@@ -214,15 +221,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ facu
     const totalOverloadHours = parseFloat(overloadTotalsResult.rows[0].total_overload_hours) || 0;
 
     const praiseLoads = loadsResult.rows.filter(r => r.load_category === 'Praise');
-    // Split Praise portions (only the Lec or Lab moved to Praise; the row stays Regular)
+    // Split Praise portions (any part of the Lec / Lab moved to Praise; the row stays Regular)
     const praiseSplitRows = loadsResult.rows.filter(r => r.load_category === 'Regular' && r.split_is_praise);
     const splitPraiseUnits = praiseSplitRows.reduce((s, r) => s + (parseFloat(r.split_overload_units) || 0), 0);
-    const splitPraiseHours = praiseSplitRows.reduce((s, r) => {
-      if (parseFloat(r.split_overload_hours) > 0) return s + parseFloat(r.split_overload_hours);
-      // Permanent rows store work units; convert the moved component back to contact hours
-      const comp = r.overload_component;
-      return s + (comp === 'lab' ? (parseFloat(r.laboratory_hours) || 0) : comp === 'lec' ? (parseFloat(r.lecture_hours) || 0) : 0);
-    }, 0);
+    const splitPraiseHours = praiseSplitRows.reduce((s, r) => s + sumParts(loadParts(r, isPerm)).movedHours, 0);
 
     const totalPraiseUnits = praiseLoads.reduce((sum, r) => {
       const lh = parseFloat(r.lecture_hours) || 0;

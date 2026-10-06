@@ -4,7 +4,6 @@ import { getAuthUser } from '@/auth/auth';
 import { getChairAssignedProgramId, isScopedChair } from '@/services/programScope';
 import { findOverlappingSessions, findScheduleConflicts, validateSessions, type ScheduleConflict } from '@/services/scheduleConflicts';
 import { checkMajorLecLab, type MajorLecLabCheck } from '@/services/majorRoomRule';
-import { termDayCombinationError } from '@/services/dayCombinations';
 import { withAudit } from '@/services/audit';
 import { ensureSessionTypes } from '@/services/sessionTypeRepair';
 import { ensureFacultyActivitiesTable } from '@/database/facultyActivitiesSchema';
@@ -143,13 +142,6 @@ async function POST_handler(req: NextRequest) {
         conflicts: selfOverlaps,
       }, { status: 409 });
     }
-
-    // Only the day combinations allowed for this block's semester (Settings → Day Combinations)
-    const comboError = await termDayCombinationError(
-      String(sched.academic_year ?? ''), String(sched.semester ?? ''),
-      sessions.map((s: { day?: unknown }) => String(s.day ?? '')),
-    );
-    if (comboError) return NextResponse.json({ error: comboError, day_combination_error: true }, { status: 400 });
 
     const lecHours = parseFloat(sched.lecture_hours) || 0;
     const labHours = parseFloat(sched.laboratory_hours) || 0;

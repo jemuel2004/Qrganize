@@ -953,6 +953,17 @@ async function v51_scanLogStatusesAndRequestSessionRooms() {
   await query(`ALTER TABLE room_change_requests ADD COLUMN IF NOT EXISTS session_rooms JSONB`);
 }
 
+/**
+ * Flexible Overload / Praise splits: the moved part of a subject can hold any
+ * amount of its Lecture and Laboratory (e.g. Lecture all Praise, Laboratory
+ * 1 unit Regular + 1.25 units Praise). lec_part = the Lecture's share of the
+ * moved part; empty on older rows (see @shared/loadSplit).
+ */
+async function v52_overloadLecturePart() {
+  await query(`ALTER TABLE overloads ADD COLUMN IF NOT EXISTS is_praise BOOLEAN NOT NULL DEFAULT false`);
+  await query(`ALTER TABLE overloads ADD COLUMN IF NOT EXISTS lec_part NUMERIC(6,2)`);
+}
+
 /** One-time: each faculty is assigned the blocks they already teach, so the new
  *  block filter on Faculty Workload doesn't hide their current classes. */
 async function v45_seedFacultyBlocks() {
@@ -1062,6 +1073,7 @@ const MIGRATIONS: Array<{ version: number; name: string; fn: () => Promise<void>
   { version: 49, name: 'error_logs table',                        fn: v49_errorLogs },
   { version: 50, name: 'faculty_activities + optional rank',      fn: v50_facultyActivitiesAndOptionalRank },
   { version: 51, name: 'scan log statuses + request session rooms', fn: v51_scanLogStatusesAndRequestSessionRooms },
+  { version: 52, name: 'overloads lecture part (flexible splits)', fn: v52_overloadLecturePart },
 ];
 
 // ─── public entry point ───────────────────────────────────────────────────────

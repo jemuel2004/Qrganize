@@ -1413,7 +1413,7 @@ const SECTION_GROUPS: { label: string; items: SectionDef[] }[] = [
     label: 'System',
     items: [
       { id: 'school-year', icon: CalendarDays, label: 'School Year', description: 'Set the active school year and semester', tone: '#0284C7' },
-      { id: 'day-combinations', icon: CalendarRange, label: 'Day Combinations', description: 'Allowed class days (MWF, TTh…) for this semester', tone: '#1D5BD6' },
+      { id: 'day-combinations', icon: CalendarRange, label: 'Day Combinations', description: 'Common class days (MWF, TTh…) for this semester', tone: '#1D5BD6' },
       { id: 'workload-limits', icon: Scale, label: 'Workload Limits', description: 'Regular load, overload limit and contractual hours', tone: '#0B4FA8' },
       { id: 'branding', icon: ImagePlus, label: 'System Logo', description: 'Upload the logo shown across the system', tone: '#12408F' },
       { id: 'appearance', icon: Palette, label: 'Appearance', description: 'Light or dark display', tone: '#7C3AED' },

@@ -1,10 +1,10 @@
 import { query } from '@/database/db';
-import { dayCombinationError, parseDays, type DayCombination } from '@shared/dayCombination';
+import { parseDays, type DayCombination } from '@shared/dayCombination';
 
 /*
- * Semester day combinations — the one data-access point every feature uses
- * (Settings API, scheduling save, conflict check). No rows for a term means
- * the term has no restriction.
+ * Semester day combinations — the one data-access point for the Settings API.
+ * They are quick picks and form/timetable sections only: scheduling accepts
+ * any days (programs follow their own patterns, e.g. BSIT MTh/W/TF).
  */
 
 export interface TermDayCombination extends DayCombination {
@@ -25,12 +25,4 @@ export async function getTermDayCombinations(academicYear: string, semester: str
   return res.rows
     .map(r => ({ id: Number(r.id), days: parseDays(String(r.days)) ?? [], is_active: r.is_active !== false, sort_order: Number(r.sort_order) || 0 }))
     .filter(c => c.days.length > 0);
-}
-
-/** Why these session days can't be scheduled in the term, or null when allowed */
-export async function termDayCombinationError(
-  academicYear: string, semester: string, sessionDays: string[],
-): Promise<string | null> {
-  const combos = await getTermDayCombinations(academicYear, semester);
-  return dayCombinationError(sessionDays, combos);
 }

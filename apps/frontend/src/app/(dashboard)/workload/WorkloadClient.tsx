@@ -26,7 +26,7 @@ import {
 import { useDayCombinations } from '@/lib/dayCombinations';
 import { LOAD_INK, LOAD_TONE } from '@/lib/loadTone';
 import {
-  actualLoadLines, designationFooterLines, designationRowText, hoursToUnits, isResearchExtensionType,
+  actualLoadLines, designationFooterLines, designationRowText, isResearchExtensionType,
   type PrintDocumentResult,
 } from '@/lib/instructorWorkloadPrintDocument';
 import WorkloadPrintMenu, { type WorkloadPrintData } from '@/components/WorkloadPrintMenu';
@@ -44,6 +44,8 @@ import { EmploymentBadge } from '@/components/ui/EmploymentBadge';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import { positionRank } from '@/lib/positionRank';
 import { isSameSubject, mergeSameSubjects } from '@shared/subjectCode';
+import { isSplitLoad, loadParts, partOf, sumParts } from '@shared/loadSplit';
+import SplitPartsEditor, { readSplitDraft, startSplitDraft, type SplitDraft } from './SplitPartsEditor';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import CountFilterTabs from '@/components/ui/CountFilterTabs';
 import Pagination from '@/components/ui/Pagination';
@@ -150,6 +152,8 @@ interface WorkloadLoad {
   /** The split-off Lec/Lab portion is Praise Load, not Overload. */
   split_is_praise?: boolean;
   overload_component?: string;
+  /** The Lecture's share of the moved part (overloads.lec_part) — see @shared/loadSplit */
+  split_lec_part?: number | string | null;
   lec_scheduled?: boolean; lab_scheduled?: boolean;
   lec_start_time?: string | null; lec_end_time?: string | null;
   lab_start_time?: string | null; lab_end_time?: string | null;
@@ -254,92 +258,39 @@ interface SplitRow {
 /** Sections of the Faculty Workload form — Actual Load is every subject of the term on one form */
 type WorkloadModalTab = 'regular' | 'actual' | 'overload' | 'praise';
 
-function splitLoad(load: WorkloadLoad, isPermanent = false): SplitRow[] {
-  const lec     = parseFloat(String(load.lecture_hours))  || 0;
-  const lab     = parseFloat(String(load.laboratory_hours)) || 0;
-  const storedU = parseFloat(String(load.units))  || 0;
-  const storedH = parseFloat(String(load.hours))  || 0;
-  const oc      = (load.overload_component || 'full') as 'lec' | 'lab' | 'full';
-  const isSplit = isPermanent
-    ? (parseFloat(String(load.split_overload_units)) || 0) > 0.001
-    : (parseFloat(String(load.split_overload_hours)) || 0) > 0.001;
-
-  /* Derive split-adjusted lab display hours for a component.
-     Only applies when the lab component was actually split (oc !== 'lec'). */
-  function splitLabHours(stored: number): number {
-    if (stored <= 0) return lab;
-    const labPortion = Math.max(0, stored - lec);
-    return isPermanent ? Math.round(labPortion / 0.75) : labPortion;
-  }
+/** The subject's Lec / Lab lines at their full values (split amounts: loadParts). */
+function splitLoad(load: WorkloadLoad): SplitRow[] {
+  const lec = parseFloat(String(load.lecture_hours))  || 0;
+  const lab = parseFloat(String(load.laboratory_hours)) || 0;
 
   if (lec > 0 && lab > 0) {
-    const lecSched = load.lec_scheduled !== false;
-    const labSched = load.lab_scheduled !== false;
-    /* Only adjust lab hours when lab was the split component */
-    const stored = isPermanent ? storedU : storedH;
-    const labH = (isSplit && oc !== 'lec') ? splitLabHours(stored) : lab;
-    const rows: SplitRow[] = [];
-    if (lecSched) rows.push({ key: `${load.id}-lec`, load, type: 'lec', hours: lec,  wu: lec,         description: `${load.subject_name} (Lec)`, room_name: load.lec_room_name });
-    if (labSched) rows.push({ key: `${load.id}-lab`, load, type: 'lab', hours: labH, wu: labH * 0.75, description: `${load.subject_name} (Lab)`, room_name: load.lab_room_name });
-    if (rows.length > 0) return rows;
-    return [
-      { key: `${load.id}-lec`, load, type: 'lec', hours: lec,  wu: lec,         description: `${load.subject_name} (Lec)`, room_name: load.lec_room_name },
-      { key: `${load.id}-lab`, load, type: 'lab', hours: labH, wu: labH * 0.75, description: `${load.subject_name} (Lab)`, room_name: load.lab_room_name },
+    const lecRow: SplitRow = { key: `${load.id}-lec`, load, type: 'lec', hours: lec, wu: lec,        description: `${load.subject_name} (Lec)`, room_name: load.lec_room_name };
+    const labRow: SplitRow = { key: `${load.id}-lab`, load, type: 'lab', hours: lab, wu: lab * 0.75, description: `${load.subject_name} (Lab)`, room_name: load.lab_room_name };
+    const rows = [
+      ...(load.lec_scheduled !== false ? [lecRow] : []),
+      ...(load.lab_scheduled !== false ? [labRow] : []),
     ];
+    return rows.length > 0 ? rows : [lecRow, labRow];
   }
   const isLab = lab > 0 && lec === 0;
-  /* For a pure-lab split, derive hours from stored regular value */
-  const stored = isPermanent ? storedU : storedH;
-  const labH = (isLab && isSplit && stored > 0)
-    ? (isPermanent ? Math.round(stored / 0.75) : stored)
-    : lab;
   return [{
     key: `${load.id}`,
     load,
     type: lec > 0 ? 'lec' : 'lab',
-    hours: lec > 0 ? lec : labH,
-    wu: calcWorkloadUnits(lec, isLab ? labH : lab),
+    hours: lec > 0 ? lec : lab,
+    wu: calcWorkloadUnits(lec, lab),
     description: lec > 0 ? `${load.subject_name} (Lec)` : `${load.subject_name} (Lab)`,
     room_name: isLab ? (load.lab_room_name ?? load.room_name) : (load.lec_room_name ?? load.room_name),
   }];
 }
 
+/** A Regular line's units / hours — only what stays Regular of a split subject. */
 function computeRegularRowValues(
   load: WorkloadLoad, row: SplitRow, isP: boolean
 ): { displayWU: number; displayHours: number } {
-  const splitOvU    = parseFloat(String(load.split_overload_units)) || 0;
-  const splitOvH    = parseFloat(String(load.split_overload_hours)) || 0;
-  const isSplitLoad = isP ? splitOvU > 0.001 : splitOvH > 0.001;
-  const oc          = (load.overload_component || 'full') as 'lec' | 'lab' | 'full';
-  const lec2        = parseFloat(String(load.lecture_hours))   || 0;
-  const lab2        = parseFloat(String(load.laboratory_hours)) || 0;
-  const hasBoth2    = lec2 > 0 && lab2 > 0;
-  const isCompSplit = isSplitLoad && hasBoth2 && oc !== 'full';
-  const totalStored = isP ? parseFloat(String(load.units)) || 0 : parseFloat(String(load.hours)) || 0;
-  const otherCompVal = isCompSplit ? (oc === 'lab' ? lec2 : (isP ? lab2 * 0.75 : lab2)) : 0;
-  const splitCompReg = isCompSplit ? Math.max(0, totalStored - otherCompVal) : 0;
-  const totalCurrH  = lec2 + lab2;
-  let displayWU: number;
-  let displayHours: number;
-  if (!isSplitLoad) {
-    displayWU = row.wu; displayHours = row.hours;
-  } else if (isCompSplit) {
-    if (row.type === oc) {
-      displayWU    = splitCompReg;
-      displayHours = !isP ? splitCompReg : row.type === 'lab' ? Math.round(splitCompReg / 0.75) : splitCompReg;
-    } else {
-      displayWU = row.wu; displayHours = row.hours;
-    }
-  } else {
-    displayWU    = totalStored;
-    displayHours = !isP ? totalStored
-      : (totalStored + splitOvU > 0.001
-        ? parseFloat(((totalStored / (totalStored + splitOvU)) * totalCurrH).toFixed(2))
-        : totalCurrH);
-  }
-  // Contractual loads are kept in hours: a split part's units are those hours in work units
-  if (!isP && isSplitLoad) displayWU = hoursToUnits(displayHours, row.type);
-  return { displayWU, displayHours };
+  if (!isSplitLoad(load, isP)) return { displayWU: row.wu, displayHours: row.hours };
+  const part = partOf(loadParts(load, isP), row.type);
+  return part ? { displayWU: part.regularUnits, displayHours: part.regularHours } : { displayWU: 0, displayHours: 0 };
 }
 
 function extractYearNum(yearLevel: string): string {
@@ -550,11 +501,8 @@ export default function WorkloadPage({
   const [moveToOverloadTarget, setMoveToOverloadTarget] = useState<MoveToOverloadContext | null>(null);
   const [moveToOverloadProcessing, setMoveToOverloadProcessing] = useState(false);
   const [moveToOverloadMode, setMoveToOverloadMode] = useState<'entire' | 'split'>('entire');
-  const [splitRegularAmount, setSplitRegularAmount] = useState(0);
-  /* Units the admin wants to keep as Regular for the specific component being moved */
-  const [componentSplitUnits, setComponentSplitUnits] = useState(0);
-  /** What is typed in Move to Overload → Keep as Regular (may be empty; empty counts as 0) */
-  const [splitInput, setSplitInput] = useState('');
+  /** Split boxes (Move to Overload / Praise Load → Choose amounts): how much of the Lecture and Laboratory moves */
+  const [splitDraft, setSplitDraft] = useState<SplitDraft>({ lec: '', lab: '' });
 
   const [instructorPanelCollapsed, setInstructorPanelCollapsed] = useState(false);
   const [workloadModalOpen, setWorkloadModalOpen] = useState(false);
@@ -595,7 +543,7 @@ export default function WorkloadPage({
      API only allows reclassifying an existing Overload row as Praise. */
   const [praiseFromOtherTarget, setPraiseFromOtherTarget] = useState<WorkloadLoad | null>(null);
   /** Lec or Lab only (Lec+Lab subject) — like Overload, the other component stays Regular. */
-  const [praiseFromOtherComponent, setPraiseFromOtherComponent] = useState<'lec' | 'lab' | 'full'>('full');
+  const [praiseFromOtherComponent, setPraiseFromOtherComponent] = useState<'lec' | 'lab' | 'full' | 'parts'>('full');
   /** The Lec / Lab row whose Praise button was clicked — the dialog can switch between it and the whole subject */
   const [praiseClickedPart, setPraiseClickedPart] = useState<'lec' | 'lab' | 'full'>('full');
   const [praiseFromOtherProcessing, setPraiseFromOtherProcessing] = useState(false);
@@ -820,8 +768,6 @@ export default function WorkloadPage({
     setOverloadConfirm(null);
     setMoveToOverloadTarget(null);
     setMoveToOverloadMode('entire');
-    setSplitRegularAmount(0);
-    setComponentSplitUnits(0);
   }, [keepSubjectContext]);
 
   const allFiltersSet = !!(filterProgram && filterBlock && filterYearLevel && filterSemester && filterAcademicYear);
@@ -1124,29 +1070,21 @@ export default function WorkloadPage({
 
   /* -- Move to Overload --------------------------------------------------- */
   function handleMoveToOverload(load: WorkloadLoad, component: 'lec' | 'lab' | 'full') {
-    const lec = parseFloat(String(load.lecture_hours)) || 0;
-    const lab = parseFloat(String(load.laboratory_hours)) || 0;
-    const hasBoth = lec > 0 && lab > 0;
-
     /* Always open in "entire" mode — the user selects inside the modal */
     setMoveToOverloadMode('entire');
-
-    if (hasBoth && component !== 'full') {
-      /* Component-specific: user will choose entire-vs-split in the modal.
-         componentSplitUnits tracks the regular portion (in wu/units) for the selected component. */
-      setComponentSplitUnits(0);
-      setSplitInput('');
-    } else {
-      /* Full / single-component: keep the existing max-regular pre-fill for the split slider */
-      const subjectTotal = isPermanent ? calcWorkloadUnits(lec, lab) : lec + lab;
-      const maxRegular = summary
-        ? parseFloat(Math.max(0, Math.min(subjectTotal - 0.01, subjectTotal + summary.remaining_regular_load)).toFixed(2))
-        : 0;
-      setSplitRegularAmount(maxRegular);
-      setComponentSplitUnits(0);
-      setSplitInput(String(maxRegular));
-    }
+    setSplitDraft(overloadSplitStart(load, component));
     setMoveToOverloadTarget({ load, component });
+  }
+
+  /** Split boxes to start from: all of the clicked part — a one-part subject: what doesn't fit in Regular */
+  function overloadSplitStart(load: WorkloadLoad, component: 'lec' | 'lab' | 'full'): SplitDraft {
+    const lec = parseFloat(String(load.lecture_hours)) || 0;
+    const lab = parseFloat(String(load.laboratory_hours)) || 0;
+    const subjectTotal = isPermanent ? calcWorkloadUnits(lec, lab) : lec + lab;
+    const keepRegular = summary
+      ? Math.max(0, Math.min(subjectTotal - 0.01, subjectTotal + summary.remaining_regular_load))
+      : 0;
+    return startSplitDraft(lec, isPermanent ? lab * 0.75 : lab, component, subjectTotal - keepRegular);
   }
 
   async function confirmMoveToOverload() {
@@ -1170,20 +1108,12 @@ export default function WorkloadPage({
         component,
       };
 
-      if (isComponentSpecific) {
-        if (moveToOverloadMode === 'entire') {
-          /* Move this component fully to overload; other component stays Regular */
-          body.split_regular = component === 'lab' ? lecWU : labWU;
-        } else {
-          /* Split: keep componentSplitUnits of this component as Regular;
-             componentSplitUnits is already in wu (permanent) or contact hours (contractual),
-             so no further conversion is needed. */
-          const otherWU = component === 'lab' ? lecWU : labWU;
-          body.split_regular = otherWU + componentSplitUnits;
-        }
-      } else if (moveToOverloadMode === 'split') {
-        /* Full / single-component split: use the manual slider value */
-        body.split_regular = splitRegularAmount;
+      if (moveToOverloadMode === 'split') {
+        /* Split: the amounts of the Lecture and Laboratory chosen in the boxes */
+        body.parts = readSplitDraft(splitDraft, lecWU, labWU);
+      } else if (isComponentSpecific) {
+        /* Move this component fully to overload; other component stays Regular */
+        body.split_regular = component === 'lab' ? lecWU : labWU;
       }
 
       const res = await fetch('/api/workload/move-to-overload', {
@@ -1263,13 +1193,18 @@ export default function WorkloadPage({
     try {
       const load = praiseFromOtherTarget;
       if (praiseFromOtherComponent !== 'full') {
+        const lec = parseFloat(String(load.lecture_hours)) || 0;
+        const lab = parseFloat(String(load.laboratory_hours)) || 0;
         const res = await fetch('/api/workload/move-to-praise', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             faculty_id: selectedFaculty.id,
             master_schedule_id: load.ms_id,
-            component: praiseFromOtherComponent,
+            // Choose amounts: any part of the Lecture and Laboratory; else only the clicked Lec / Lab
+            ...(praiseFromOtherComponent === 'parts'
+              ? { parts: readSplitDraft(splitDraft, lec, isPermanent ? lab * 0.75 : lab) }
+              : { component: praiseFromOtherComponent }),
           }),
         });
         const data = await res.json();
@@ -1543,7 +1478,7 @@ export default function WorkloadPage({
   const selectFaculty = useCallback((f: Faculty) => {
     setAssignMsg(''); setAssignError('');
     setOverloadConfirm(null);
-    setMoveToOverloadTarget(null); setMoveToOverloadMode('entire'); setSplitRegularAmount(0); setComponentSplitUnits(0);
+    setMoveToOverloadTarget(null); setMoveToOverloadMode('entire');
     /* The faculty's own program only seeds the filters in the normal flow. From
        Master Schedule → Assign they describe the subject and are left alone. */
     if (!keepSubjectContext) {
@@ -1677,25 +1612,20 @@ export default function WorkloadPage({
   const canConfirmOverload = (() => {
     if (moveToOverloadMode === 'entire') return true;
     if (!moveToOverloadTarget) return false;
-    const { load, component } = moveToOverloadTarget;
+    const { load } = moveToOverloadTarget;
     const lec = parseFloat(String(load.lecture_hours)) || 0;
     const lab = parseFloat(String(load.laboratory_hours)) || 0;
-    const hasBoth = lec > 0 && lab > 0;
+    const moved = readSplitDraft(splitDraft, lec, isPermanent ? lab * 0.75 : lab);
+    return !!moved && moved.lec + moved.lab > 0.001;
+  })();
 
-    if (hasBoth && component !== 'full') {
-      /* Component-specific split: overload portion of that component (in wu) must be > 0 */
-      const componentTotalWU = component === 'lec'
-        ? (isPermanent ? lec : lec)
-        : (isPermanent ? lab * 0.75 : lab);
-      return (
-        componentSplitUnits >= 0 &&
-        componentSplitUnits <= componentTotalWU &&
-        (componentTotalWU - componentSplitUnits) > 0.001
-      );
-    }
-    /* Full / single-component split */
-    const subjectTotal = isPermanent ? calcWorkloadUnits(lec, lab) : lec + lab;
-    return splitRegularAmount >= 0 && (subjectTotal - splitRegularAmount) > 0.001;
+  /** Move to Praise Load → Choose amounts: what the boxes move (0 while a box is invalid) */
+  const praisePartsMoved = (() => {
+    if (!praiseFromOtherTarget) return 0;
+    const lec = parseFloat(String(praiseFromOtherTarget.lecture_hours)) || 0;
+    const lab = parseFloat(String(praiseFromOtherTarget.laboratory_hours)) || 0;
+    const moved = readSplitDraft(splitDraft, lec, isPermanent ? lab * 0.75 : lab);
+    return moved ? moved.lec + moved.lab : 0;
   })();
 
   /* Remaining load available for client-side per-subject warn detection.
@@ -3130,13 +3060,13 @@ export default function WorkloadPage({
       {/* -- Move to Overload Modal -- */}
       <Modal
         open={!!moveToOverloadTarget}
-        onClose={() => { setMoveToOverloadTarget(null); setComponentSplitUnits(0); }}
+        onClose={() => { setMoveToOverloadTarget(null); }}
         title="Move to Overload"
         footer={
           <div className="flex gap-3">
             <button
               type="button"
-              onClick={() => { setMoveToOverloadTarget(null); setComponentSplitUnits(0); }}
+              onClick={() => { setMoveToOverloadTarget(null); }}
               disabled={moveToOverloadProcessing}
               className="flex-1 border border-[#E2E8F0] text-[#64748B] py-2.5 rounded-xl text-sm font-medium hover:bg-[#F8FAFC] transition disabled:opacity-50"
             >
@@ -3168,23 +3098,16 @@ export default function WorkloadPage({
 
             const unit = isPermanent ? 'units' : 'hrs';
 
-            /* -- Component-specific helpers -- */
-            const componentTotalWU    = component === 'lec'
-              ? (isPermanent ? lec : lec)
-              : (isPermanent ? lab * 0.75 : lab);
+            const componentTotalWU = component === 'lec' ? lec : (isPermanent ? lab * 0.75 : lab);
             const componentLabel = component === 'lec' ? 'Lecture' : component === 'lab' ? 'Laboratory' : '';
             const otherLabel     = component === 'lec' ? 'Laboratory' : 'Lecture';
+            const subjectTotal   = isPermanent ? calcWorkloadUnits(lec, lab) : lec + lab;
 
-            /* split preview for component-specific (input is in units/wu) */
-            const compRegularWU  = componentSplitUnits;
-            const compOverloadWU = Math.max(0, componentTotalWU - componentSplitUnits);
-
-            /* -- Full / single-component helpers -- */
-            const subjectTotal    = isPermanent ? calcWorkloadUnits(lec, lab) : lec + lab;
-            const overloadPortion = parseFloat((subjectTotal - splitRegularAmount).toFixed(10));
-            const maxRegularPart  = summary
-              ? parseFloat(Math.max(0, Math.min(subjectTotal - 0.01, subjectTotal + summary.remaining_regular_load)).toFixed(2))
-              : 0;
+            /* Split: how much of the Lecture and of the Laboratory moves (the boxes) */
+            const lecValue = lec;
+            const labValue = isPermanent ? lab * 0.75 : lab;
+            const splitMoved = readSplitDraft(splitDraft, lecValue, labValue);
+            const splitOverload = splitMoved ? splitMoved.lec + splitMoved.lab : 0;
 
             function ChoiceBtn({
               mode, label, description, active,
@@ -3193,9 +3116,8 @@ export default function WorkloadPage({
                 <button
                   type="button"
                   onClick={() => {
+                    if (mode === 'split' && moveToOverloadMode !== 'split') setSplitDraft(overloadSplitStart(load, component));
                     setMoveToOverloadMode(mode);
-                    if (mode === 'split' && !isComponentSpecific) { setSplitRegularAmount(maxRegularPart); setSplitInput(String(maxRegularPart)); }
-                    if (mode === 'split' && isComponentSpecific) { setComponentSplitUnits(0); setSplitInput(''); }
                   }}
                   className={`w-full text-left px-3.5 py-3 rounded-xl border transition ${
                     active
@@ -3220,43 +3142,15 @@ export default function WorkloadPage({
 
             /* -- Load impact values -- */
             const impactPreview = summary ? (() => {
-              let deltaRegular  = 0;
-              let deltaOverload = 0;
-              if (isComponentSpecific) {
-                if (moveToOverloadMode === 'entire') {
-                  deltaRegular  = -componentTotalWU;
-                  deltaOverload =  componentTotalWU;
-                } else {
-                  deltaRegular  = -(compOverloadWU);
-                  deltaOverload =   compOverloadWU;
-                }
-              } else {
-                if (moveToOverloadMode === 'entire') {
-                  deltaRegular  = -subjectTotal;
-                  deltaOverload =  subjectTotal;
-                } else {
-                  const ol      = Math.max(0, overloadPortion);
-                  deltaRegular  = -ol;
-                  deltaOverload =  ol;
-                }
-              }
-              const afterRegular    = regularVal + deltaRegular;
-              const afterOverload   = overloadVal + deltaOverload;
+              const moving = moveToOverloadMode === 'entire'
+                ? (isComponentSpecific ? componentTotalWU : subjectTotal)
+                : splitOverload;
+              const afterRegular    = regularVal - moving;
+              const afterOverload   = overloadVal + moving;
               const afterRemaining  = Math.max(0, summary.regular_load_limit - afterRegular);
               const isAfterExceeded = (afterRegular + afterOverload - summary.regular_load_limit) > 0.001;
-              return { afterRegular, afterOverload, afterRemaining, isAfterExceeded, deltaOverload };
+              return { afterRegular, afterOverload, afterRemaining, isAfterExceeded };
             })() : null;
-
-            /* Keep as Regular box: free text so it can be erased; the number is clamped */
-            const splitMax = isComponentSpecific ? parseFloat((componentTotalWU - 0.01).toFixed(2)) : maxRegularPart;
-            const onSplitInput = (text: string) => {
-              setSplitInput(text);
-              const raw = parseFloat(text);
-              const v = parseFloat(Math.max(0, Math.min(splitMax, Number.isNaN(raw) ? 0 : raw)).toFixed(2));
-              if (isComponentSpecific) setComponentSplitUnits(v); else setSplitRegularAmount(v);
-            };
-            const splitRegular  = isComponentSpecific ? compRegularWU : splitRegularAmount;
-            const splitOverload = isComponentSpecific ? compOverloadWU : Math.max(0, overloadPortion);
 
             return (
               <>
@@ -3282,37 +3176,19 @@ export default function WorkloadPage({
                   mode="split"
                   active={moveToOverloadMode === 'split'}
                   label="Split"
-                  description="Keep part as Regular, move the rest"
+                  description={hasBoth ? 'Choose how much of the Lecture and Laboratory moves' : 'Keep part as Regular, move the rest'}
                 />
 
                 {moveToOverloadMode === 'split' && (
-                  <div className="rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] px-3.5 py-3 space-y-2">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <label htmlFor="keep-regular" className="text-sm font-medium text-[#334155]">Keep as Regular ({unit})</label>
-                      <span className="text-xs text-[#94A3B8] tabular-nums">Max {splitMax.toFixed(2)}</span>
-                    </div>
-                    <input
-                      id="keep-regular"
-                      type="number"
-                      inputMode="decimal"
-                      min={0}
-                      max={splitMax}
-                      step={0.25}
-                      placeholder="0"
-                      value={splitInput}
-                      onChange={e => onSplitInput(e.target.value)}
-                      onBlur={() => { if (splitInput !== '') setSplitInput(String(splitRegular)); }}
-                      className="w-full bg-white border border-[#CBD5E1] text-[#0B2A5B] rounded-lg px-3 py-2.5 text-base tabular-nums focus:outline-none focus:ring-2 focus:ring-[#1D5BD6]/40 focus:border-[#1D5BD6]"
-                    />
-                    <p className="text-sm text-[#475569] tabular-nums">
-                      Regular <span className="font-semibold text-[#0B2A5B]">{splitRegular.toFixed(2)}</span>
-                      <span className="text-[#CBD5E1]"> · </span>
-                      Overload <span className="font-semibold text-[#C2410C]">{splitOverload.toFixed(2)}</span> {unit}
-                    </p>
-                    {splitOverload <= 0.001 && (
-                      <p className="text-sm text-[#B91C1C]">Keep less than the full amount so some moves to Overload.</p>
-                    )}
-                  </div>
+                  <SplitPartsEditor
+                    lecValue={lecValue}
+                    labValue={labValue}
+                    target="Overload"
+                    unit={unit}
+                    draft={splitDraft}
+                    onChange={setSplitDraft}
+                    disabled={moveToOverloadProcessing}
+                  />
                 )}
 
                 {impactPreview && summary && (() => {
@@ -3444,27 +3320,8 @@ export default function WorkloadPage({
           for (const l of overloadPrintLoads) {
             total += (parseFloat(String(l.lecture_hours)) || 0) + (parseFloat(String(l.laboratory_hours)) || 0);
           }
-          for (const l of splitPrintLoads) {
-            const lec = parseFloat(String(l.lecture_hours)) || 0;
-            const lab = parseFloat(String(l.laboratory_hours)) || 0;
-            const ovU = parseFloat(String(l.split_overload_units)) || 0;
-            const ovH = parseFloat(String(l.split_overload_hours)) || 0;
-            if (!isP) { total += ovH; continue; }
-            const oc      = (l.overload_component || 'full') as 'lec' | 'lab' | 'full';
-            const hasBoth = lec > 0 && lab > 0;
-            if (hasBoth && oc !== 'full') {
-              if (oc === 'lab') {
-                const regularWU = lab * 0.75 - ovU;
-                total += Math.max(0, lab - Math.round(regularWU / 0.75));
-              } else {
-                total += ovU; // lec: wu = hours (1:1)
-              }
-            } else {
-              const ru  = parseFloat(String(l.units)) || 0;
-              const tot = ru + ovU;
-              total += tot > 0.001 ? parseFloat(((ovU / tot) * (lec + lab)).toFixed(2)) : 0;
-            }
-          }
+          // Split subjects: only the moved part's hours
+          for (const l of splitPrintLoads) total += sumParts(loadParts(l, isP)).movedHours;
           return total;
         })();
 
@@ -3472,20 +3329,10 @@ export default function WorkloadPage({
         type PrintRow = { load: WorkloadLoad; row: SplitRow };
         const grouped: Record<string, PrintRow[]> = {};
         for (const load of regularPrintLoads) {
-          const oc = (load.overload_component || 'full') as 'lec' | 'lab' | 'full';
-          const splitOvU = parseFloat(String(load.split_overload_units)) || 0;
-          const isSplit = isP ? splitOvU > 0.001 : (parseFloat(String(load.split_overload_hours)) || 0) > 0.001;
-          const lec2 = parseFloat(String(load.lecture_hours)) || 0;
-          const lab2 = parseFloat(String(load.laboratory_hours)) || 0;
-          const hasBoth2 = lec2 > 0 && lab2 > 0;
-          const isCompSplit = isSplit && hasBoth2 && oc !== 'full';
-          const totalStored = isP ? parseFloat(String(load.units)) || 0 : parseFloat(String(load.hours)) || 0;
-          const otherCompVal = isCompSplit ? (oc === 'lab' ? lec2 : (isP ? lab2 * 0.75 : lab2)) : 0;
-          const splitCompReg = isCompSplit ? Math.max(0, totalStored - otherCompVal) : 0;
-
-          for (const row of splitLoad(load, isP)) {
-            // Skip a component-split row whose entire value is in overload (zero regular portion)
-            if (isCompSplit && row.type === oc && splitCompReg < 0.001) continue;
+          for (const row of splitLoad(load)) {
+            // Skip a part whose whole value is in Overload / Praise (nothing of it stays Regular)
+            const { displayWU, displayHours } = computeRegularRowValues(load, row, isP);
+            if (isSplitLoad(load, isP) && (isP ? displayWU : displayHours) < 0.001) continue;
             const startTime = row.type === 'lec'
               ? (load.lec_start_time ?? load.start_time)
               : (load.lab_start_time ?? load.start_time);
@@ -3516,7 +3363,7 @@ export default function WorkloadPage({
         // Overload grouped at PrintRow level so each component gets its own per-component time
         const overloadGrouped: Record<string, PrintRow[]> = {};
         for (const load of overloadPrintLoads) {
-          for (const row of splitLoad(load, isP)) {
+          for (const row of splitLoad(load)) {
             const startTime = row.type === 'lec'
               ? (load.lec_start_time ?? load.start_time)
               : (load.lab_start_time ?? load.start_time);
@@ -3690,39 +3537,13 @@ export default function WorkloadPage({
           }
         }
         for (const load of sortedSplitLoads) {
-                            const allOlRows = splitLoad(load, isP);
-                            const ocOl = (load.overload_component || 'full') as 'lec' | 'lab' | 'full';
-                            const lecOl = parseFloat(String(load.lecture_hours)) || 0;
-                            const labOl = parseFloat(String(load.laboratory_hours)) || 0;
-                            const hasBothOl = lecOl > 0 && labOl > 0;
-                            const rows = (hasBothOl && ocOl !== 'full')
-                              ? allOlRows.filter(r => r.type === ocOl)
-                              : allOlRows;
-                            const ovU = parseFloat(String(load.split_overload_units)) || 0;
-                            const olV = isP ? ovU : parseFloat(String(load.split_overload_hours)) || 0;
-                            const totalCurrH = lecOl + labOl;
-                            const olHours = (() => {
-                              if (hasBothOl && ocOl !== 'full') {
-                                if (!isP) return parseFloat(String(load.split_overload_hours)) || 0;
-                                const compRow   = allOlRows.find(r => r.type === ocOl);
-                                const compHours = compRow ? compRow.hours : 0;
-                                const compWU    = compRow ? compRow.wu    : 0;
-                                if (ocOl === 'lab') {
-                                  const regularWU    = compWU - ovU;
-                                  const regularHours = Math.round(regularWU / 0.75);
-                                  return Math.max(0, compHours - regularHours);
-                                }
-                                return ovU;
-                              }
-                              if (!isP) return parseFloat(String(load.split_overload_hours)) || 0;
-                              const ru = parseFloat(String(load.units)) || 0;
-                              const total = ru + ovU;
-                              return total > 0.001 ? parseFloat(((ovU / total) * totalCurrH).toFixed(2)) : 0;
-                            })();
-          for (const row of rows) {
-            const rowWU = isP ? olV : hoursToUnits(olHours, row.type);
-            overloadRowsWU += rowWU;
-            const splitRow = toOfficialRow(load, row, rowWU, olHours, (
+          const olParts = loadParts(load, isP);
+          for (const row of splitLoad(load)) {
+            // Only the part moved to Overload — Lecture and Laboratory each on its own line
+            const part = partOf(olParts, row.type);
+            if (!part || (isP ? part.movedUnits : part.movedHours) < 0.001) continue;
+            overloadRowsWU += part.movedUnits;
+            const splitRow = toOfficialRow(load, row, part.movedUnits, part.movedHours, (
                                     <button
                                       type="button"
                                       title="Return overload portion to Regular Load"
@@ -3758,7 +3579,7 @@ export default function WorkloadPage({
           ...(() => {
             const seenPraiseMs = new Set<number>();
             return praiseSubjectLoads.flatMap((load) =>
-              splitLoad(load, isP).map((row) => {
+              splitLoad(load).map((row) => {
                 const lec2 = parseFloat(String(load.lecture_hours)) || 0;
                 const lab2 = parseFloat(String(load.laboratory_hours)) || 0;
                 const hasBoth2 = lec2 > 0 && lab2 > 0;
@@ -3787,16 +3608,16 @@ export default function WorkloadPage({
             );
           })(),
           ...praiseSplitLoads.flatMap((load) => {
-            const oc = (load.overload_component || 'full') as 'lec' | 'lab' | 'full';
-            const rows = splitLoad(load, isP).filter(r => oc === 'full' || r.type === oc);
             const val = isP
               ? (parseFloat(String(load.split_overload_units)) || 0)
               : (parseFloat(String(load.split_overload_hours)) || 0);
+            // Only the part moved to Praise — Lecture and Laboratory each on its own line
+            const praiseParts = loadParts(load, isP);
+            const movedOf = (row: SplitRow) => partOf(praiseParts, row.type);
+            const rows = splitLoad(load).filter(r => ((isP ? movedOf(r)?.movedUnits : movedOf(r)?.movedHours) ?? 0) > 0.001);
             return rows.map((row) => {
-              const lec2 = parseFloat(String(load.lecture_hours)) || 0;
-              const lab2 = parseFloat(String(load.laboratory_hours)) || 0;
-              const hrs = !isP ? val : row.type === 'lab' ? lab2 : lec2;
-              const rowWU = isP ? val : hoursToUnits(hrs, row.type);
+              const hrs = movedOf(row)?.movedHours ?? 0;
+              const rowWU = movedOf(row)?.movedUnits ?? 0;
               praiseRowsWU += rowWU;
               const base = toOfficialRow(load, row, rowWU, hrs, (
                 <div className="flex items-center justify-center gap-0.5 flex-wrap">
@@ -3852,11 +3673,7 @@ export default function WorkloadPage({
 
         const praiseSubjectHours = praiseSubjectLoads.reduce((sum, l) => {
           return sum + (parseFloat(String(l.lecture_hours)) || 0) + (parseFloat(String(l.laboratory_hours)) || 0);
-        }, 0) + praiseSplitLoads.reduce((sum, l) => {
-          if (!isP) return sum + (parseFloat(String(l.split_overload_hours)) || 0);
-          const oc = l.overload_component;
-          return sum + (parseFloat(String(oc === 'lab' ? l.laboratory_hours : l.lecture_hours)) || 0);
-        }, 0);
+        }, 0) + praiseSplitLoads.reduce((sum, l) => sum + sumParts(loadParts(l, isP)).movedHours, 0);
         /* Units under Units, hours under Hours — Contractual praise subjects are stored in hours only */
         const praiseTeachingUnits = isP ? praiseSubjectVal : praiseRowsWU;
         const praiseUnitsSum = praiseTeachingUnits + (workload.praise ?? []).reduce(
@@ -4391,9 +4208,7 @@ export default function WorkloadPage({
             </span>
           </p>
           <p className="text-xs text-slate-500">
-            {praiseFromOtherComponent === 'full'
-              ? 'The subject stays assigned to the faculty with the same days, times and rooms. Only the workload classification changes.'
-              : `Only the ${praiseFromOtherComponent === 'lec' ? 'Lecture' : 'Laboratory'} moves to Praise Load — the ${praiseFromOtherComponent === 'lec' ? 'Laboratory' : 'Lecture'} stays in Regular Load.`}
+            The subject stays assigned to the faculty with the same days, times and rooms. Only the workload classification changes.
           </p>
         </div>
       </Modal>
@@ -4415,7 +4230,7 @@ export default function WorkloadPage({
             </button>
             <button
               type="button"
-              disabled={praiseFromOtherProcessing}
+              disabled={praiseFromOtherProcessing || (praiseFromOtherComponent === 'parts' && praisePartsMoved <= 0.001)}
               onClick={confirmPraiseFromOther}
               className="px-4 py-2 rounded-lg text-sm font-medium bg-violet-600 hover:bg-violet-700 text-white disabled:opacity-50 transition"
             >
@@ -4432,12 +4247,15 @@ export default function WorkloadPage({
               {praiseFromOtherComponent === 'lec' ? ' (Lecture)' : praiseFromOtherComponent === 'lab' ? ' (Laboratory)' : ''}
             </span> as Praise Load?
           </p>
-          {/* A Lec + Lab subject: just the clicked part, or the whole subject in one step */}
-          {praiseClickedPart !== 'full' && (
-            <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="What moves to Praise Load">
+          {/* The clicked Lec / Lab, the whole subject, or any amount of the Lecture and Laboratory */}
+          {(
+            <div className={`grid gap-2 ${praiseClickedPart !== 'full' ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-2'}`} role="radiogroup" aria-label="What moves to Praise Load">
               {([
-                { value: praiseClickedPart, label: `Only the ${praiseClickedPart === 'lec' ? 'Lecture' : 'Laboratory'}` },
+                ...(praiseClickedPart !== 'full'
+                  ? [{ value: praiseClickedPart, label: `Only the ${praiseClickedPart === 'lec' ? 'Lecture' : 'Laboratory'}` }]
+                  : []),
                 { value: 'full' as const, label: 'Whole subject' },
+                { value: 'parts' as const, label: 'Choose amounts' },
               ]).map(o => {
                 const on = praiseFromOtherComponent === o.value;
                 return (
@@ -4447,7 +4265,15 @@ export default function WorkloadPage({
                     role="radio"
                     aria-checked={on}
                     disabled={praiseFromOtherProcessing}
-                    onClick={() => setPraiseFromOtherComponent(o.value)}
+                    onClick={() => {
+                      // Choose amounts starts from the clicked part (all of it), none of the other
+                      if (o.value === 'parts' && praiseFromOtherComponent !== 'parts' && praiseFromOtherTarget) {
+                        const lec = parseFloat(String(praiseFromOtherTarget.lecture_hours)) || 0;
+                        const lab = parseFloat(String(praiseFromOtherTarget.laboratory_hours)) || 0;
+                        setSplitDraft(startSplitDraft(lec, isPermanent ? lab * 0.75 : lab, praiseClickedPart));
+                      }
+                      setPraiseFromOtherComponent(o.value);
+                    }}
                     className={`min-h-10 px-3 rounded-lg text-sm font-semibold border transition-colors ${
                       on ? 'bg-violet-600 border-violet-600' : 'bg-white/5 border-white/15 text-slate-200 hover:bg-white/10'
                     }`}
@@ -4460,11 +4286,24 @@ export default function WorkloadPage({
               })}
             </div>
           )}
+          {praiseFromOtherComponent === 'parts' && praiseFromOtherTarget && (
+            <SplitPartsEditor
+              lecValue={parseFloat(String(praiseFromOtherTarget.lecture_hours)) || 0}
+              labValue={(parseFloat(String(praiseFromOtherTarget.laboratory_hours)) || 0) * (isPermanent ? 0.75 : 1)}
+              target="Praise"
+              unit={isPermanent ? 'units' : 'hrs'}
+              draft={splitDraft}
+              onChange={setSplitDraft}
+              disabled={praiseFromOtherProcessing}
+            />
+          )}
           <p className="text-white">
             Workload:{' '}
             <span className="font-semibold tabular-nums">
               {praiseFromOtherTarget
-                ? (praiseFromOtherComponent === 'full'
+                ? (praiseFromOtherComponent === 'parts'
+                    ? praisePartsMoved
+                    : praiseFromOtherComponent === 'full'
                     ? subjectLoadValue(praiseFromOtherTarget, selectedFaculty?.employment_status === 'Permanent')
                     : praiseFromOtherComponent === 'lec'
                       ? (parseFloat(String(praiseFromOtherTarget.lecture_hours)) || 0)

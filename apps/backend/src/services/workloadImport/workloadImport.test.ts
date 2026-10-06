@@ -95,6 +95,8 @@ test('load categories are stored the way Faculty Workload stores them', () => {
   ], s, true).plan!;
   assert.deepEqual([praiseAmount.loadValue, praiseAmount.overloadComponent, praiseAmount.overloadRow?.value, praiseAmount.overloadRow?.isPraise],
     [0.75, 'full', 3.5, true]);
+  // Lecture all Praise + 1.5 of the Laboratory: the Lecture's share is kept for the forms
+  assert.equal(praiseAmount.overloadRow?.lecPart, 2);
 
   const overload = buildCategoryPlan([r('overload', { kind: 'unknown' })], s, true).plan!;
   assert.deepEqual([overload.loadCategory, overload.loadValue, overload.overloadRow?.value], ['Overload', 4.25, 4.25]);

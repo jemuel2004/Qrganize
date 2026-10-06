@@ -4,6 +4,8 @@ import { getAuthUser } from '@/auth/auth';
 import { syncWorkloadMonitoringNotifications } from '@/services/workloadMonitoring';
 import { canAccessMasterSchedule } from '@/services/programScope';
 import { withAudit } from '@/services/audit';
+import { ensurePraiseSplitColumn } from '@/services/praiseSplit';
+import { movedComponent } from '@shared/loadSplit';
 
 async function POST_handler(req: NextRequest) {
   try {
@@ -23,6 +25,7 @@ async function POST_handler(req: NextRequest) {
       return NextResponse.json({ error: 'Schedule not found' }, { status: 404 });
     }
 
+    await ensurePraiseSplitColumn();
     const result = await transaction(async (client) => {
       // 1. Faculty
       const facultyResult = await client.query(
@@ -158,25 +161,32 @@ async function POST_handler(req: NextRequest) {
         ? parseFloat(String(loadRow.units)) || 0
         : parseFloat(String(loadRow.hours)) || 0;
       const newRegularValue = parseFloat((currentRegularValue + returnValue).toFixed(4));
+      // A Lecture + Laboratory split: the Laboratory comes back first, the Lecture's share stays as far as it fits
+      const oldLecPart = overloadRow.lec_part === null || overloadRow.lec_part === undefined
+        ? null : parseFloat(String(overloadRow.lec_part)) || 0;
+      const newLecPart = oldLecPart === null ? null : Math.min(oldLecPart, remainingOverload);
 
       await client.query(
         `UPDATE instructor_loads
-         SET units = $1, hours = $2
+         SET units = $1, hours = $2,
+             overload_component = COALESCE($5, overload_component)
          WHERE faculty_id = $3 AND master_schedule_id = $4`,
         [
           isPermanent ? newRegularValue : 0,
           !isPermanent ? newRegularValue : 0,
           faculty_id, master_schedule_id,
+          newLecPart === null ? null : movedComponent(newLecPart, remainingOverload - newLecPart),
         ]
       );
       await client.query(
         `UPDATE overloads
-         SET units = $1, hours = $2
+         SET units = $1, hours = $2, lec_part = $5
          WHERE faculty_id = $3 AND master_schedule_id = $4`,
         [
           isPermanent ? remainingOverload : 0,
           !isPermanent ? remainingOverload : 0,
           faculty_id, master_schedule_id,
+          newLecPart,
         ]
       );
       return {

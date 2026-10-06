@@ -28,9 +28,10 @@ import RoomPicker from '@/components/ui/RoomPicker';
 import DayPicker from '@/components/ui/DayPicker';
 import { TT_DAY_TONES, TT_TONE_MTH, TT_TONE_OVERLOAD, TT_TONE_SAT, TT_TONE_TF, TT_TONE_W, type DayTone } from '@/lib/dayTones';
 import { useDayCombinations } from '@/lib/dayCombinations';
-import { dayCombinationError, daysCode, daysLabel, matchCombination, type WeekDay } from '@shared/dayCombination';
+import { daysCode, daysLabel, matchCombination, type WeekDay } from '@shared/dayCombination';
 import { blockCode, programBlockCode } from '@shared/blockCode';
 import { LOAD_GRACE_UNITS, formatLoadCap } from '@shared/regularLoad';
+import { movedParts } from '@shared/loadSplit';
 import { LUNCH_END_MIN, LUNCH_START_MIN, SCHOOL_DAY_END_MIN, SCHOOL_DAY_START_MIN } from '@shared/schoolDay';
 import { asSessionList, fmt12, normTime, parseDays } from '@/lib/scheduleTime';
 import SubjectFacultyPreview from '@/components/SubjectFacultyPreview';
@@ -76,6 +77,8 @@ interface WorkloadLoad {
   split_is_praise?: boolean;
   split_overload_units?: number | null;
   split_overload_hours?: number | null;
+  /** The Lecture's share of the moved part (overloads.lec_part) — see @shared/loadSplit */
+  split_lec_part?: number | string | null;
   units?: number | null;
   hours?: number | null;
   lec_scheduled?: boolean;
@@ -715,10 +718,13 @@ function expandLoads(loads: WorkloadLoad[], isPermanent: boolean): LoadRow[] {
       continue;
     }
 
-    const splitAffectsLec = hasSplit && (oc === 'lec' || oc === 'full' || oc === null);
-    const splitAffectsLab = hasSplit && (oc === 'lab' || oc === 'full' || oc === null);
-    const isLecOverload   = isFullOverload || splitAffectsLec;
-    const isLabOverload   = isFullOverload || splitAffectsLab;
+    // Some of both parts moved (e.g. the Lecture all Praise + part of the Laboratory)
+    const moved = hasSplit && !isFullOverload ? movedParts(load, isPermanent) : { lec: 0, lab: 0 };
+    const splitIsPraise   = hasSplit && !isFullOverload && Boolean(load.split_is_praise);
+    const splitAffectsLec = moved.lec > 0.001;
+    const splitAffectsLab = moved.lab > 0.001;
+    const isLecOverload   = isFullOverload || (splitAffectsLec && !splitIsPraise);
+    const isLabOverload   = isFullOverload || (splitAffectsLab && !splitIsPraise);
     const isPraiseLoad    = load.load_category === 'Praise';
     const before = rows.length;
 
@@ -746,6 +752,10 @@ function expandLoads(loads: WorkloadLoad[], isPermanent: boolean): LoadRow[] {
     }
     if (isPraiseLoad) {
       for (let i = before; i < rows.length; i++) rows[i] = { ...rows[i], isOverloadComponent: false, isPraiseComponent: true };
+    } else if (splitIsPraise) {
+      for (let i = before; i < rows.length; i++) {
+        if (rows[i].component === 'lec' ? splitAffectsLec : splitAffectsLab) rows[i] = { ...rows[i], isPraiseComponent: true };
+      }
     }
   }
   return rows;
@@ -1187,7 +1197,7 @@ export default function SchedulingClient() {
 
   const [semester, setSemester]     = useState('1st Semester');
   const [schoolYear, setSchoolYear] = useState(currentAcademicYear);
-  /** Allowed day combinations of this term (Settings → Day Combinations) */
+  /** Day combinations of this term — quick picks (Settings → Day Combinations) */
   const { active: dayCombos } = useDayCombinations(semester, schoolYear);
   const [loadSummaries, setLoadSummaries] = useState<Record<number, { remaining_load: number; assigned_count?: number }>>({});
   /** Faculty list: everyone, only those fully scheduled, or those with classes still needing a day/time */
@@ -1877,15 +1887,13 @@ export default function SchedulingClient() {
         ? `${selLoad.load.subject_code} is a Major subject, so its Lecture and Laboratory must use the same room. Its ${otherPartName} is in ${lockedRoom.room_name} — choose ${lockedRoom.room_name} for the ${selLoad.label === 'Lab' ? 'Laboratory' : 'Lecture'} too.`
         : ruleNow?.error ?? null);
 
-  /* Day combinations allowed this semester (Settings → Day Combinations).
-     None configured → no restriction, exactly as before. */
+  /* The semester's day combinations (Settings → Day Combinations) are quick
+     picks only — any days can be scheduled (programs use their own patterns). */
   const currentCombo = dayCombos.length > 0 && allDaysSet && sessions.length > 0
     ? matchCombination(sessions.map(s => s.day), dayCombos)
     : null;
-  const comboError = allDaysSet && sessions.length > 0 ? dayCombinationError(sessions.map(s => s.day), dayCombos) : null;
-  /** Days that appear in any allowed combination (null = every day) — a Major Lec + Lab part: its other part's days */
-  const allowedDays = pairDays ? new Set<string>(pairDays)
-    : dayCombos.length > 0 ? new Set<string>(dayCombos.flatMap(c => c.days)) : null;
+  /** Days a session may use (null = every day) — a Major Lec + Lab part: its other part's days */
+  const allowedDays = pairDays ? new Set<string>(pairDays) : null;
 
   /** Use a combination: one session per day, in week order (times/rooms kept per row) */
   function applyCombination(days: readonly string[]) {
@@ -1900,7 +1908,7 @@ export default function SchedulingClient() {
     }
   }
 
-  const canSave           = isComplete && allDaysSet && sessions.length > 0 && !saving && !hasConflicts && !comboError && !roomRuleError;
+  const canSave           = isComplete && allDaysSet && sessions.length > 0 && !saving && !hasConflicts && !roomRuleError;
 
   async function runConflictCheck() {
     if (!selLoad || sessions.length === 0) return;
@@ -3026,11 +3034,6 @@ export default function SchedulingClient() {
                     </div>
                   </div>
                   </div>
-                  {comboError && (
-                    <p className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-[13px] text-red-700">
-                      <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" /> {comboError}
-                    </p>
-                  )}
                 </div>
 
                 {/* SESSION TABLE */}
