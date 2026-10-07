@@ -565,8 +565,7 @@ export default function OfficialWorkloadFormTable({
                 <React.Fragment key={group.id}>
                   <tr>
                     <td colSpan={colCount} className={`${cellBase} font-bold text-left bg-[#F8FAFC] print:bg-white`}>
-                      {/* Phones: the day name stays in view while the row swipes */}
-                      <span className="max-lg:sticky max-lg:left-2 max-lg:inline-block print:static">{group.label}</span>
+                      {group.label}
                     </td>
                   </tr>
                   {/* Every row of this day group in time order — classes that share a
