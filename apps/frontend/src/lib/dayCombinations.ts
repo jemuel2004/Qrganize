@@ -26,12 +26,23 @@ export interface TermDayCombinations {
 }
 
 const EMPTY: TermDayCombinations = { academic_year: '', semester: '', combinations: [], restricted: false };
-const cache = new Map<string, Promise<TermDayCombinations>>();
+const cache = new Map<string, { at: number; p: Promise<TermDayCombinations> }>();
+/** A cached list is reused this long; printouts and Excel files always read it fresh */
+const CACHE_MS = 30_000;
 
-/** The term's combinations (active term when omitted). Never throws — no data = no restriction. */
-export function fetchDayCombinations(semester?: string | null, academicYear?: string | null): Promise<TermDayCombinations> {
+/**
+ * The term's combinations (active term when omitted). Never throws — no data =
+ * no restriction. `fresh` skips the cache (documents must match the database
+ * now, even when another user changed Settings a moment ago).
+ */
+export function fetchDayCombinations(
+  semester?: string | null,
+  academicYear?: string | null,
+  opts: { fresh?: boolean } = {},
+): Promise<TermDayCombinations> {
   const key = `${academicYear ?? ''}|${semester ?? ''}`;
-  let p = cache.get(key);
+  const hit = cache.get(key);
+  let p = !opts.fresh && hit && Date.now() - hit.at < CACHE_MS ? hit.p : undefined;
   if (!p) {
     const qs = new URLSearchParams();
     if (academicYear) qs.set('academic_year', academicYear);
@@ -39,9 +50,10 @@ export function fetchDayCombinations(semester?: string | null, academicYear?: st
     p = fetch(`/api/settings/day-combinations?${qs}`, { cache: 'no-store' })
       .then(r => (r.ok ? r.json() as Promise<TermDayCombinations> : EMPTY))
       .catch(() => EMPTY);
-    cache.set(key, p);
+    const entry = { at: Date.now(), p };
+    cache.set(key, entry);
     // A failed load shouldn't stick — let the next call retry
-    p.then(d => { if (d === EMPTY) cache.delete(key); });
+    p.then(d => { if (d === EMPTY && cache.get(key) === entry) cache.delete(key); });
   }
   return p;
 }

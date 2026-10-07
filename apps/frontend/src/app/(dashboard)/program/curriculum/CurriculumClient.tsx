@@ -42,7 +42,7 @@ import {
   parseCurriculumVersion,
   type CurriculumVersion,
 } from '@shared/curriculumVersion';
-import { downloadCurriculumExcel, groupCurriculums, printCurriculum } from './curriculumReport';
+import { downloadCurriculumExcel, fetchCurriculumGroups, groupCurriculums, printCurriculum } from './curriculumReport';
 // BulkAddModal (~44 KB) loads only when opened. xlsx is already on-demand (~900 KB).
 
 const BulkAddModal = dynamic(() => import('./BulkAddModal'), { ssr: false });
@@ -436,9 +436,15 @@ export default function CurriculumPage() {
     if (!filters.program_id || filters.program_id === ALL_PROGRAMS || groups.length === 0) return;
     const prog = programs.find(p => String(p.id) === filters.program_id);
     try {
+      /* The same subjects as Print (the search box doesn't narrow the file),
+         read from the database at this moment */
+      const fresh = await fetchCurriculumGroups({
+        programId: filters.program_id, version: filters.curriculum_version,
+        yearLevel: filters.year_level, semester: filters.semester,
+      });
       await downloadCurriculumExcel({
         programName: prog?.name || 'Curriculum', programCode: prog?.code,
-        version: filters.curriculum_version, groups,
+        version: filters.curriculum_version, groups: fresh,
       });
     } catch (e) {
       toast.error(e instanceof Error && e.message ? e.message : 'Could not generate the Excel template.');

@@ -5,10 +5,10 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Download, Printer, RotateCcw, Settings2, UserRound } from 'lucide-react';
 import { useSchoolYear } from '@/context/SchoolYearContext';
 import { useRealtime } from '@/context/RealtimeContext';
-import { useDayCombinations } from '@/lib/dayCombinations';
+import { fetchDayCombinations, useDayCombinations } from '@/lib/dayCombinations';
 import { blockCurriculumVersion, curriculumVersionLabel } from '@shared/curriculumVersion';
 import {
-  DEFAULT_COORDINATORS, EMPTY_SIGNATORY, downloadClassProgramExcel, expandToDisplayRows, fmt12, fmtNum,
+  DEFAULT_COORDINATORS, EMPTY_SIGNATORY, downloadClassProgramExcel, expandToDisplayRows, fetchClassProgram, fmt12, fmtNum,
   formatCourseLabel, formatTimeRange, groupByDay, isAM, programKey,
   type BlockDetail, type DayGroup, type DisplayRow, type RawSchedule, type Signatory,
 } from './classProgramReport';
@@ -462,10 +462,22 @@ export default function ClassProgramPage() {
   // ── Excel export — same builder as Reports (classProgramReport) ─────────
   async function handleExportExcel() {
     if (!blockDetail || !selectionComplete) return;
+    /* Built from the database as it is now (the page follows along), with the
+       term's day combinations read fresh — never an older copy on screen */
+    let block = blockDetail;
+    let rows = schedules;
+    const query = docQuery.current;
+    try {
+      const fresh = await fetchClassProgram({ blockId: selectedBlockId, programId: filterProgram, yearLevel: filterYearLevel, semester: globalSemester });
+      block = fresh.block;
+      rows = fresh.schedules;
+      if (docQuery.current === query) { setBlockDetail(fresh.block); setSchedules(fresh.schedules); }
+    } catch { /* offline: what is on screen */ }
+    const combos = (await fetchDayCombinations(globalSemester, globalYear, { fresh: true })).combinations.filter(c => c.is_active);
     await downloadClassProgramExcel({
-      block: blockDetail,
-      schedules,
-      combos: dayCombos,
+      block,
+      schedules: rows,
+      combos: combos.length > 0 ? combos : dayCombos,
       settings: { campusName, campusAddress, campusTel, campusWebsite, preparedBy, recommendedBy, notedBy, approvedBy },
     });
   }

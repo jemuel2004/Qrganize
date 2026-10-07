@@ -960,11 +960,12 @@ export default function InstructorWorkloadClient() {
               </div>
 
               <WorkloadCollapsible open={tableVisible}>
-                {/* Phones / tablets: cards on the page background; desktop: the form in a white box */}
-                <div className="lg:bg-white lg:border lg:border-[#E2E8F0] lg:rounded-lg lg:overflow-hidden">
+                {/* The official form as a table on every screen, in a white box — phones
+                    swipe it sideways (the user asked for the table, not cards, 2026-10-08) */}
+                <div className="bg-white border border-[#E2E8F0] rounded-lg overflow-hidden">
                   {effectiveTab === 'regular' && (
                     regularPrintLoads.length === 0 ? (
-                      <div className="px-4 py-8 text-center bg-white border border-[#E2E8F0] rounded-xl lg:border-0 lg:rounded-none">
+                      <div className="px-4 py-8 text-center">
                         <p className="text-sm font-semibold text-[#0B2A5B]">No regular workload assigned</p>
                         <p className="text-sm text-[#64748B] mt-1">
                           No regular load subjects for the active academic period.
@@ -975,7 +976,6 @@ export default function InstructorWorkloadClient() {
                         rows={officialRegularRows}
                         summary={officialRegularSummary}
                         groups={formGroups}
-                        phoneCards
                       />
                     )
                   )}
@@ -985,7 +985,6 @@ export default function InstructorWorkloadClient() {
                       summary={officialActualSummary}
                       variant="actual"
                       groups={formGroups}
-                      phoneCards
                     />
                   )}
                   {effectiveTab === 'overload' && (
@@ -995,10 +994,9 @@ export default function InstructorWorkloadClient() {
                         summary={officialOverloadSummary}
                         variant="overload"
                         groups={formGroups}
-                        phoneCards
                       />
                     ) : (
-                      <div className="px-4 py-8 text-center bg-white border border-[#E2E8F0] rounded-xl lg:border-0 lg:rounded-none">
+                      <div className="px-4 py-8 text-center">
                         <p className="text-sm font-semibold text-[#0B2A5B]">No overload assigned</p>
                         <p className="text-sm text-[#64748B] mt-1">
                           No overload subjects for the active academic period.
@@ -1012,7 +1010,6 @@ export default function InstructorWorkloadClient() {
                       summary={officialPraiseSummary}
                       variant="praise"
                       groups={formGroups}
-                      phoneCards
                     />
                   )}
                 </div>

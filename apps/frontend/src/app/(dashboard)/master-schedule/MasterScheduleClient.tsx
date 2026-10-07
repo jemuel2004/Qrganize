@@ -17,6 +17,7 @@ import { LOADING_DELAY, PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useM
 import Link from 'next/link';
 import { isScopedChairRole } from '@/lib/roleAccess';
 import SubjectFacultyPreview from '@/components/SubjectFacultyPreview';
+import { blockCode, isBlockQuery, matchesBlockQuery, programShortCode, squashSearch } from '@shared/blockCode';
 
 const BLOCK_PAGE_EASE = [0.16, 1, 0.3, 1] as const;
 
@@ -95,13 +96,55 @@ function statusOf(s: Schedule): string {
   return s.faculty_id ? s.status : 'Unassigned';
 }
 
+/* ── Search ──────────────────────────────────────────────────────── */
+
+const escapeRegExp = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * How well a subject matches the search — 0 = not at all. Case, spaces and
+ * dashes don't matter ("it11" finds IT 111, "path fit" finds PATH-FIT). Best
+ * first: the course code itself, a code that starts with it, a word of the
+ * subject name, then the text anywhere in the code or name, the faculty, the
+ * block and (all programs) a program typed in full ("BSIT").
+ */
+function matchScore(s: Schedule, query: string, withProgram: boolean): number {
+  const q = query.trim().toLowerCase();
+  const sq = squashSearch(q);
+  if (!sq) return 1;
+  const base = baseScore(s, q, sq, withProgram);
+  // "it" also names BSIT ("cs" BSCS…): that program's matches come first among equals
+  return base > 10 && squashSearch(programShortCode(s.program_code)).startsWith(sq) ? base + 5 : base;
+}
+
+function baseScore(s: Schedule, q: string, sq: string, withProgram: boolean): number {
+  const code = squashSearch(s.subject_code);
+  const name = s.subject_name.toLowerCase();
+  if (code === sq) return 100;
+  if (code.startsWith(sq)) return 90;
+  if (new RegExp(`(^|[^a-z0-9])${escapeRegExp(q)}`).test(name)) return 70;
+  if (code.includes(sq)) return 60;
+  if (name.includes(q) || squashSearch(name).includes(sq)) return 50;
+  if ((s.faculty_name || '').toLowerCase().includes(q)) return 40;
+  if (blockCode(s.year_level, s.block_name).toLowerCase().includes(q)
+    || `${s.year_level} block ${s.block_name}`.toLowerCase().includes(q)) return 30;
+  // The whole program code ("BSIT") lists that program; "it" alone doesn't pull in every BSIT subject
+  if (withProgram && squashSearch(s.program_code) === sq) return 10;
+  return 0;
+}
+
 /* ── Data grouping ───────────────────────────────────────────────── */
 
-/** One page per block — by program, then year, semester and block name */
-function buildBlockPages(data: Schedule[]): BlockPage[] {
+/**
+ * One page per block — by program, then year, semester and block name. While
+ * searching (`scores`), the blocks with the best matches come first and each
+ * block lists its best matches first.
+ */
+function buildBlockPages(data: Schedule[], scores?: Map<Schedule, number>): BlockPage[] {
   const byBlock = new Map<number, Schedule[]>();
   for (const s of data) byBlock.set(s.block_id, [...(byBlock.get(s.block_id) ?? []), s]);
   const rank = (order: string[], v: string) => { const i = order.indexOf(v); return i < 0 ? order.length : i; };
+  const score = (s: Schedule) => scores?.get(s) ?? 0;
+  const best = (rows: Schedule[]) => rows.reduce((m, s) => Math.max(m, score(s)), 0);
   return [...byBlock.entries()]
     .map(([blockId, rows]) => ({
       key: String(blockId),
@@ -109,10 +152,11 @@ function buildBlockPages(data: Schedule[]): BlockPage[] {
       year_level: rows[0].year_level,
       semester: rows[0].block_semester,
       block_name: rows[0].block_name,
-      subjects: [...rows].sort((a, b) => a.subject_code.localeCompare(b.subject_code)),
+      subjects: [...rows].sort((a, b) => score(b) - score(a) || a.subject_code.localeCompare(b.subject_code)),
     }))
     .sort((a, b) =>
-      a.program_code.localeCompare(b.program_code)
+      best(b.subjects) - best(a.subjects)
+      || a.program_code.localeCompare(b.program_code)
       || rank(YEAR_ORDER, a.year_level) - rank(YEAR_ORDER, b.year_level)
       || rank(SEM_ORDER, a.semester) - rank(SEM_ORDER, b.semester)
       || a.block_name.localeCompare(b.block_name));
@@ -378,14 +422,22 @@ export default function MasterSchedulePage() {
     ? programs.find(p => p.id === chairProgramId) ?? null
     : null;
 
-  const searched = schedules.filter(s =>
-    !filters.search ||
-    s.subject_code.toLowerCase().includes(filters.search.toLowerCase()) ||
-    s.subject_name.toLowerCase().includes(filters.search.toLowerCase()) ||
-    (s.faculty_name || '').toLowerCase().includes(filters.search.toLowerCase()) ||
-    s.block_name.toLowerCase().includes(filters.search.toLowerCase()) ||
-    (isAllPrograms && s.program_code.toLowerCase().includes(filters.search.toLowerCase()))
-  );
+  /* A search that names a block ("2D", "BSIT 2D", "2nd Year Block D") shows
+     only that block — not subjects that merely contain the text ("Animation
+     2D/3D"). Anything else matches subject, faculty, block or program. */
+  const query = filters.search.trim();
+  const blockSearch = isBlockQuery(query);
+  /* Searched over every subject of the term before the block pages are made,
+     so a match on any page shows — and the best matches come first. */
+  const scores = new Map<Schedule, number>();
+  for (const s of schedules) {
+    const score = !query ? 1
+      : blockSearch
+        ? (matchesBlockQuery(query, s.program_code, s.year_level, s.block_name) || squashSearch(s.subject_code) === squashSearch(query) ? 100 : 0)
+        : matchScore(s, query, isAllPrograms);
+    if (score > 0) scores.set(s, score);
+  }
+  const searched = schedules.filter(s => scores.has(s));
   /* Status narrows only the list below — the count tiles keep counting every
      status, so choosing Unassigned never turns Assigned into 0 (and back). */
   const filtered = filters.status
@@ -400,7 +452,7 @@ export default function MasterSchedulePage() {
     completed:  searched.filter(s => statusOf(s) === 'Completed').length,
   };
 
-  const blockPages = buildBlockPages(filtered);
+  const blockPages = buildBlockPages(filtered, query ? scores : undefined);
   const selectedProgram = programs.find(p => String(p.id) === filters.program_id);
 
   /* Reset to first block page when filters / term / result size change */
@@ -611,7 +663,7 @@ export default function MasterSchedulePage() {
             <SearchInput
               value={filters.search}
               onChange={v => setFilter('search', v)}
-              placeholder="Search subject, faculty, or block…"
+              placeholder="Search subject, faculty, or block (e.g. 2D)…"
               className="w-full lg:w-80 flex-shrink-0 !bg-white border border-[#D6E0EF] hover:border-[#9DB8E8] focus-within:border-[#1D5BD6]"
             />
           </div>

@@ -314,6 +314,9 @@ async function inBatches<T, R>(items: T[], work: (item: T) => Promise<R>, onDone
 
 type SummaryOptions = {
   facultyIds: number[];
+  /** Read the faculty list again first (kept: anyone with something this term,
+   *  e.g. only Praise records or added after the page opened); facultyIds is the fallback */
+  freshFaculty?: boolean;
   semester: string;
   academicYear: string;
   /** Names on the footer (defaults to the ones saved in this browser) */
@@ -323,13 +326,23 @@ type SummaryOptions = {
 
 /** Reads every faculty's workload (a few at a time) and builds the summary model */
 async function loadSummaryModel(opts: SummaryOptions): Promise<{ model: WorkloadSummaryModel; faculty: number }> {
-  const { combinations } = await fetchDayCombinations(opts.semester, opts.academicYear);
+  const [{ combinations }, freshIds] = await Promise.all([
+    fetchDayCombinations(opts.semester, opts.academicYear, { fresh: true }),
+    opts.freshFaculty
+      ? fetch('/api/faculty', { cache: 'no-store' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => (Array.isArray(d?.faculty) ? (d.faculty as { id: number }[]).map(f => Number(f.id)).filter(Boolean) : null))
+        .catch(() => null)
+      : Promise.resolve(null),
+  ]);
+  const ids = freshIds && freshIds.length > 0 ? freshIds : opts.facultyIds;
   let done = 0;
-  opts.onProgress?.(0, opts.facultyIds.length);
+  opts.onProgress?.(0, ids.length);
   const data = await inBatches(
-    opts.facultyIds,
+    ids,
+    // A faculty that can't be read stops the summary (shown as an error) — never a silent gap
     id => fetchWorkloadPrintData(id, opts.semester, opts.academicYear),
-    () => opts.onProgress?.(++done, opts.facultyIds.length),
+    () => opts.onProgress?.(++done, ids.length),
   );
   const rows = data
     .map(d => workloadSummaryRow(d, opts.semester, opts.academicYear, combinations))

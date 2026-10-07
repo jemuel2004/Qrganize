@@ -873,10 +873,10 @@ export async function printRegularLoadDocument(
 
   /* Open first — before HTML build — so mobile browsers still treat it as a gesture. */
   const preOpened = openBlankPrintWindow('width=860,height=1150');
-  // Group rows by the semester's configured day combinations (cached per term)
+  // Group rows by the semester's configured day combinations (read fresh for the document)
   const dayCombinations = input.dayCombinations !== undefined
     ? input.dayCombinations
-    : (await fetchDayCombinations(input.semester, input.academicYear)).combinations;
+    : (await fetchDayCombinations(input.semester, input.academicYear, { fresh: true })).combinations;
   const html = buildRegularLoadPrintHtml({ ...input, dayCombinations });
   const result = await openPrintHtmlDocument(html, {
     windowFeatures: 'width=860,height=1150',

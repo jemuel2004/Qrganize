@@ -32,7 +32,7 @@ import { useToast } from '@/context/ToastContext';
 import { useRealtime } from '@/context/RealtimeContext';
 import { CURRICULUM_VERSIONS, DEFAULT_CURRICULUM_VERSION, curriculumVersionLabel, type CurriculumVersion } from '@shared/curriculumVersion';
 import WorkloadPrintMenu from '@/components/WorkloadPrintMenu';
-import { downloadCurriculumExcel, groupCurriculums, printCurriculum, type CurriculumRowLike } from '../program/curriculum/curriculumReport';
+import { downloadCurriculumExcel, fetchCurriculumGroups, groupCurriculums, printCurriculum, type CurriculumRowLike } from '../program/curriculum/curriculumReport';
 import { downloadQrExcel, printRooms, type RoomQR } from '../qr-generator/qrReport';
 import { downloadClassProgramExcel, fetchClassProgram, loadClassProgramDocSettings } from '../program/class-program/classProgramReport';
 import { fetchDayCombinations } from '@/lib/dayCombinations';
@@ -342,7 +342,7 @@ function ClassProgramReport({ programs, semester, schoolYear }: {
     try {
       const [{ block: detail, schedules }, { combinations }] = await Promise.all([
         fetchClassProgram({ blockId: block, programId: program, yearLevel: year, semester }),
-        fetchDayCombinations(semester, schoolYear),
+        fetchDayCombinations(semester, schoolYear, { fresh: true }),
       ]);
       await downloadClassProgramExcel({
         block: detail,
@@ -437,6 +437,15 @@ function CurriculumReport({ programs }: { programs: ProgramOption[] }) {
       .catch(() => {});
     return () => ctrl.abort();
   }, [program, version]);
+  // Live: subjects changed elsewhere — Print (which can't wait for a fresh read) stays current
+  useRealtime(['curriculum'], () => {
+    if (!program) return;
+    const picked = `${program}|${version}`;
+    return fetch(`/api/curriculum?${new URLSearchParams({ program_id: program, curriculum_version: version })}`, { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d && picked === `${program}|${version}`) setRows((d.curriculums ?? []) as CurriculumRowLike[]); })
+      .catch(() => {});
+  });
 
   const prog = programs.find(p => String(p.id) === program);
   const groups = useMemo(() => groupCurriculums(rows ?? []), [rows]);
@@ -446,7 +455,9 @@ function CurriculumReport({ programs }: { programs: ProgramOption[] }) {
     if (!prog || count === 0) return;
     setBusy('excel');
     try {
-      await downloadCurriculumExcel({ programName: prog.name, programCode: prog.code, version, groups });
+      // Read from the database at this moment, not the list loaded when the program was picked
+      const fresh = await fetchCurriculumGroups({ programId: program, version });
+      await downloadCurriculumExcel({ programName: prog.name, programCode: prog.code, version, groups: fresh });
       flashDone('excel');
       toast.success('Curriculum downloaded as Excel.');
     } catch (e) {
@@ -514,7 +525,15 @@ function RoomQrReport({ rooms }: { rooms: RoomQR[] }) {
   async function onExcel() {
     setBusy('excel');
     try {
-      if (await downloadQrExcel(ready, title)) {
+      // The rooms and QR codes as the database has them now
+      const latest = await fetch('/api/rooms/qr-codes', { cache: 'no-store' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => (Array.isArray(d?.rooms) ? d.rooms as RoomQR[] : null))
+        .catch(() => null);
+      const rows = latest
+        ? latest.filter(r => (type === 'All' || (type === 'Laboratory' ? isLab(r.room_type) : !isLab(r.room_type))) && r.generated && r.qr_data_url)
+        : ready;
+      if (await downloadQrExcel(rows, title)) {
         flashDone('excel');
         toast.success('Room QR codes downloaded as Excel.');
       }

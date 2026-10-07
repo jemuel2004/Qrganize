@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { blockCode, programBlockCode, programShortCode } from './blockCode';
+import { blockCode, isBlockQuery, matchesBlockQuery, programBlockCode, programShortCode } from './blockCode';
 
 test('program short name drops the BS degree prefix', () => {
   assert.equal(programShortCode('BSIT'), 'IT');
@@ -32,4 +32,24 @@ test('missing or number-less year falls back safely', () => {
   assert.equal(blockCode('Irregular', 'G'), 'Block G');
   assert.equal(blockCode('3rd Year', ''), '3');
   assert.equal(blockCode(undefined, undefined), '');
+});
+
+test('a search shaped like a block is recognised', () => {
+  for (const q of ['2D', '2d', 'BSIT 2D', 'IT2D', 'it-2d', 'CPE 1A', '2nd Year Block D', '2nd year D', 'Block D'])
+    assert.equal(isBlockQuery(q), true, q);
+  for (const q of ['IT 416', 'Animation', '2D/3D', 'Lea Medrano', '2', 'IT', ''])
+    assert.equal(isBlockQuery(q), false, q);
+});
+
+test('a block search finds that block (any program unless one is named)', () => {
+  assert.equal(matchesBlockQuery('2D', 'BSIT', '2nd Year', 'D'), true);
+  assert.equal(matchesBlockQuery('2D', 'BSCS', '2nd Year', 'D'), true);
+  assert.equal(matchesBlockQuery('2D', 'BSIT', '4th Year', 'B'), false);
+  assert.equal(matchesBlockQuery('2D', 'BSIT', '2nd Year', 'B'), false);
+  assert.equal(matchesBlockQuery('BSIT 2D', 'BSIT', '2nd Year', 'D'), true);
+  assert.equal(matchesBlockQuery('BSIT 2D', 'BSCS', '2nd Year', 'D'), false);
+  assert.equal(matchesBlockQuery('IT2D', 'BSIT', '2nd Year', 'D'), true);
+  assert.equal(matchesBlockQuery('CPE 1A', 'BSCpE', '1st Year', 'A'), true);
+  assert.equal(matchesBlockQuery('2nd Year Block D', 'BSIT', '2nd Year', 'D'), true);
+  assert.equal(matchesBlockQuery('Block D', 'BSIT', '3rd Year', 'D'), true);
 });

@@ -551,7 +551,7 @@ export default function FacultySchedulesClient({
     if (ids.length === 0) { toast.info('No faculty have subjects this term yet.'); return; }
     setSummaryProgress({ done: 0, total: ids.length, excel });
     const opts = {
-      facultyIds: ids, semester: globalSemester, academicYear: globalYear, signatories,
+      facultyIds: ids, freshFaculty: true, semester: globalSemester, academicYear: globalYear, signatories,
       onProgress: (done: number, total: number) => setSummaryProgress({ done, total, excel }),
     };
     try {

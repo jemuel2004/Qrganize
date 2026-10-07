@@ -59,6 +59,9 @@ const timeCell =
 const timeHead =
   'border border-[#E2E8F0] print:border-black px-1 py-[6px] text-sm font-bold text-[#0B2A5B] print:text-black bg-[#F8FAFC] print:bg-white leading-snug text-center align-middle';
 
+/** Phones / tablets: TIME/DAY stays put while the rest of the table swipes sideways (paper unchanged) */
+const stickyTime = ' max-lg:sticky max-lg:-left-0.5 max-lg:shadow-[inset_-2px_0_0_rgba(100,116,139,0.3)] print:static print:shadow-none';
+
 /** Controlled TIME/DAY content — keeps "7:00 AM" intact; may wrap after "–" on narrow cells. */
 function TimeDayLabel({ label }: { label: string }) {
   const m = label.match(/^(.+?)([–-])\s*(.+)$/);
@@ -193,9 +196,14 @@ function SummaryRow({
 }) {
   return (
     <tr>
-      <td colSpan={2} className={`${cellBase} font-bold text-left`}>
+      <td colSpan={2} className={`${cellBase} font-bold text-left max-lg:hidden print:table-cell`}>
         {label}
       </td>
+      {/* Phones / tablets: the label sits in the pinned TIME/DAY column so totals keep their name while swiping */}
+      <td className={`${cellBase} font-bold text-left${stickyTime} max-lg:z-[1] max-lg:bg-[var(--surface)]! lg:hidden print:hidden`}>
+        {label}
+      </td>
+      <td className={`${cell} lg:hidden print:hidden`}></td>
       <td
         className={`${cellBase} text-center align-middle whitespace-normal break-words [overflow-wrap:break-word] ${
           emphasizeDescription ? 'font-bold' : ''
@@ -403,7 +411,7 @@ export default function OfficialWorkloadFormTable({
   const theadEl = (
     <thead>
       <tr>
-        <th className={timeHead}>TIME/DAY</th>
+        <th className={`${timeHead}${stickyTime} max-lg:z-[2]`}>TIME/DAY</th>
         <th className={head}>Subject Code</th>
         <th className={head}>Description</th>
         <th className={head}>Course</th>
@@ -420,8 +428,8 @@ export default function OfficialWorkloadFormTable({
 
   const tableClassName = [
     'official-workload-table w-full table-fixed border-collapse bg-white text-[#0B2A5B] print:text-black border border-[#E2E8F0] print:border-black',
-    /* Below lg: do not compress — enable internal horizontal scroll */
-    'max-lg:min-w-[960px]',
+    /* Below lg: do not compress — enable internal horizontal scroll (a bit narrower on phones: less swiping) */
+    'max-lg:min-w-[960px] max-sm:min-w-[840px]',
     /* Desktop: preserve prior fill behavior */
     'lg:min-w-0',
   ].join(' ');
@@ -436,7 +444,7 @@ export default function OfficialWorkloadFormTable({
   return (
     <div className="min-w-0 max-w-full">
       {!phoneCards && (
-        <p className="lg:hidden no-print text-xs text-slate-500 mb-1.5 leading-snug">
+        <p className="lg:hidden no-print text-xs text-slate-500 px-3 pt-2.5 pb-1.5 leading-snug">
           Swipe left or right to view all columns
         </p>
       )}
@@ -565,7 +573,8 @@ export default function OfficialWorkloadFormTable({
                 <React.Fragment key={group.id}>
                   <tr>
                     <td colSpan={colCount} className={`${cellBase} font-bold text-left bg-[#F8FAFC] print:bg-white`}>
-                      {group.label}
+                      {/* Phones: the day name stays in view while the row swipes */}
+                      <span className="max-lg:sticky max-lg:left-2 max-lg:inline-block print:static">{group.label}</span>
                     </td>
                   </tr>
                   {/* Every row of this day group in time order — classes that share a
@@ -594,7 +603,7 @@ export default function OfficialWorkloadFormTable({
                     entries.sort((x, y) => x.start - y.start || (x.kind === y.kind ? 0 : x.kind === 'row' ? -1 : 1));
                     return entries.map(e => e.kind === 'empty' ? (
                       <tr key={e.slotId}>
-                        <td className={timeCell}>
+                        <td className={`${timeCell}${stickyTime} max-lg:z-[1] max-lg:bg-[var(--surface)]!`}>
                           <TimeDayLabel label={e.slotLabel} />
                         </td>
                         <EmptyDataCells />
@@ -602,7 +611,7 @@ export default function OfficialWorkloadFormTable({
                       </tr>
                     ) : (
                       <tr key={e.row.key}>
-                        <td className={timeCell}>
+                        <td className={`${timeCell}${stickyTime} max-lg:z-[1] max-lg:bg-[var(--surface)]!`}>
                           <TimeDayLabel label={e.row.timeLabel || e.slotLabel} />
                         </td>
                         <DataCells row={e.row} />

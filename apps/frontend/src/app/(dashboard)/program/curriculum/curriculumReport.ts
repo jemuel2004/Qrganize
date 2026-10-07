@@ -82,6 +82,23 @@ export async function loadExportLogo(): Promise<{ base64: string; extension: 'pn
   return null;
 }
 
+/**
+ * The curriculum as the database has it now, grouped like the page and the
+ * print — read at the moment of the download, so the file never misses a
+ * change made after the page opened. Search on the page doesn't narrow it.
+ */
+export async function fetchCurriculumGroups(opts: {
+  programId: string; version: CurriculumVersion; yearLevel?: string; semester?: string;
+}): Promise<CurriculumGroupOf<CurriculumRowLike>[]> {
+  const params = new URLSearchParams({ program_id: opts.programId, curriculum_version: opts.version });
+  if (opts.yearLevel) params.set('year_level', opts.yearLevel);
+  if (opts.semester) params.set('semester', opts.semester);
+  const res = await fetch(`/api/curriculum?${params}`, { cache: 'no-store' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Could not read the curriculum.');
+  return groupCurriculums((data.curriculums ?? []) as CurriculumRowLike[]);
+}
+
 /** Build and download the curriculum Excel file. Throws with a readable message on failure. */
 export async function downloadCurriculumExcel(opts: {
   programName: string; programCode?: string; version: CurriculumVersion;

@@ -103,9 +103,10 @@ export default function WorkloadPrintMenu({
     if (next && !ready && !fetched && !loadingData) fetchWorkload();
   }
 
-  // Live updates (fetch mode): this faculty's loads may have changed — a closed
-  // menu reads them again on the next open, an open one refreshes its counts now.
-  useRealtime(['workload', 'schedule'], () => {
+  // Live updates (fetch mode): this faculty's loads, profile (designation, position)
+  // or rooms may have changed — a closed menu reads them again on the next open,
+  // an open one refreshes now, so Print always has the current data.
+  useRealtime(['workload', 'schedule', 'faculty', 'rooms'], () => {
     if (ready || facultyId == null) return;
     if (!open) { setFetched(null); return; }
     if (loadingData) return;
@@ -126,7 +127,18 @@ export default function WorkloadPrintMenu({
     if (!workload) return;
     setPrinting(kind);
     setError('');
-    const docInput = printDocInput(kind, workload, semester, academicYear);
+    /* Excel is made from the database as it is now — not from what the menu read
+       when it opened. (Print can't wait first: phones block a print window opened
+       after a delay, so it uses the menu's data, kept live below. A page with
+       `data` keeps its own data live.) */
+    let current = workload;
+    if (isExcel && facultyId != null) {
+      try {
+        current = await fetchWorkloadPrintData(facultyId, semester, academicYear);
+        setFetched(current);
+      } catch { /* offline: the data read when the menu opened */ }
+    }
+    const docInput = printDocInput(kind, current, semester, academicYear);
     if (isExcel) {
       // Same official form as Print, as a spreadsheet
       try {
@@ -137,7 +149,7 @@ export default function WorkloadPrintMenu({
           png('/nemlogo/ISO-UKAS.png'),
           png('/nemlogo/BAGONG-PILIPINAS-LOGO.png'),
         ]);
-        const { combinations: dayCombinations } = await fetchDayCombinations(semester, academicYear);
+        const { combinations: dayCombinations } = await fetchDayCombinations(semester, academicYear, { fresh: true });
         const buffer = await buildWorkloadFormWorkbook(
           buildWorkloadFormModel({ ...docInput, dayCombinations }),
           logo ? { buffer: logo, extension: 'png' } : undefined,
