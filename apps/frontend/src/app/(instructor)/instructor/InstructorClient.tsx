@@ -124,9 +124,9 @@ function Countdown({ expiresAt, onExpired }: { expiresAt: string; onExpired: () 
 function TypeBadge({ type }: { type: string }) {
   const isLab = type === 'Laboratory' || type === 'Computer Lab';
   return (
-    <span className={`inline-flex items-center flex-shrink-0 text-[11px] font-medium leading-none px-1.5 py-[3px] rounded-md ${
+    <span className={`inline-flex items-center flex-shrink-0 text-[13px] font-semibold leading-none px-2 py-1 rounded-md ${
       isLab
-        ? 'bg-[#12408F]/10 text-[#12408F]'
+        ? 'bg-[#1D5BD6]/10 text-[#1D5BD6]'
         : 'bg-slate-500/10 text-slate-300'
     }`}>
       {type}
@@ -136,8 +136,10 @@ function TypeBadge({ type }: { type: string }) {
 
 /* ─── Available Rooms: 5 per page, slides on every 5 s ────────────── */
 const ROOMS_PER_PAGE = 5;
-const ROOM_ROW_PX = 68;
+const ROOM_ROW_PX = 78;
 const SLIDE_MS = 5_000;
+/** Body of both cards: 5 rooms + the progress line (3) + the page arrows row (61) */
+const CARD_BODY_PX = ROOMS_PER_PAGE * ROOM_ROW_PX + 64;
 /** More pages than this show "3 / 12" instead of dots */
 const MAX_DOTS = 8;
 
@@ -151,17 +153,17 @@ function RoomRow({ room }: { room: AvailableRoom }) {
     <div className="flex items-center gap-3 px-5 border-b border-white/5 last:border-b-0" style={{ height: ROOM_ROW_PX }}>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
-          <p className="text-sm font-semibold text-white truncate">{room.room_name}</p>
+          <p className="text-[17px] font-semibold text-white truncate">{room.room_name}</p>
           <TypeBadge type={room.room_type} />
         </div>
-        <p className="text-xs text-slate-400 mt-1 truncate">
+        <p className="text-sm text-slate-300 mt-1 truncate">
           {meta || 'Capacity N/A'}
         </p>
       </div>
       <Link
         href={`/instructor/room-requests?room=${room.id}`}
         draggable={false}
-        className="flex-shrink-0 h-9 min-w-[5rem] px-3 rounded-lg border border-[#1D5BD6]/35 text-[#1D5BD6] text-[13px] font-semibold hover:bg-[#1D5BD6]/10 active:scale-95 transition-all duration-200 inline-flex items-center justify-center"
+        className="flex-shrink-0 h-10 min-w-[5.5rem] px-4 rounded-lg border border-[#1D5BD6]/35 text-[#1D5BD6] text-sm font-semibold hover:bg-[#1D5BD6]/10 active:scale-95 transition-all duration-200 inline-flex items-center justify-center"
       >
         Request
       </Link>
@@ -338,10 +340,10 @@ function DashHeader({
   const inner = (
     <>
       <div className="flex items-center gap-3 min-w-0">
-        <div className="w-9 h-9 rounded-lg bg-[#12408F]/15 flex items-center justify-center flex-shrink-0">
-          <Icon className="w-[18px] h-[18px] text-[#1D5BD6]" />
+        <div className="w-10 h-10 rounded-lg bg-[#12408F]/15 flex items-center justify-center flex-shrink-0">
+          <Icon className="w-5 h-5 text-[#1D5BD6]" />
         </div>
-        <h2 className="text-[15px] font-semibold text-white leading-5 truncate">{title}</h2>
+        <h2 className="text-lg font-bold text-white leading-6 truncate">{title}</h2>
       </div>
       {action ? <div className="flex-shrink-0 whitespace-nowrap">{action}</div> : null}
       {href ? <ChevronRight className="w-5 h-5 flex-shrink-0 text-[#1D5BD6] transition-transform duration-200 group-hover:translate-x-0.5" /> : null}
@@ -497,14 +499,14 @@ export default function InstructorDashboard() {
               {greeting(nowHour)}, {name || 'Faculty'}
             </h1>
             {dateStr && (
-              <p className="text-sm font-medium mt-1.5" style={{ color: '#DCE7F5' }}>{dateStr}</p>
+              <p className="text-base font-medium mt-1.5" style={{ color: '#DCE7F5' }}>{dateStr}</p>
             )}
           </div>
 
           {/* Right — live clock */}
           <div className="sm:text-right">
             <LiveClock />
-            <p className="text-xs font-semibold mt-1 uppercase tracking-wider flex items-center gap-1.5 sm:justify-end" style={{ color: '#C7D6EA' }}>
+            <p className="text-sm font-semibold mt-1 uppercase tracking-wider flex items-center gap-1.5 sm:justify-end" style={{ color: '#C7D6EA' }}>
               <span aria-hidden className="w-2 h-2 rounded-full bg-emerald-400" />
               Live
             </p>
@@ -518,9 +520,10 @@ export default function InstructorDashboard() {
       </div>
 
       {gmailVerified === false && !hideGmailNotice && (
-        <div className="flex flex-col sm:flex-row items-start gap-3 px-5 py-3.5 rounded-xl border border-white/10 bg-white/[0.06] text-sm text-slate-300">
-          <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-red-400" />
-          <span className="flex-1 leading-relaxed">
+        // Phones: the icon stays beside the text, Ignore goes under it
+        <div className="flex flex-wrap sm:flex-nowrap items-start sm:items-center gap-x-3 gap-y-2.5 px-5 py-3.5 rounded-xl border border-white/10 bg-white/[0.06] text-sm text-slate-300">
+          <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5 sm:mt-0 text-red-400" />
+          <span className="grow basis-[calc(100%-2rem)] sm:basis-0 min-w-0 leading-relaxed">
             Your email is not verified yet. You can optionally verify your Google account in{' '}
             <Link href="/instructor/profile" className="underline underline-offset-2 font-semibold text-white hover:text-blue-300">
               Profile Settings
@@ -535,7 +538,7 @@ export default function InstructorDashboard() {
                 if (userEmail) localStorage.setItem(`qrganize:dismiss-google-notice:${userEmail}`, '1');
               } catch { /* localStorage unavailable */ }
             }}
-            className="flex-shrink-0 text-xs font-semibold text-slate-400 hover:text-white transition-colors px-2 py-1 rounded-lg hover:bg-white/10"
+            className="ml-8 sm:ml-0 flex-shrink-0 text-sm font-semibold text-slate-200 hover:text-white transition-colors px-3 py-1.5 rounded-lg border border-white/10 hover:bg-white/10"
           >
             Ignore
           </button>
@@ -558,18 +561,25 @@ export default function InstructorDashboard() {
         showSkeleton={showSkeleton}
         skeleton={
           <div className="flex flex-col gap-5">
-            <div className="rounded-2xl border border-white/10 bg-[#111827] p-4 overflow-hidden">
-              <Skeleton className="h-12 rounded-xl" />
+            {/* The "No Active Room Session" card's own layout and words under the shimmer —
+                the same height at every width, so nothing below moves when it loads */}
+            <div aria-hidden className="bg-[#111827] border border-dashed border-white/10 rounded-2xl px-4 sm:px-6 py-4 flex flex-wrap sm:flex-nowrap items-center gap-4">
+              <Skeleton className="w-12 h-12 rounded-xl flex-shrink-0" />
+              <div className="flex-1 min-w-0 text-transparent select-none">
+                <p className="text-lg font-bold"><span className="qr-skeleton rounded-md">No Active Room Session</span></p>
+                <p className="text-sm mt-0.5"><span className="qr-skeleton rounded-md [box-decoration-break:clone]">Request a room below or scan a QR code at any available room entrance</span></p>
+              </div>
+              <Skeleton className="w-full sm:w-[8.25rem] h-12 rounded-xl flex-shrink-0" />
             </div>
             {/* Same shape as the two cards: Available Rooms (5 rows + page dots) · Class Schedule */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 lg:gap-5">
               {[...Array(2)].map((_, i) => (
                 <div key={i} className="rounded-2xl border border-white/10 bg-[#111827] overflow-hidden">
                   <div className="flex items-center gap-3 px-5 py-4 border-b border-white/10">
-                    <Skeleton className="w-9 h-9 rounded-lg flex-shrink-0" />
-                    <Skeleton className="h-4 w-36 rounded" />
+                    <Skeleton className="w-10 h-10 rounded-lg flex-shrink-0" />
+                    <Skeleton className="h-5 w-40 rounded" />
                   </div>
-                  <div className="p-4 space-y-3" style={{ height: ROOMS_PER_PAGE * ROOM_ROW_PX + 60 }}>
+                  <div className="p-4 space-y-3" style={{ height: CARD_BODY_PX }}>
                     {[...Array(ROOMS_PER_PAGE)].map((__, r) => <Skeleton key={r} className="h-[56px] rounded-xl" />)}
                   </div>
                 </div>
@@ -597,7 +607,7 @@ export default function InstructorDashboard() {
                 : <CircleDot className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-400" />}
             </div>
             <div className="min-w-0">
-              <p className={`text-xs font-black uppercase tracking-widest mb-0.5 ${
+              <p className={`text-sm font-black uppercase tracking-wider mb-0.5 ${
                 data.my_reservation.status === 'Pending' ? 'text-amber-400' : 'text-emerald-400'
               }`}>
                 {data.my_reservation.status === 'Pending' ? 'Pending QR Confirmation' : 'Active Room Session'}
@@ -606,13 +616,13 @@ export default function InstructorDashboard() {
               <div className="flex items-center gap-2 sm:gap-3 mt-1.5 flex-wrap">
                 <TypeBadge type={data.my_reservation.room_type} />
                 {data.my_reservation.building && (
-                  <span className="text-xs text-slate-400 flex items-center gap-1">
-                    <Building2 className="w-3.5 h-3.5" /> {data.my_reservation.building}
+                  <span className="text-sm text-slate-300 flex items-center gap-1.5">
+                    <Building2 className="w-4 h-4" /> {data.my_reservation.building}
                   </span>
                 )}
                 {data.my_reservation.capacity && (
-                  <span className="text-xs text-slate-400 flex items-center gap-1">
-                    <Users className="w-3.5 h-3.5" /> {data.my_reservation.capacity} seats
+                  <span className="text-sm text-slate-300 flex items-center gap-1.5">
+                    <Users className="w-4 h-4" /> {data.my_reservation.capacity} seats
                   </span>
                 )}
               </div>
@@ -623,13 +633,13 @@ export default function InstructorDashboard() {
           <div className="flex items-center gap-3 sm:gap-5 flex-wrap w-full sm:w-auto">
             {data.my_reservation.status === 'Pending' && (
               <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Scan within</p>
+                <p className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-1">Scan within</p>
                 <Countdown expiresAt={data.my_reservation.expires_at} onExpired={() => load(true)} />
               </div>
             )}
             {data.my_reservation.status === 'Occupied' && data.my_reservation.occupied_at && (
               <div className="text-left sm:text-right">
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Session started</p>
+                <p className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-1">Session started</p>
                 <p className="text-lg sm:text-xl font-black text-white">
                   {new Date(data.my_reservation.occupied_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
                 </p>
@@ -638,8 +648,8 @@ export default function InstructorDashboard() {
             <div className="flex items-center gap-2.5 w-full sm:w-auto">
               {data.my_reservation.status === 'Pending' && (
                 <Link href="/instructor/scan"
-                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 bg-[#1D5BD6] hover:bg-[#12408F] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-colors shadow-lg shadow-[#1D5BD6]/20 min-h-11">
-                  <QrCode className="w-4 h-4" /> Scan QR Now
+                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 bg-[#1D5BD6] hover:bg-[#12408F] text-white px-5 py-3 rounded-xl text-base font-bold transition-colors shadow-lg shadow-[#1D5BD6]/20 min-h-12">
+                  <QrCode className="w-5 h-5" /> Scan QR Now
                 </Link>
               )}
               {data.my_reservation.status === 'Occupied' && (
@@ -647,7 +657,7 @@ export default function InstructorDashboard() {
                   type="button"
                   onClick={() => setReleaseOpen(true)}
                   disabled={releasing}
-                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 border border-white/10 bg-white/5 hover:bg-red-500/10 hover:border-red-500/30 text-slate-300 hover:text-red-300 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-40 min-h-11"
+                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 border border-white/10 bg-white/5 hover:bg-red-500/10 hover:border-red-500/30 text-slate-200 hover:text-red-300 px-5 py-3 rounded-xl text-base font-semibold transition-all disabled:opacity-40 min-h-12"
                 >
                   Release Room
                 </button>
@@ -657,16 +667,16 @@ export default function InstructorDashboard() {
         </motion.div>
       ) : data ? (
         <motion.div {...revealProps(0, reduceMotion)} className="bg-[#111827] border border-dashed border-white/10 rounded-2xl px-4 sm:px-6 py-4 flex flex-wrap sm:flex-nowrap items-center gap-4">
-          <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center flex-shrink-0">
-            <DoorOpen className="w-5 h-5 text-slate-500" />
+          <div className="w-12 h-12 bg-white/5 rounded-xl flex items-center justify-center flex-shrink-0">
+            <DoorOpen className="w-6 h-6 text-slate-500" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-base font-semibold text-white">No Active Room Session</p>
-            <p className="text-sm text-slate-400 mt-0.5">Request a room below or scan a QR code at any available room entrance</p>
+            <p className="text-lg font-bold text-white">No Active Room Session</p>
+            <p className="text-sm text-slate-300 mt-0.5">Request a room below or scan a QR code at any available room entrance</p>
           </div>
           <Link href="/instructor/scan"
-            className="w-full sm:w-auto justify-center flex-shrink-0 flex items-center gap-2 bg-[#1D5BD6] hover:bg-[#12408F] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-colors shadow-sm shadow-[#1D5BD6]/20">
-            <QrCode className="w-4 h-4" /> Scan QR
+            className="w-full sm:w-auto justify-center flex-shrink-0 flex items-center gap-2 bg-[#1D5BD6] hover:bg-[#12408F] text-white px-5 py-3 min-h-12 rounded-xl text-base font-bold transition-colors shadow-sm shadow-[#1D5BD6]/20">
+            <QrCode className="w-5 h-5" /> Scan QR
           </Link>
         </motion.div>
       ) : null}
@@ -681,7 +691,7 @@ export default function InstructorDashboard() {
               icon={DoorOpen}
               title="Available Rooms"
               action={
-                <span className="inline-flex items-center justify-center min-w-[1.5rem] h-6 px-2 text-xs font-semibold tabular-nums text-slate-300 bg-white/5 rounded-md">
+                <span className="inline-flex items-center justify-center min-w-[2rem] h-7 px-2.5 text-sm font-bold tabular-nums text-slate-200 bg-white/5 rounded-lg">
                   {availableRooms.length}
                 </span>
               }
@@ -689,7 +699,7 @@ export default function InstructorDashboard() {
             {availableRooms.length === 0 ? (
               <div className="flex flex-col items-center justify-center px-6 py-10 text-center">
                 <Building2 className="w-7 h-7 text-slate-600 mb-2" />
-                <p className="text-sm font-medium text-white">No rooms are free right now.</p>
+                <p className="text-base font-semibold text-white">No rooms are free right now.</p>
               </div>
             ) : (
               <RoomsCarousel rooms={availableRooms} />
@@ -703,10 +713,10 @@ export default function InstructorDashboard() {
             {sessions.length === 0 ? (
               <div className="flex flex-col items-center justify-center px-6 py-10 text-center">
                 <CalendarDays className="w-8 h-8 text-slate-600 mb-2" />
-                <p className="text-sm font-semibold text-white">No classes today</p>
+                <p className="text-base font-semibold text-white">No classes today</p>
               </div>
             ) : (
-              <div className="overflow-y-auto overflow-x-hidden" style={{ scrollbarWidth: 'thin', maxHeight: ROOMS_PER_PAGE * ROOM_ROW_PX + 60 }}>
+              <div className="overflow-y-auto overflow-x-hidden" style={{ scrollbarWidth: 'thin', maxHeight: CARD_BODY_PX }}>
                 {sessions.map((sess, i) => {
                   const ongoing  = isOngoing(sess);
                   const upcoming = isUpcoming(sess);
@@ -714,10 +724,10 @@ export default function InstructorDashboard() {
                   const chip     = ongoing ? 'Now' : sess === nextSess ? 'Next' : null;
                   return (
                     <div key={`${sess.id}-${i}`}
-                      className={`flex items-start gap-3 px-5 py-3.5 border-b border-white/5 last:border-b-0 ${ongoing ? 'bg-white/[0.03]' : ''}`}>
+                      className={`flex items-start gap-3 px-5 py-4 border-b border-white/5 last:border-b-0 ${ongoing ? 'bg-white/[0.03]' : ''}`}>
 
-                      <div className="flex flex-col items-center flex-shrink-0 pt-1.5 w-3">
-                        <div className={`w-2 h-2 rounded-full ${
+                      <div className="flex flex-col items-center flex-shrink-0 pt-[7px] w-3">
+                        <div className={`w-2.5 h-2.5 rounded-full ${
                           ongoing  ? 'bg-[#1D5BD6]' :
                           upcoming ? 'bg-slate-400' :
                           'bg-slate-600'
@@ -728,23 +738,25 @@ export default function InstructorDashboard() {
                       </div>
 
                       <div className="flex-1 min-w-0">
-                        <p className={`text-xs tabular-nums mb-1 ${past ? 'text-slate-400' : 'text-slate-300'}`}>
+                        <p className={`text-sm font-semibold tabular-nums mb-1 ${past ? 'text-slate-400' : 'text-slate-200'}`}>
                           {fmt12(sess.start_time)} – {fmt12(sess.end_time)}
                         </p>
                         <div className="flex items-center gap-2 min-w-0">
-                          <p className={`text-sm font-semibold truncate ${past ? 'text-slate-300' : 'text-white'}`}>
+                          <p className={`text-[17px] font-bold truncate ${past ? 'text-slate-300' : 'text-white'}`}>
                             {sess.subject_code}
                           </p>
                           {chip && (
-                            <span className="flex-shrink-0 text-[10px] font-semibold text-[#1D5BD6] bg-[#12408F]/15 px-1.5 py-0.5 rounded-md">
+                            <span className={`flex-shrink-0 text-[13px] font-bold leading-none px-2 py-1 rounded-md ${
+                              chip === 'Now' ? 'bg-[#1D5BD6] text-white' : 'text-[#1D5BD6] bg-[#12408F]/15'
+                            }`}>
                               {chip}
                             </span>
                           )}
                         </div>
-                        <p className={`text-sm mt-0.5 truncate ${past ? 'text-slate-400' : 'text-slate-200'}`}>
+                        <p className={`text-base mt-0.5 truncate ${past ? 'text-slate-400' : 'text-slate-200'}`}>
                           {sess.subject_name}
                         </p>
-                        <p className={`text-xs mt-1 truncate ${past ? 'text-slate-400' : 'text-slate-300'}`}>
+                        <p className={`text-sm mt-1 truncate ${past ? 'text-slate-400' : 'text-slate-300'}`}>
                           {blockCode(sess.year_level, sess.block_name)}
                           {sess.room_name ? ` · ${sess.room_name}` : ' · No room assigned'}
                         </p>
