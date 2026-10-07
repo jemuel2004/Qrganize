@@ -15,6 +15,7 @@ import {
   UserCheck, UserX, X, AlertTriangle, CheckCircle2,
 } from 'lucide-react';
 import { SearchInput, FilterSelect } from '@/components/ui/SearchFilter';
+import { useLivePrograms } from '@/hooks/useLivePrograms';
 
 interface Program {
   id: number;
@@ -118,6 +119,7 @@ export default function DeptChairAccountsClient() {
   const toast = useToast();
   const [accounts, setAccounts] = useState<DeptChairAccount[]>([]);
   const [programs, setPrograms] = useState<Program[]>([]);
+  useLivePrograms(setPrograms);
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [loading, setLoading] = useState(true);

@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { getPageAuthRole } from '@/lib/pageAuth';
 import { isQrCode, qrLinkPath } from '@shared/qrLink';
+import { RealtimeProvider } from '@/context/RealtimeContext';
 import RoomPageClient from './RoomPageClient';
 
 export const metadata: Metadata = { title: 'Room' };
@@ -19,5 +20,10 @@ export default async function RoomPage({ params }: { params: Promise<{ code: str
 
   const role = await getPageAuthRole();
   if (!role) redirect(`/login?next=${encodeURIComponent(qrLinkPath(code))}`);
-  return <RoomPageClient code={isQrCode(code) ? code : null} role={role} />;
+  // Live: the room's status and today's classes follow check-ins, releases and schedule changes
+  return (
+    <RealtimeProvider>
+      <RoomPageClient code={isQrCode(code) ? code : null} role={role} />
+    </RealtimeProvider>
+  );
 }

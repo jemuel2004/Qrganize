@@ -28,6 +28,7 @@ import {
   parseCurriculumVersion,
   type CurriculumVersion,
 } from '@shared/curriculumVersion';
+import { useLivePrograms } from '@/hooks/useLivePrograms';
 
 interface Program { id: number; code: string; name: string; }
 interface Block {
@@ -136,6 +137,7 @@ export default function BlocksPage() {
 
   const [blocks,         setBlocks]         = useState<Block[]>([]);
   const [programs,       setPrograms]       = useState<Program[]>([]);
+  useLivePrograms(setPrograms);
   const [form,           setForm]           = useState(emptyForm);
   const [editId,         setEditId]         = useState<number | null>(null);
   const [modalOpen,      setModalOpen]      = useState(false);

@@ -50,7 +50,10 @@ export default function LoginClient() {
   const [otpCode, setOtpCode]         = useState('');
   const [maskedEmail, setMaskedEmail] = useState('');
   const [resendIn, setResendIn]       = useState(0);
-  const [checkingChallenge, setCheckingChallenge] = useState(true);
+  /** Set once the user types, switches role or signs in — a late background answer never overrides that */
+  const touchedRef = useRef(false);
+  /** A sign-in taking this long is waiting for the server to wake up */
+  const [slowServer, setSlowServer] = useState(false);
   const googleBtnRef = useRef<HTMLDivElement>(null);
   const reduceMotion = useReducedMotion();
   // Bumped each time the flipped-in card finishes turning, so the Google button
@@ -59,13 +62,16 @@ export default function LoginClient() {
   const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
   const googleEnabled = role === 'instructor' && Boolean(googleClientId);
 
+  /* A sign-in code may still be waiting from before a refresh. Asked in the
+     background: the form shows at once and never waits for the server, which
+     can take up to a minute to wake on free hosting (this request wakes it). */
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch('/api/auth/login-otp');
+        const res = await fetch('/api/auth/login-otp', { cache: 'no-store' });
         const data = await res.json().catch(() => ({}));
-        if (cancelled) return;
+        if (cancelled || touchedRef.current) return;
         if (res.ok && data.pending) {
           setStep('otp');
           setMaskedEmail(String(data.masked_email ?? ''));
@@ -78,12 +84,16 @@ export default function LoginClient() {
         }
       } catch {
         /* stay on credentials */
-      } finally {
-        if (!cancelled) setCheckingChallenge(false);
       }
     })();
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (!loading && !googleLoading) return;
+    const timer = window.setTimeout(() => setSlowServer(true), 5_000);
+    return () => { window.clearTimeout(timer); setSlowServer(false); };
+  }, [loading, googleLoading]);
 
   /**
    * Login is a public page with its own default (light) design.
@@ -113,6 +123,7 @@ export default function LoginClient() {
   }
 
   function selectRole(r: Role) {
+    touchedRef.current = true;
     setRole(r);
     setError('');
     setForm({ username: '', password: '' });
@@ -120,6 +131,7 @@ export default function LoginClient() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    touchedRef.current = true;
     if (!form.username.trim()) { setError('Please enter your username or email.'); return; }
     if (!form.password)        { setError('Please enter your password.');           return; }
     setLoading(true);
@@ -237,6 +249,7 @@ export default function LoginClient() {
   }
 
   const handleGoogleCredential = useCallback(async (response: GoogleCredentialResponse) => {
+    touchedRef.current = true;
     setError('');
     setGoogleLoading(true);
     try {
@@ -491,11 +504,7 @@ export default function LoginClient() {
                 ) : null}
               </div>
 
-              {checkingChallenge ? (
-                <div className="flex items-center justify-center py-10">
-                  <span className="w-6 h-6 border-2 border-[#1D5BD6]/30 border-t-[#1D5BD6] rounded-full animate-spin" aria-hidden="true" />
-                </div>
-              ) : step === 'otp' ? (
+              {step === 'otp' ? (
                 <form onSubmit={handleVerifyOtp} noValidate>
                   {errorAlert}
 
@@ -609,7 +618,7 @@ export default function LoginClient() {
                           id="login-username"
                           type="text"
                           value={form.username}
-                          onChange={e => setForm(f => ({ ...f, username: e.target.value }))}
+                          onChange={e => { touchedRef.current = true; setForm(f => ({ ...f, username: e.target.value })); }}
                           placeholder={usernamePlaceholder}
                           autoComplete="username"
                           className={inputCls}
@@ -629,7 +638,7 @@ export default function LoginClient() {
                           id="login-password"
                           type={showPassword ? 'text' : 'password'}
                           value={form.password}
-                          onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+                          onChange={e => { touchedRef.current = true; setForm(f => ({ ...f, password: e.target.value })); }}
                           placeholder="Enter your password"
                           autoComplete="current-password"
                           className={`${inputCls} !pr-12`}
@@ -682,6 +691,21 @@ export default function LoginClient() {
                         </>
                       ) : <>Sign In <ArrowRight className="w-4 h-4" /></>}
                     </button>
+                    <AnimatePresence initial={false}>
+                      {slowServer && (
+                        <motion.p
+                          key="slow-server"
+                          role="status"
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          transition={{ duration: reduceMotion ? 0 : 0.25, ease: [0.22, 1, 0.36, 1] }}
+                          className="overflow-hidden text-center text-[14px] text-[#22406F] leading-snug"
+                        >
+                          <span className="block pt-3">Waking up the server — this can take up to a minute.</span>
+                        </motion.p>
+                      )}
+                    </AnimatePresence>
                   </form>
 
                   {role === 'instructor' && (
@@ -726,7 +750,7 @@ export default function LoginClient() {
             sits on the seam between the branding panel and the sign-in side
             (fixed so it stays centred while the sign-in side scrolls); on mobile
             it sits under the card. */}
-        {step !== 'otp' && !checkingChallenge && (
+        {step !== 'otp' && (
           <button
             type="button"
             onClick={() => selectRole(role === 'admin_chair' ? 'instructor' : 'admin_chair')}

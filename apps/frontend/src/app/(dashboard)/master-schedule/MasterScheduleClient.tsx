@@ -18,6 +18,7 @@ import Link from 'next/link';
 import { isScopedChairRole } from '@/lib/roleAccess';
 import SubjectFacultyPreview from '@/components/SubjectFacultyPreview';
 import { blockCode, isBlockQuery, matchesBlockQuery, programShortCode, squashSearch } from '@shared/blockCode';
+import { useLivePrograms } from '@/hooks/useLivePrograms';
 
 const BLOCK_PAGE_EASE = [0.16, 1, 0.3, 1] as const;
 
@@ -306,6 +307,7 @@ export default function MasterSchedulePage() {
 
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [programs,  setPrograms]  = useState<Program[]>([]);
+  useLivePrograms(setPrograms);
   const [filters,   setFilters]   = useState({
     program_id: '', year_level: '', status: '', search: '',
   });

@@ -17,6 +17,7 @@ import { AlertTriangle, CheckCircle2, ChevronRight, Info } from 'lucide-react';
 import Modal from '@/components/ui/Modal';
 import { Skeleton } from '@/components/ui/skeletons';
 import { useSchoolYear } from '@/context/SchoolYearContext';
+import { useRealtime } from '@/context/RealtimeContext';
 import type { ClassroomDemand, DemandClassStatus } from '@shared/classroomDemand';
 import { SCHOOL_DAY_CLASS_MIN, SCHOOL_DAY_END_MIN, SCHOOL_DAY_START_MIN, minutesLabel } from '@shared/schoolDay';
 import { AnimatePresence, EASE, fmt12, motion, WHITE } from './shared';
@@ -137,8 +138,12 @@ export default function ClassroomDemandSection({ refreshKey = 0 }: { refreshKey?
   const [open, setOpen] = useState(false);
   const [pickedDay, setPickedDay] = useState<string | null>(null);
   const [showHow, setShowHow] = useState(false);
+  const [live, setLive] = useState(0);
 
-  // Fetched once per term (and on Refresh) — no polling; the schedule rarely changes
+  // Live: re-read quietly (no skeleton) when classes, blocks, rooms or the school day change
+  useRealtime(['schedule', 'blocks', 'rooms', 'settings'], () => setLive(n => n + 1));
+
+  // Per term, on Refresh and on live changes
   useEffect(() => {
     if (termLoading) return;
     const c = new AbortController();
@@ -152,7 +157,7 @@ export default function ClassroomDemandSection({ refreshKey = 0 }: { refreshKey?
       })
       .catch(e => { if (!c.signal.aborted) setError(e instanceof Error ? e.message : 'Failed to load classroom demand.'); });
     return () => c.abort();
-  }, [schoolYear, semester, termLoading, refreshKey, retry]);
+  }, [schoolYear, semester, termLoading, refreshKey, retry, live]);
 
   const shell = (body: React.ReactNode) => (
     <section className="bg-white rounded-2xl border border-[#E3E9F3] shadow-[0_1px_3px_rgba(11,42,91,0.06)] overflow-hidden min-w-0">

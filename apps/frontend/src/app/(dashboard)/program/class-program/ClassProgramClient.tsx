@@ -29,6 +29,7 @@ import {
   officialPrintPreviewShellCss,
   semesterHeading,
 } from '@/lib/nemsuOfficialPrintChrome';
+import { useLivePrograms } from '@/hooks/useLivePrograms';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -102,6 +103,7 @@ export default function ClassProgramPage() {
 
   // ── Programs (loaded once — just need the list for the dropdown) ──────────
   const [programs, setPrograms] = useState<Program[]>([]);
+  useLivePrograms(setPrograms);
   const [isChair, setIsChair] = useState(false);
   const [chairProgramId, setChairProgramId] = useState<number | null>(null);
   const [chairNoProgram, setChairNoProgram] = useState(false);

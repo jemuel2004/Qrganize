@@ -43,6 +43,7 @@ import {
   type CurriculumVersion,
 } from '@shared/curriculumVersion';
 import { downloadCurriculumExcel, fetchCurriculumGroups, groupCurriculums, printCurriculum } from './curriculumReport';
+import { useLivePrograms } from '@/hooks/useLivePrograms';
 // BulkAddModal (~44 KB) loads only when opened. xlsx is already on-demand (~900 KB).
 
 const BulkAddModal = dynamic(() => import('./BulkAddModal'), { ssr: false });
@@ -143,6 +144,7 @@ export default function CurriculumPage() {
   const toast = useToast();
   const [curriculums, setCurriculums] = useState<Curriculum[]>([]);
   const [programs, setPrograms]       = useState<Program[]>([]);
+  useLivePrograms(setPrograms);
   const [userRole, setUserRole] = useState<'admin' | 'department_chair' | 'program_chair'>('admin');
   const [chairProgramId, setChairProgramId] = useState<number | null>(null);
   const [filters, setFilters]         = useState({

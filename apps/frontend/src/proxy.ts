@@ -18,7 +18,15 @@ type Session = { state: 'live'; role: string } | { state: 'dead' } | { state: 'u
 const CACHE_MS = 10_000;
 const cache = new Map<string, { at: number; session: Session }>();
 
-async function checkSession(token: string): Promise<Session> {
+/**
+ * How long a page waits for the session check. The free backend sleeps when
+ * idle and takes up to a minute to wake: the sign-in page never waits for it
+ * (it shows at once), other pages give up after a while and go to sign-in.
+ */
+const LOGIN_CHECK_MS = 2_500;
+const PAGE_CHECK_MS = 20_000;
+
+async function checkSession(token: string, timeoutMs: number): Promise<Session> {
   const hit = cache.get(token);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.session;
   let session: Session;
@@ -26,6 +34,7 @@ async function checkSession(token: string): Promise<Session> {
     const res = await fetch(`${BACKEND_URL}/api/auth/session`, {
       headers: { cookie: `auth_token=${encodeURIComponent(token)}` },
       cache: 'no-store',
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (res.ok) {
       const data = await res.json() as { role?: string };
@@ -83,7 +92,7 @@ export async function proxy(req: NextRequest) {
 
   if (pathname === '/' || pathname === '/login') {
     if (token) {
-      const s = await checkSession(token);
+      const s = await checkSession(token, LOGIN_CHECK_MS);
       if (s.state === 'live') {
         // Already signed in: a room QR link goes straight on to that room
         const back = req.nextUrl.searchParams.get('next') ?? '';
@@ -106,7 +115,7 @@ export async function proxy(req: NextRequest) {
   };
   if (!token) return toLogin();
 
-  const s = await checkSession(token);
+  const s = await checkSession(token, PAGE_CHECK_MS);
   if (s.state === 'dead') return clearAuth(toLogin());
   // Backend down: keep the cookie, send to login (every page needs the backend anyway).
   if (s.state === 'unreachable') return NextResponse.redirect(new URL('/login', req.url));

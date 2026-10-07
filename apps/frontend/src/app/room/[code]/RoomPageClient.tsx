@@ -9,6 +9,7 @@ import {
 import SystemLogo from '@/components/ui/SystemLogo';
 import { Skeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
+import { useRealtime } from '@/context/RealtimeContext';
 import { presentScanResult, type ScanResult } from '@/lib/scanResult';
 
 /* ─── Data (GET /api/rooms/by-qr) ─────────────────────────────────────────── */
@@ -87,7 +88,9 @@ export default function RoomPageClient({ code, role }: { code: string | null; ro
   }, [code]);
 
   useEffect(() => { void load(); }, [load]);
-  // Status changes as people check in — refresh quietly every 30 s while the page is shown
+  // Live: check-ins, releases, requests and schedule changes show within seconds
+  useRealtime(['occupancy', 'rooms', 'schedule', 'room-requests'], () => load(true), { enabled: !loading });
+  // The clock moves the current / next class along — re-read every 30 s while shown
   useEffect(() => {
     const t = window.setInterval(() => { if (!document.hidden) void load(true); }, 30_000);
     return () => window.clearInterval(t);

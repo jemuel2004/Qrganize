@@ -22,6 +22,7 @@ import { useScrollLock } from '@/hooks/useScrollLock';
 import { motion, useReducedMotion, type Variants } from 'framer-motion';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import { Skeleton } from '@/components/ui/skeletons';
+import { useLivePrograms } from '@/hooks/useLivePrograms';
 
 interface BlockDetail {
   id: number; program_id: number; program_code: string; program_name: string;
@@ -216,6 +217,7 @@ export default function BlockDetailPage() {
 
   /* ── Filter state for navigation ── */
   const [programs,     setPrograms]     = useState<Program[]>([]);
+  useLivePrograms(setPrograms);
   const [allBlocks,    setAllBlocks]    = useState<BlockSummary[]>([]);
   const [selProgram,   setSelProgram]   = useState('');
   const [selSemester,  setSelSemester]  = useState('');

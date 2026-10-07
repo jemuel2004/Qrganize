@@ -632,9 +632,8 @@ export function buildWorkloadFormModel(input: BuildRegularLoadPrintInput): Workl
   }
 
   return {
-    title: documentKind === 'praise' ? 'FACULTY WORKLOAD — PRAISE LOAD'
-      : documentKind === 'deload' ? 'FACULTY WORKLOAD — ACTUAL LOAD'
-      : 'FACULTY WORKLOAD',
+    // Every form (Actual, Regular, Overload, Praise) carries the same heading — no load name
+    title: 'FACULTY WORKLOAD',
     department: NEMSU_OFFICIAL_DEPT,
     semesterHeading: semesterHeading(semester),
     academicYear: formatAy(academicYear),

@@ -20,6 +20,7 @@ import AnchoredPopover from '@/components/ui/AnchoredPopover';
 import { SearchInput, FilterSelect } from '@/components/ui/SearchFilter';
 import CountFilterTabs from '@/components/ui/CountFilterTabs';
 import SubjectMultiSelect, { type PrioritySubject } from '@/components/ui/SubjectMultiSelect';
+import { useLivePrograms } from '@/hooks/useLivePrograms';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -223,6 +224,7 @@ export default function InstructorAccountsClient() {
   const reduceMotion = useReducedMotion();
   const [accounts, setAccounts] = useState<InstructorAccount[]>([]);
   const [programs, setPrograms] = useState<Program[]>([]);
+  useLivePrograms(setPrograms);
   const [loading, setLoading]   = useState(true);
   const [search, setSearch]     = useState('');
   /** Status tab — applied on screen, so every tab keeps its count */

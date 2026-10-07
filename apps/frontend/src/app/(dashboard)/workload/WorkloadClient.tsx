@@ -54,6 +54,7 @@ import {
   Eye, Award, CheckCircle2, Pencil,
   Trash2, ArrowUpCircle, ArrowDownCircle, ArrowRight, ArrowLeft, Ban,
 } from 'lucide-react';
+import { useLivePrograms } from '@/hooks/useLivePrograms';
 
 interface PrioritySubject { subject_code: string; subject_name: string; }
 interface Faculty {
@@ -395,6 +396,7 @@ export default function WorkloadPage({
   const [faculty, setFaculty] = useState<Faculty[]>([]);
   const [facultyListLoading, setFacultyListLoading] = useState(true);
   const [programs, setPrograms] = useState<Program[]>([]);
+  useLivePrograms(setPrograms);
   const [allBlocks, setAllBlocks] = useState<Block[]>([]);
   const [search, setSearch] = useState('');
   const [filterEmploymentType, setFilterEmploymentType] = useState('');

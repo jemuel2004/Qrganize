@@ -25,6 +25,7 @@ const PUBLIC_API = new Set([
   'POST:/api/auth/verify-email-google',
   'DELETE:/api/auth/verify-email-google',
   'GET:/api/settings/logo',
+  'GET:/api/health',
 ]);
 
 /**

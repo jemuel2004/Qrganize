@@ -24,6 +24,7 @@ import { ListSkeleton, CardSkeleton, Skeleton } from '@/components/ui/skeletons'
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { EmploymentBadge, EMPLOYMENT_COLORS, employmentColors } from '@/components/ui/EmploymentBadge';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
+import { useLivePrograms } from '@/hooks/useLivePrograms';
 
 const FacultyStatsBarChart = dynamic(
   () =>
@@ -363,6 +364,7 @@ export default function FacultyPage() {
   const reduceMotion = useReducedMotion();
   const [faculty, setFaculty] = useState<Faculty[]>([]);
   const [programs, setPrograms] = useState<Program[]>([]);
+  useLivePrograms(setPrograms);
   const [userRole, setUserRole] = useState<'admin' | 'department_chair' | 'program_chair'>('admin');
   const [chairProgramId, setChairProgramId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
