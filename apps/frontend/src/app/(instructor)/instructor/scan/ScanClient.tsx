@@ -15,31 +15,8 @@ import {
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { CardSkeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
-
-/* ─── Types ──────────────────────────────────────────────────────────────── */
-interface ScanResult {
-  status: 'In-Use' | 'Pending' | 'Valid' | 'Late' | 'Overuse' | 'Blocked' | 'Unauthorized' | 'Invalid' | 'Error';
-  scan_status?: 'Valid' | 'Late' | 'Overuse';
-  message: string;
-  scan_time: string;
-  already_occupied?: boolean;
-  /** ISO timestamp from room_occupancy.occupied_at when already checked in */
-  checked_in_at?: string | null;
-  room?: { id: number; name: string; type: string };
-  schedule?: {
-    subject_name: string;
-    session_start: string | null;
-    session_end: string | null;
-    block_name: string;
-    program_code?: string;
-  };
-  occupancy?: { faculty_name: string; status: string; expires_at?: string | null };
-  occupancy_status?: 'Pending' | 'Occupied';
-  authorized_faculty?: string;
-  available_rooms?: { id: number; room_name: string; room_type: string; building: string | null }[];
-  expires_in_mins?: number;
-  error?: string;
-}
+import { qrCodeFromScan } from '@shared/qrLink';
+import { presentScanResult, type ScanResult } from '@/lib/scanResult';
 
 type StatusKey = ScanResult['status'];
 
@@ -132,143 +109,13 @@ function shouldStopCameraAfterResult(result: ScanResult): boolean {
 function haptic(kind: 'success' | 'error' | 'info') {
   try {
     if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return;
+    // Browsers refuse (and warn) before the first tap — e.g. a scan opened from a QR link
+    const activation = (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation;
+    if (activation && !activation.hasBeenActive) return;
     if (kind === 'success') navigator.vibrate(30);
     else if (kind === 'error') navigator.vibrate([40, 40, 40]);
     else navigator.vibrate(20);
   } catch { /* optional */ }
-}
-
-type ModalKind =
-  | 'success'
-  | 'already'
-  | 'pending'
-  | 'late'
-  | 'blocked'
-  | 'unauthorized'
-  | 'invalid'
-  | 'overuse'
-  | 'error';
-
-interface ModalPresentation {
-  kind: ModalKind;
-  title: string;
-  message: string;
-  buttonLabel: string;
-  action: 'done' | 'scan_again';
-  tone: 'success' | 'warning' | 'danger' | 'neutral' | 'info';
-}
-
-function presentScanResult(result: ScanResult): ModalPresentation {
-  if (result.status === 'Error') {
-    return {
-      kind: 'error',
-      title: 'Connection Problem',
-      message: result.message || "We couldn't verify this QR code. Check your connection and try again.",
-      buttonLabel: 'Try Again',
-      action: 'scan_again',
-      tone: 'danger',
-    };
-  }
-  if (result.status === 'Invalid') {
-    return {
-      kind: 'invalid',
-      title: 'Invalid Room QR Code',
-      message: result.message || 'This QR code could not be verified. Please scan a valid QRganize room QR code.',
-      buttonLabel: 'Scan Again',
-      action: 'scan_again',
-      tone: 'neutral',
-    };
-  }
-  if (result.status === 'Blocked') {
-    return {
-      kind: 'blocked',
-      title: 'Unable to Check In',
-      message: result.message || 'This room is currently occupied.',
-      buttonLabel: 'Close',
-      action: 'done',
-      tone: 'danger',
-    };
-  }
-  if (result.status === 'Unauthorized') {
-    return {
-      kind: 'unauthorized',
-      title: 'Unauthorized Room',
-      message: result.message || 'This room is assigned to a different faculty member at this time.',
-      buttonLabel: 'Close',
-      action: 'done',
-      tone: 'danger',
-    };
-  }
-  if (result.status === 'Overuse') {
-    return {
-      kind: 'overuse',
-      title: 'Session Ended',
-      message: result.message || 'The class session has already ended. The scan window is closed.',
-      buttonLabel: 'Close',
-      action: 'done',
-      tone: 'danger',
-    };
-  }
-  if (result.status === 'Pending') {
-    const mins = result.expires_in_mins ?? 15;
-    return {
-      kind: 'pending',
-      title: 'Room Reserved',
-      message: result.message
-        || `This room is reserved for you for ${mins} minutes. Scan the QR code at the room to confirm your check-in.`,
-      buttonLabel: 'Got it',
-      action: 'scan_again',
-      tone: 'warning',
-    };
-  }
-  if (result.status === 'In-Use' && result.already_occupied) {
-    return {
-      kind: 'already',
-      title: 'Already Checked In',
-      message: result.message || 'You are already occupying this room. This room has already been successfully scanned.',
-      buttonLabel: 'Done',
-      action: 'done',
-      tone: 'success',
-    };
-  }
-  if (result.status === 'In-Use' && result.scan_status === 'Late') {
-    return {
-      kind: 'late',
-      title: 'Late Check-In',
-      message: result.message || 'You checked in after the scheduled start time.',
-      buttonLabel: 'Continue',
-      action: 'done',
-      tone: 'warning',
-    };
-  }
-  if (result.status === 'Late') {
-    return {
-      kind: 'late',
-      title: 'Late Check-In',
-      message: result.message || 'You checked in after the scheduled start time.',
-      buttonLabel: 'Continue',
-      action: 'done',
-      tone: 'warning',
-    };
-  }
-  if (result.status === 'In-Use' || result.status === 'Valid') {
-    return {
-      kind: 'success',
-      title: 'Room Occupied Successfully',
-      message: result.message || 'You are now checked in and occupying this room.',
-      buttonLabel: 'Done',
-      action: 'done',
-      tone: 'success',
-    };
-  }
-  return {
-    kind: 'invalid',
-    title: 'Scan Result',
-    message: result.message || 'Scan completed.',
-    buttonLabel: 'Close',
-    action: 'done',
-    tone: 'neutral',
-  };
 }
 
 const cardClass =
@@ -604,12 +451,8 @@ export default function ScanClient() {
             return { width: size, height: size };
           },
         },
-        async (decodedText: string) => {
-          let code = decodedText;
-          try { code = (JSON.parse(decodedText) as { code?: string }).code ?? decodedText; }
-          catch { /* raw */ }
-          await doScan(code);
-        },
+        // A /room/<code> link (new codes), the older JSON text, or the bare code
+        async (decodedText: string) => { await doScan(qrCodeFromScan(decodedText)); },
         () => {},
       );
     } catch (err: unknown) {

@@ -11,7 +11,7 @@ import { daysKey, parseDays } from '@shared/dayCombination';
  *   GET ?academic_year=&semester=  — defaults to the active term; any signed-in
  *        user (Scheduling, Class Program and the workload print all read it).
  *   PUT { academic_year, semester, combinations: [{ days, is_active }] } —
- *        saves the term's whole list (Admin / Program Chair, like Settings).
+ *        saves the term's whole list (Administrator only, like Settings).
  * Existing schedules are never changed; the list only governs new scheduling.
  */
 
@@ -48,7 +48,7 @@ async function PUT_handler(req: NextRequest) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
     if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    if (auth.role !== 'admin' && auth.role !== 'program_chair') {
+    if (auth.role !== 'admin') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 

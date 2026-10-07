@@ -3,17 +3,19 @@ import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { ensureAuditTable } from '@/database/auditSchema';
 
-const PAGE_SIZE = 50;
+/** Entries per page (Audit Logs shows numbered pages) */
+const PAGE_SIZE = 20;
 
 /**
  * GET /api/audit-logs — admin only.
- * ?category=Rooms&q=text&range=today|7d|30d|all&before=<id> (id cursor for "Load more")
- * Returns the newest matching entries plus per-category counts for the range.
+ * ?category=Rooms&q=text&range=today|7d|30d|all&page=<1…>
+ * Returns one page of the newest matching entries, the total for the filter
+ * (for the page numbers) and per-category counts for the range + search.
  */
 export async function GET(req: NextRequest) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || (auth.role !== 'admin' && auth.role !== 'program_chair')) {
+    if (!auth || (auth.role !== 'admin')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     await ensureAuditTable();
@@ -22,7 +24,7 @@ export async function GET(req: NextRequest) {
     const category = sp.get('category') || '';
     const q = (sp.get('q') || '').trim().slice(0, 100);
     const range = sp.get('range') || '7d';
-    const before = Number(sp.get('before')) || null;
+    const page = Math.min(100000, Math.max(1, Math.floor(Number(sp.get('page')) || 1)));
     const since =
       range === 'today' ? `date_trunc('day', NOW() AT TIME ZONE 'Asia/Manila') AT TIME ZONE 'Asia/Manila'`
       : range === '30d' ? `NOW() - INTERVAL '30 days'`
@@ -42,8 +44,7 @@ export async function GET(req: NextRequest) {
     const listParams = [...params];
     const listWhere = [...where];
     if (category) { listParams.push(category); listWhere.push(`category = $${listParams.length}`); }
-    if (before) { listParams.push(before); listWhere.push(`id < $${listParams.length}`); }
-    listParams.push(PAGE_SIZE + 1);
+    listParams.push(PAGE_SIZE, (page - 1) * PAGE_SIZE);
 
     const [list, counts] = await Promise.all([
       query(`
@@ -52,16 +53,20 @@ export async function GET(req: NextRequest) {
         FROM audit_logs
         ${listWhere.length ? `WHERE ${listWhere.join(' AND ')}` : ''}
         ORDER BY id DESC
-        LIMIT $${listParams.length}
+        LIMIT $${listParams.length - 1} OFFSET $${listParams.length}
       `, listParams),
-      before ? Promise.resolve(null) : query(`SELECT category, COUNT(*)::int AS n FROM audit_logs ${base} GROUP BY category`, params),
+      query(`SELECT category, COUNT(*)::int AS n FROM audit_logs ${base} GROUP BY category`, params),
     ]);
 
-    const rows = list.rows;
+    const byCategory = Object.fromEntries((counts.rows as { category: string; n: number }[]).map(r => [r.category, r.n]));
+    // Total for the list's own filter (range + search + category) — drives the page numbers
+    const total = category ? (byCategory[category] ?? 0) : Object.values(byCategory).reduce((a, b) => a + b, 0);
     return NextResponse.json({
-      logs: rows.slice(0, PAGE_SIZE),
-      has_more: rows.length > PAGE_SIZE,
-      counts: counts ? Object.fromEntries((counts.rows as { category: string; n: number }[]).map(r => [r.category, r.n])) : undefined,
+      logs: list.rows,
+      total,
+      page,
+      page_size: PAGE_SIZE,
+      counts: byCategory,
     });
   } catch (error) {
     console.error('[GET /api/audit-logs]', error);

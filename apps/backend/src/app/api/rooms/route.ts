@@ -3,7 +3,7 @@ import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { canManageRooms, roomNameTaken, ROOM_STATUSES, validateRoom } from '@/services/rooms';
 import { withAudit } from '@/services/audit';
-import { generateRoomQr } from '@/services/roomQr';
+import { generateRoomQr, rememberQrSiteOrigin, siteOriginFromRequest } from '@/services/roomQr';
 
 export async function GET(req: NextRequest) {
   try {
@@ -37,6 +37,8 @@ async function POST_handler(req: NextRequest) {
     if (!canManageRooms(auth.role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
     const body = await req.json();
+    // The site the new room's QR link opens (sent by the page)
+    await rememberQrSiteOrigin(siteOriginFromRequest(req, body.site_origin)).catch(() => {});
     const v = validateRoom(body);
     if (!v.ok) return NextResponse.json({ error: v.error }, { status: 400 });
     const status = body.status == null ? 'Active' : String(body.status);

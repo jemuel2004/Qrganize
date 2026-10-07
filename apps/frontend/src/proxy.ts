@@ -49,6 +49,11 @@ function homeForRole(role: string): string {
   return '/dashboard';
 }
 
+/** A room's page (/room/<code>) — what a room QR opens on a phone camera; every role may open it */
+function isQrLink(pathname: string): boolean {
+  return pathname.startsWith('/room/');
+}
+
 function isInstructorArea(pathname: string): boolean {
   return pathname === '/instructor' || pathname.startsWith('/instructor/');
 }
@@ -79,7 +84,12 @@ export async function proxy(req: NextRequest) {
   if (pathname === '/' || pathname === '/login') {
     if (token) {
       const s = await checkSession(token);
-      if (s.state === 'live') return NextResponse.redirect(new URL(homeForRole(s.role), req.url));
+      if (s.state === 'live') {
+        // Already signed in: a room QR link goes straight on to that room
+        const back = req.nextUrl.searchParams.get('next') ?? '';
+        const target = isQrLink(back) && /^\/room\/[A-Za-z0-9%-]{4,100}$/.test(back) ? back : homeForRole(s.role);
+        return NextResponse.redirect(new URL(target, req.url));
+      }
       if (s.state === 'dead') {
         return clearAuth(pathname === '/' ? NextResponse.redirect(new URL('/login', req.url)) : next(req, null));
       }
@@ -88,14 +98,21 @@ export async function proxy(req: NextRequest) {
     return next(req, null);
   }
 
-  if (!token) return NextResponse.redirect(new URL('/login', req.url));
+  // Signed out: sign in first; a room QR link comes back to that room afterwards
+  const toLogin = () => {
+    const url = new URL('/login', req.url);
+    if (isQrLink(pathname)) url.searchParams.set('next', pathname);
+    return NextResponse.redirect(url);
+  };
+  if (!token) return toLogin();
 
   const s = await checkSession(token);
-  if (s.state === 'dead') return clearAuth(NextResponse.redirect(new URL('/login', req.url)));
+  if (s.state === 'dead') return clearAuth(toLogin());
   // Backend down: keep the cookie, send to login (every page needs the backend anyway).
   if (s.state === 'unreachable') return NextResponse.redirect(new URL('/login', req.url));
 
-  // Cross-role page access
+  // Cross-role page access (a room QR link sorts each role out itself)
+  if (isQrLink(pathname)) return next(req, s.role);
   if (s.role === 'instructor' && !isInstructorArea(pathname)) {
     return NextResponse.redirect(new URL('/instructor', req.url));
   }

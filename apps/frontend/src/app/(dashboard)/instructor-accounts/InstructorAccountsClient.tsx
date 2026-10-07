@@ -613,7 +613,8 @@ export default function InstructorAccountsClient() {
               whileHover={reduceMotion ? undefined : { y: -2 }}
               whileTap={reduceMotion ? undefined : { scale: 0.97 }}
               transition={{ duration: 0.18, ease: EASE }}
-              className="flex items-center gap-2 bg-[#1D5BD6] hover:bg-[#164BB5] px-5 h-11 rounded-xl font-semibold text-[15px] transition-colors shadow-lg shadow-[#1D5BD6]/20"
+              // Phones: full width under the title instead of hanging off the right edge
+              className="w-full sm:w-auto flex items-center justify-center gap-2 bg-[#1D5BD6] hover:bg-[#164BB5] px-5 h-11 rounded-xl font-semibold text-[15px] transition-colors shadow-lg shadow-[#1D5BD6]/20"
               style={{ color: '#FFFFFF' }}
             >
               <Plus className="w-4 h-4" style={{ color: '#FFFFFF' }} />
@@ -623,7 +624,7 @@ export default function InstructorAccountsClient() {
         </div>
 
         {/* ── Filters: status tabs (with counts), then search · position · clear ── */}
-        <div className="bg-white rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.06)] p-5 space-y-4">
+        <div className="bg-white rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.06)] p-4 sm:p-5 space-y-4">
           <CountFilterTabs<StatusTab>
             label="Account status"
             layoutId="faculty-accounts-status"
@@ -641,13 +642,16 @@ export default function InstructorAccountsClient() {
               value={search}
               onChange={setSearch}
               placeholder="Search name, username, email, position…"
-              className="flex-1 min-w-[220px]"
+              className="w-full sm:w-auto sm:flex-1 sm:min-w-[220px]"
             />
 
-            <FilterSelect value={filterPosition} onChange={setFilterPosition} label="Position" className="min-w-[180px]">
-              <option value="">All Positions</option>
-              {uniquePositions.map(p => <option key={p} value={p}>{p}</option>)}
-            </FilterSelect>
+            {/* Phones: Position fills the row (Clear sits beside it when shown) */}
+            <div className="flex-1 min-w-0 sm:flex-none">
+              <FilterSelect value={filterPosition} onChange={setFilterPosition} label="Position" className="h-11 sm:min-w-[180px]">
+                <option value="">All Positions</option>
+                {uniquePositions.map(p => <option key={p} value={p}>{p}</option>)}
+              </FilterSelect>
+            </div>
 
             <AnimatePresence initial={false}>
               {filtersOn && (
@@ -702,7 +706,7 @@ export default function InstructorAccountsClient() {
                     <th className="hidden lg:table-cell px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Email</th>
                     <th className="hidden sm:table-cell px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Status</th>
                     <th className="hidden lg:table-cell px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Created</th>
-                    <th className="px-5 py-4 text-right text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Actions</th>
+                    <th className="hidden sm:table-cell px-5 py-4 text-right text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/[0.05]">
@@ -723,12 +727,13 @@ export default function InstructorAccountsClient() {
                       exit={reduceMotion ? { opacity: 0 } : { opacity: 0, transition: { duration: 0.15 } }}
                       // Hover tint follows the theme (globals.css maps hover:bg-white/[0.05] in light mode);
                       // the royal-blue edge marks the row in both themes
-                      className="group cursor-pointer outline-none transition-[background-color,box-shadow] duration-200 hover:bg-white/[0.05] hover:shadow-[inset_4px_0_0_#1D5BD6] focus-visible:shadow-[inset_4px_0_0_#1D5BD6]"
+                      // Phones: the row stacks — details full width, Edit / More under them
+                      className="group cursor-pointer outline-none transition-[background-color,box-shadow] duration-200 hover:bg-white/[0.05] hover:shadow-[inset_4px_0_0_#1D5BD6] focus-visible:shadow-[inset_4px_0_0_#1D5BD6] max-sm:flex max-sm:flex-col"
                     >
 
                       {/* Instructor */}
-                      <td className="px-4 sm:px-5 py-4">
-                        <div className="flex items-center gap-3">
+                      <td className="px-4 sm:px-5 py-4 max-sm:pb-0">
+                        <div className="flex items-start sm:items-center gap-3">
                           <span className="inline-flex rounded-full transition-transform duration-200 group-hover:scale-105">
                             <Avatar account={a} size={10} />
                           </span>
@@ -737,9 +742,12 @@ export default function InstructorAccountsClient() {
                             {a.specialization && (
                               <p className="text-xs text-[#1D5BD6] mt-0.5">{a.specialization}</p>
                             )}
-                            <p className="text-xs text-slate-500 mt-0.5">{a.employee_id || '—'}</p>
                             {/* Phone/tablet: hidden columns fold in under the name */}
-                            <p className="md:hidden text-xs text-slate-400 mt-1 break-all">{a.position} · <span className="font-mono">{a.username}</span></p>
+                            <p className="text-xs text-slate-500 mt-0.5 break-words">
+                              {a.employee_id || '—'}
+                              {a.position && <span className="md:hidden"> · {a.position}</span>}
+                            </p>
+                            <p className="md:hidden text-xs text-slate-400 mt-0.5 font-mono break-words">{a.username}</p>
                             <div className="sm:hidden mt-1.5"><StatusBadge active={a.is_active} /></div>
                           </div>
                         </div>
@@ -772,8 +780,8 @@ export default function InstructorAccountsClient() {
                       </td>
 
                       {/* Actions — clicks here (and in the More menu) don't open the row */}
-                      <td className="px-3 sm:px-5 py-4 cursor-default" onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
-                        <div className="flex items-center justify-end gap-1.5">
+                      <td className="px-3 sm:px-5 py-4 max-sm:pl-[68px] max-sm:pr-4 max-sm:pt-3 cursor-default" onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
+                        <div className="flex items-center justify-start sm:justify-end gap-2 sm:gap-1.5">
 
                           {/* Edit */}
                           <motion.button

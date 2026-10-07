@@ -448,6 +448,7 @@ export default function RoomsPage() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            site_origin: window.location.origin,
             room_name: name,
             room_type: form.room_type,
             capacity: form.capacity === '' ? 0 : Number(form.capacity),

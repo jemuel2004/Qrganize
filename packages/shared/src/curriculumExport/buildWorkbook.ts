@@ -3,6 +3,7 @@ import {
   buildCurriculumExportSheet,
   type CurriculumExportInput,
 } from './model';
+import { FOOTER_FONT, pageFooter } from '../excelFooter';
 
 export interface ExportLogo {
   buffer: Uint8Array;
@@ -78,8 +79,9 @@ export async function buildCurriculumWorkbook(
       printArea: `A1:G${lastRow}`,
       margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.6, header: 0.2, footer: 0.25 },
     },
+    // Candara 10 page footer, like every exported sheet
     headerFooter: {
-      oddFooter: `&L${input.programName || 'Curriculum'}&CNorth Eastern Mindanao State University&RPage &P of &N`,
+      oddFooter: pageFooter(input.programName || 'Curriculum', { center: 'North Eastern Mindanao State University' }),
     },
   });
 
@@ -180,7 +182,7 @@ export async function buildCurriculumWorkbook(
         break;
       case 'footer':
         excelRow.height = 16;
-        excelRow.font = { name: FONT, size: 8, color: { argb: 'FF64748B' } };
+        excelRow.font = { ...FOOTER_FONT, color: { argb: 'FF475569' } };
         excelRow.alignment = { horizontal: 'center', vertical: 'middle' };
         break;
       default:

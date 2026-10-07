@@ -13,7 +13,7 @@ import {
 import { withAudit } from '@/services/audit';
 
 function adminOnly(auth: { role?: string } | null) {
-  return !auth || (auth.role !== 'admin' && auth.role !== 'program_chair');
+  return !auth || (auth.role !== 'admin');
 }
 
 export async function GET(req: NextRequest) {

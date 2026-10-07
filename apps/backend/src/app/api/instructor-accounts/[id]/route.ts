@@ -17,7 +17,7 @@ type Params = { params: Promise<{ id: string }> };
 export async function GET(req: NextRequest, { params }: Params) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'program_chair'].includes(auth.role ?? '')) {
+    if (!auth || auth.role !== 'admin') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -55,7 +55,7 @@ async function PUT_handler(req: NextRequest, { params }: Params) {
     const auth = await getAuthUser(req);
     if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const role = auth.role as string;
-    if (role !== 'admin' && role !== 'program_chair') {
+    if (role !== 'admin') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
@@ -210,7 +210,7 @@ async function PATCH_handler(req: NextRequest, { params }: Params) {
     const auth = await getAuthUser(req);
     if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const role = auth.role as string;
-    if (role !== 'admin' && role !== 'program_chair') {
+    if (role !== 'admin') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
@@ -271,7 +271,7 @@ async function DELETE_handler(req: NextRequest, { params }: Params) {
     const auth = await getAuthUser(req);
     if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const role = auth.role as string;
-    if (role !== 'admin' && role !== 'program_chair') {
+    if (role !== 'admin') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 

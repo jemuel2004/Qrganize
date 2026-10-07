@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs';
+import { pageFooter } from './excelFooter';
 
 /*
  * Room QR codes as a formatted .xlsx — one row per room with its QR image,
@@ -31,6 +32,8 @@ export async function buildRoomQrWorkbook(rows: RoomQrRow[], title = 'Room QR Co
       margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 },
       horizontalCentered: true,
     },
+    // Candara 10 page footer, like every exported sheet
+    headerFooter: { oddFooter: pageFooter(`${title} — North Eastern Mindanao State University`) },
   });
   ws.columns = COL_WIDTHS.map(width => ({ width }));
   const last = COL_WIDTHS.length;

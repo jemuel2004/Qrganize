@@ -21,7 +21,8 @@ import {
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import AnchoredPopover from '@/components/ui/AnchoredPopover';
-import { FilterSelect } from '@/components/ui/SearchFilter';
+import FriendlySelect from '@/components/ui/FriendlySelect';
+import { blockCurriculumVersion } from '@shared/curriculumVersion';
 import { EmploymentBadge } from '@/components/ui/EmploymentBadge';
 import { Skeleton } from '@/components/ui/skeletons';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
@@ -38,10 +39,14 @@ import { fetchDayCombinations } from '@/lib/dayCombinations';
 
 interface FacultyOption { id: number; name: string; employment_status: string; position: string }
 interface ProgramOption { id: number; code: string; name: string }
-interface BlockOption { id: number; block_name: string; curriculum_version?: string; subject_count?: number }
+interface BlockOption { id: number; block_name: string; year_level: string; curriculum_version?: string; subject_count?: number }
 type Busy = 'excel' | 'print' | null;
 
-const YEAR_LEVELS = ['1st Year', '2nd Year', '3rd Year', '4th Year'];
+/** "2nd Year" → "2" (Year & Block reads 1A, 1B, 2A… as on Faculty Workload) */
+const yearNum = (yearLevel: string) => yearLevel.match(/\d+/)?.[0] ?? yearLevel;
+
+/** Program choices for the big dropdown: code, full name under it */
+const programOptions = (programs: ProgramOption[]) => programs.map(p => ({ value: String(p.id), label: p.code, hint: p.name }));
 
 /** Searchable faculty picker — grouped Permanent / Contractual, A–Z within each */
 function FacultyPicker({ faculty, value, onChange }: {
@@ -304,21 +309,22 @@ function ClassProgramReport({ programs, semester, schoolYear }: {
   const blockName = blocks.find(b => String(b.id) === block)?.block_name;
   const summary = blockName ? `${progCode} · ${year} · Block ${blockName}` : null;
 
+  // Every year level at once — the Year & Block list runs 1A, 1B, 2A…
   useEffect(() => {
-    if (!program || !year || !semester || !schoolYear) return;
+    if (!program || !semester || !schoolYear) return;
     const ctrl = new AbortController();
-    const params = new URLSearchParams({ program_id: program, year_level: year, semester, academic_year: schoolYear });
+    const params = new URLSearchParams({ program_id: program, semester, academic_year: schoolYear });
     fetch(`/api/blocks?${params}`, { signal: ctrl.signal })
       .then(r => (r.ok ? r.json() : { blocks: [] }))
       .then(d => setBlocks((d.blocks ?? []) as BlockOption[]))
       .catch(() => {})
       .finally(() => { if (!ctrl.signal.aborted) setBlocksLoading(false); });
     return () => ctrl.abort();
-  }, [program, year, semester, schoolYear]);
+  }, [program, semester, schoolYear]);
 
   // Live updates: blocks added or removed elsewhere (the picked block stays picked)
-  const blocksQuery = program && year && semester && schoolYear
-    ? new URLSearchParams({ program_id: program, year_level: year, semester, academic_year: schoolYear }).toString()
+  const blocksQuery = program && semester && schoolYear
+    ? new URLSearchParams({ program_id: program, semester, academic_year: schoolYear }).toString()
     : '';
   const shownBlocksQuery = useRef('');
   useEffect(() => { shownBlocksQuery.current = blocksQuery; }, [blocksQuery]);
@@ -373,26 +379,39 @@ function ClassProgramReport({ programs, semester, schoolYear }: {
     >
       <div>
         <label className={LABEL}>Program</label>
-        <FilterSelect value={program} onChange={v => { setProgram(v); setYear(''); setBlock(''); setBlocks([]); }} label="Program">
-          <option value="">Select program…</option>
-          {programs.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
-        </FilterSelect>
+        <FriendlySelect
+          value={program}
+          onChange={v => { setProgram(v); setYear(''); setBlock(''); setBlocks([]); setBlocksLoading(!!v); }}
+          label="Program"
+          placeholder="Select program…"
+          minPanelWidth={320}
+          showHintInTrigger
+          options={programOptions(programs)}
+        />
       </div>
-      <div className="grid grid-cols-2 gap-2.5">
-        <div>
-          <label className={LABEL}>Year Level</label>
-          <FilterSelect value={year} onChange={v => { setYear(v); setBlock(''); setBlocks([]); setBlocksLoading(!!v); }} label="Year Level" disabled={!program}>
-            <option value="">Select…</option>
-            {YEAR_LEVELS.map(y => <option key={y} value={y}>{y}</option>)}
-          </FilterSelect>
-        </div>
-        <div>
-          <label className={LABEL}>Block</label>
-          <FilterSelect value={block} onChange={setBlock} label="Block" disabled={!year || blocksLoading}>
-            <option value="">{blocksLoading ? 'Loading…' : year && blocks.length === 0 ? 'No blocks' : 'Select…'}</option>
-            {blocks.map(b => <option key={b.id} value={b.id}>Block {b.block_name}</option>)}
-          </FilterSelect>
-        </div>
+      <div>
+        <label className={LABEL}>Year &amp; Block</label>
+        <FriendlySelect
+          value={block}
+          onChange={v => { setBlock(v); setYear(blocks.find(b => String(b.id) === v)?.year_level ?? ''); }}
+          label="Year & Block"
+          placeholder="Select year & block…"
+          disabled={!program || blocksLoading || blocks.length === 0}
+          disabledText={!program ? 'Select a program first' : blocksLoading ? 'Loading blocks…' : 'No blocks this semester'}
+          minPanelWidth={300}
+          searchable
+          searchPlaceholder="Search, e.g. 1A"
+          options={[...blocks]
+            .sort((a, b) => yearNum(a.year_level).localeCompare(yearNum(b.year_level), undefined, { numeric: true })
+              || a.block_name.localeCompare(b.block_name, undefined, { numeric: true }))
+            .map(b => ({
+              value: String(b.id),
+              label: `${yearNum(b.year_level)}${b.block_name}`,
+              hint: `${b.year_level}, Block ${b.block_name} · ${curriculumVersionLabel(blockCurriculumVersion(b.curriculum_version))}`,
+              badge: b.subject_count ? `${b.subject_count} subjects` : undefined,
+              badgeTone: 'muted' as const,
+            }))}
+        />
       </div>
     </ReportCard>
   );
@@ -454,16 +473,26 @@ function CurriculumReport({ programs }: { programs: ProgramOption[] }) {
     >
       <div>
         <label className={LABEL}>Program</label>
-        <FilterSelect value={program} onChange={v => { setProgram(v); setRows(null); }} label="Program">
-          <option value="">Select program…</option>
-          {programs.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
-        </FilterSelect>
+        <FriendlySelect
+          value={program}
+          onChange={v => { setProgram(v); setRows(null); }}
+          label="Program"
+          placeholder="Select program…"
+          minPanelWidth={320}
+          showHintInTrigger
+          options={programOptions(programs)}
+        />
       </div>
       <div>
         <label className={LABEL}>Curriculum</label>
-        <FilterSelect value={version} onChange={v => { setVersion(v as CurriculumVersion); setRows(null); }} label="Curriculum" disabled={!program}>
-          {CURRICULUM_VERSIONS.map(v => <option key={v} value={v}>{curriculumVersionLabel(v)}</option>)}
-        </FilterSelect>
+        <FriendlySelect
+          value={version}
+          onChange={v => { setVersion(v as CurriculumVersion); setRows(null); }}
+          label="Curriculum"
+          disabled={!program}
+          disabledText="Select a program first"
+          options={CURRICULUM_VERSIONS.map(v => ({ value: v, label: curriculumVersionLabel(v) }))}
+        />
       </div>
     </ReportCard>
   );
@@ -512,11 +541,16 @@ function RoomQrReport({ rooms }: { rooms: RoomQR[] }) {
     >
       <div>
         <label className={LABEL}>Rooms</label>
-        <FilterSelect value={type} onChange={v => setType(v as typeof type)} label="Rooms">
-          <option value="All">All rooms</option>
-          <option value="Lecture">Lecture rooms</option>
-          <option value="Laboratory">Laboratory rooms</option>
-        </FilterSelect>
+        <FriendlySelect
+          value={type}
+          onChange={v => setType(v as typeof type)}
+          label="Rooms"
+          options={([
+            ['All', 'All rooms', rooms.length],
+            ['Lecture', 'Lecture rooms', rooms.filter(r => !isLab(r.room_type)).length],
+            ['Laboratory', 'Laboratory rooms', rooms.filter(r => isLab(r.room_type)).length],
+          ] as const).map(([value, label, n]) => ({ value, label, badge: String(n), badgeTone: 'blue' as const }))}
+        />
       </div>
     </ReportCard>
   );

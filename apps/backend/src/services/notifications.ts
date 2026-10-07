@@ -24,6 +24,8 @@ export type NotificationType =
   | 'room_request_pending'
   | 'workload_completed'
   | 'schedule_completed'
+  | 'class_today'
+  | 'class_starting'
   | 'system_alert';
 
 // Table DDL and the condition-alert types live with the schema (the migrations use them too)

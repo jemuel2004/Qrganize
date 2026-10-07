@@ -12,7 +12,7 @@
  * covers the history/report side.
  */
 
-import { useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { AnimatePresence, motion, useDragControls, useReducedMotion } from 'framer-motion';
 import { BookOpen, ChevronRight, Clock, DoorOpen, Hourglass, Loader2, Monitor, Printer, User, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import BackButton from '@/components/ui/BackButton';
@@ -591,6 +591,22 @@ export default function RoomMonitoringClient() {
   const [search, setSearch] = useState('');
   /** Room whose schedule is open */
   const [openId, setOpenId] = useState<number | null>(null);
+  const toast = useToast();
+
+  /* Opened from a room's QR link (/q/<code> on a phone camera): open that room.
+     The code leaves the address bar so a refresh doesn't reopen it. */
+  useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get('code');
+    if (!code) return;
+    window.history.replaceState(null, '', window.location.pathname);
+    fetch(`/api/rooms/by-qr?code=${encodeURIComponent(code)}`)
+      .then(r => r.json().then(d => ({ ok: r.ok, d })))
+      .then(({ ok, d }) => {
+        if (ok && d.room?.id) setOpenId(Number(d.room.id));
+        else toast.error(d.error || 'This QR code is not linked to an active room.');
+      })
+      .catch(() => toast.error('Could not open that room. Check your connection.'));
+  }, [toast]);
 
   const rooms = useMemo(() => {
     if (!data) return [] as RoomNow[];

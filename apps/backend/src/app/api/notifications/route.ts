@@ -3,6 +3,7 @@ import { getAuthUser } from '@/auth/auth';
 import { query } from '@/database/db';
 import { CONDITION_TYPES_SQL, ensureNotificationsTable } from '@/services/notifications';
 import { syncWorkloadMonitoringNotifications } from '@/services/workloadMonitoring';
+import { syncClassReminders } from '@/services/classReminders';
 
 export async function GET(req: NextRequest) {
   try {
@@ -17,6 +18,10 @@ export async function GET(req: NextRequest) {
     await ensureNotificationsTable();
     if (authUser.role === 'admin' || authUser.role === 'department_chair' || authUser.role === 'program_chair') {
       await syncWorkloadMonitoringNotifications(false);
+    }
+    // Faculty: today's classes and the one starting now (made once each, see classReminders)
+    if (authUser.role === 'instructor' && authUser.faculty_id) {
+      await syncClassReminders(Number(authUser.faculty_id));
     }
 
     const { searchParams } = new URL(req.url);

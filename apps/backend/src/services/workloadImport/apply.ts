@@ -9,7 +9,7 @@ import { parseWorkloadSheet, roomKey } from '@shared/workloadImport';
 import { needsOneRoomSql } from '@shared/subjectCategory';
 import { SCHOOL_DAY_END_MIN, SCHOOL_DAY_LABEL, SCHOOL_DAY_START_MIN, minutesHHMM } from '@shared/schoolDay';
 import { findScheduleConflicts, type ScheduleConflict } from '@/services/scheduleConflicts';
-import { generateRoomQr } from '@/services/roomQr';
+import { ensureRoomQrColumn, generateRoomQr } from '@/services/roomQr';
 import { getWorkloadPolicy } from '@/services/workloadPolicy';
 import { loadFacultyLoadSummaries } from '@/services/facultyLoadSummaries';
 import { syncWorkloadMonitoringNotifications } from '@/services/workloadMonitoring';
@@ -127,6 +127,7 @@ export async function runWorkloadImport(options: ImportOptions): Promise<ImportR
   // Pool-level setup before the transaction (idempotent; nothing is changed if present)
   await ensureRealtimeTable();
   await ensureAuditTable();
+  await ensureRoomQrColumn(); // new rooms get their QR inside the transaction
   const policy = await getWorkloadPolicy();
   const passwordHash = await bcrypt.hash(options.initialPassword, 12);
 

@@ -1,4 +1,4 @@
-import { PROGRAM_CHAIR_BLOCKED_PAGES } from '@/lib/roleAccess';
+import { CHAIR_BLOCKED_PAGES } from '@/lib/roleAccess';
 
 export interface NavChild {
   href: string;
@@ -85,30 +85,20 @@ export const ALL_NAV_SECTIONS: NavSection[] = [
 ];
 
 /**
- * Program Chair has the same menu as the Admin. Faculty is view-only for them
- * and Block Creation shows only their own program (see lib/roleAccess.ts).
+ * Both chair roles have the Admin's menu without the System administration
+ * pages — Faculty / Department Chair / Program Chair Accounts, Audit Logs,
+ * Error Logs and system Settings (lib/roleAccess.ts CHAIR_BLOCKED_PAGES; the
+ * backend refuses them too). Their own account settings stay in "Account".
+ * For a Program Chair, Faculty is view-only and Block Creation shows only
+ * their own program.
  */
-const PROGRAM_CHAIR_HIDDEN = new Set<string>(PROGRAM_CHAIR_BLOCKED_PAGES);
-
-/**
- * Department Chair is near-admin: it only loses the dedicated faculty
- * account/credential-management surface (Instructor Accounts + Program Chair
- * Accounts, under "Faculty Accounts") — enforced on the backend regardless,
- * this just avoids showing a page that would 403 on every request.
- */
-const DEPARTMENT_CHAIR_HIDDEN = new Set([
-  '/instructor-accounts',
-  '/department-chair-accounts',
-  '/dept-chair-accounts',
-  '/settings',
-  '/audit-logs',
-  '/error-logs',
-]);
+const CHAIR_HIDDEN = new Set<string>(CHAIR_BLOCKED_PAGES);
+const PROGRAM_CHAIR_HIDDEN = CHAIR_HIDDEN;
+const DEPARTMENT_CHAIR_HIDDEN = CHAIR_HIDDEN;
 
 const PROGRAM_CHAIR_ACCOUNT_SECTION: NavSection = {
   id: 'account',
   label: 'Account',
-  // "My Account" — System → Settings is also in their menu now
   items: [{ href: '/dept-chair/account', label: 'My Account' }],
 };
 

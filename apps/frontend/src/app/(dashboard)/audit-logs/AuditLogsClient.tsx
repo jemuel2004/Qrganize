@@ -4,13 +4,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import {
   KeyRound, UserCog, BookOpen, CalendarClock, Briefcase, DoorOpen, Settings2,
-  Search, ChevronRight, Loader2, ScrollText, ShieldAlert, Clock, User, Globe, X,
+  Search, ChevronRight, ScrollText, ShieldAlert, Clock, User, Globe, X,
 } from 'lucide-react';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import Modal from '@/components/ui/Modal';
+import Pagination from '@/components/ui/Pagination';
 import { Skeleton } from '@/components/ui/skeletons';
 import { useRealtime } from '@/context/RealtimeContext';
+import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 
 /* ─── Types & constants ─────────────────────────────────────────── */
 interface AuditLog {
@@ -20,6 +22,10 @@ interface AuditLog {
 }
 
 const EASE = [0.4, 0, 0.2, 1] as const;
+/** Entries per page — the API's page size */
+const PAGE_SIZE = 20;
+
+interface AuditPage { logs: AuditLog[]; total: number; page: number; page_size?: number; counts?: Record<string, number> }
 
 const CATEGORIES: { id: string; icon: React.ElementType; color: string; tint: string }[] = [
   // One palette for every category — the icon tells them apart, not the colour
@@ -77,86 +83,82 @@ export default function AuditLogsClient() {
   const [counts, setCounts] = useState<Record<string, number>>({});
   /** Category counts arrive with the first page — until then the chips show a placeholder, not 0 */
   const [countsReady, setCountsReady] = useState(false);
-  const [hasMore, setHasMore] = useState(false);
+  /** Entries matching the filter (all pages) — drives the page numbers */
+  const [matching, setMatching] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
   const [picked, setPicked] = useState<AuditLog | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const listRef = useRef<HTMLElement | null>(null);
+  // Same skeleton time as the other pages
+  const showSkeleton = useMinLoading(loading, LOADING_DELAY);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQ(q.trim()), 300);
     return () => clearTimeout(t);
   }, [q]);
 
-  const fetchPage = useCallback(async (before?: number) => {
-    abortRef.current?.abort();
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
-    const sp = new URLSearchParams({ range });
-    if (category) sp.set('category', category);
-    if (debouncedQ) sp.set('q', debouncedQ);
-    if (before) sp.set('before', String(before));
-    const res = await fetch(`/api/audit-logs?${sp}`, { signal: ctrl.signal });
-    if (!res.ok) throw new Error('Could not load audit logs.');
-    return res.json() as Promise<{ logs: AuditLog[]; has_more: boolean; counts?: Record<string, number> }>;
-  }, [range, category, debouncedQ]);
-
-  useEffect(() => {
-    let alive = true;
-    setLoading(true); setError('');
-    fetchPage()
-      .then(d => { if (!alive) return; setLogs(d.logs); setHasMore(d.has_more); if (d.counts) setCounts(d.counts); setCountsReady(true); })
-      .catch(e => { if (alive && (e as Error).name !== 'AbortError') { setError((e as Error).message); setCountsReady(true); } })
-      .finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; abortRef.current?.abort(); };
-  }, [fetchPage]);
-
-  /* Live updates: new activity appears at the top while the pages already
-     loaded below stay (filters, search and an open entry are untouched). If
-     more than a page of activity arrived at once, the list restarts from the
-     newest page so it never has a gap. */
   const filterQuery = useMemo(() => {
     const sp = new URLSearchParams({ range });
     if (category) sp.set('category', category);
     if (debouncedQ) sp.set('q', debouncedQ);
     return sp.toString();
   }, [range, category, debouncedQ]);
-  const shownQuery = useRef(filterQuery);
-  useEffect(() => { shownQuery.current = filterQuery; }, [filterQuery]);
-  const shownLogs = useRef(logs);
-  useEffect(() => { shownLogs.current = logs; }, [logs]);
+
+  // A new filter or search starts again from page 1
+  useEffect(() => { setPage(1); }, [filterQuery]);
+
+  const apply = useCallback((d: AuditPage) => {
+    setLogs(d.logs);
+    setMatching(d.total);
+    if (d.counts) setCounts(d.counts);
+    setCountsReady(true);
+  }, []);
+
+  useEffect(() => {
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    setLoading(true); setError('');
+    fetch(`/api/audit-logs?${filterQuery}&page=${page}`, { signal: ctrl.signal })
+      .then(res => { if (!res.ok) throw new Error('Could not load audit logs.'); return res.json() as Promise<AuditPage>; })
+      .then(d => {
+        if (ctrl.signal.aborted) return;
+        // Past the last page (entries went away) → go to the last page that has any
+        const last = Math.max(1, Math.ceil(d.total / PAGE_SIZE));
+        if (page > last) { setPage(last); return; }
+        apply(d);
+      })
+      .catch(e => { if (!ctrl.signal.aborted && (e as Error).name !== 'AbortError') { setError((e as Error).message); setCountsReady(true); } })
+      .finally(() => { if (!ctrl.signal.aborted) setLoading(false); });
+    return () => ctrl.abort();
+  }, [filterQuery, page, apply]);
+
+  /* Live updates: page 1 refreshes in place, so new activity appears at the
+     top. On a later page the rows stay put (they would shift under the
+     reader) — only the counts and page numbers update. */
+  const shownQuery = useRef(`${filterQuery}|${page}`);
+  useEffect(() => { shownQuery.current = `${filterQuery}|${page}`; }, [filterQuery, page]);
   useRealtime(['audit'], () => {
-    const query = filterQuery;
-    return fetch(`/api/audit-logs?${query}`)
-      .then(r => (r.ok ? r.json() : null))
-      .then((d: { logs: AuditLog[]; has_more: boolean; counts?: Record<string, number> } | null) => {
-        if (!d || shownQuery.current !== query) return;
+    const key = `${filterQuery}|${page}`;
+    return fetch(`/api/audit-logs?${filterQuery}&page=${page}`)
+      .then(r => (r.ok ? (r.json() as Promise<AuditPage>) : null))
+      .then(d => {
+        if (!d || shownQuery.current !== key) return;
+        if (page === 1) { apply(d); return; }
+        setMatching(d.total);
         if (d.counts) setCounts(d.counts);
-        const prev = shownLogs.current;
-        const seen = new Set(prev.map(l => l.id));
-        const fresh = d.logs.filter(l => !seen.has(l.id));
-        if (fresh.length === 0) return;
-        if (prev.length > 0 && fresh.length === d.logs.length && d.has_more) {
-          setLogs(d.logs); // more than a page arrived — restart from the newest
-          setHasMore(d.has_more);
-        } else {
-          setLogs([...fresh, ...prev]);
-        }
       })
       .catch(() => {});
-  }, { enabled: !loading && !loadingMore });
+  }, { enabled: !loading });
 
-  const loadMore = async () => {
-    if (!logs.length) return;
-    setLoadingMore(true);
-    try {
-      const d = await fetchPage(logs[logs.length - 1].id);
-      setLogs(prev => [...prev, ...d.logs]); setHasMore(d.has_more);
-    } catch (e) {
-      if ((e as Error).name !== 'AbortError') setError((e as Error).message);
-    } finally { setLoadingMore(false); }
-  };
+  const pageCount = Math.max(1, Math.ceil(matching / PAGE_SIZE));
+  function goToPage(next: number) {
+    setPage(next);
+    // Back to the top of the list, so the new page reads from its first entry
+    listRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
 
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   const groups = useMemo(() => {
@@ -218,8 +220,8 @@ export default function AuditLogsClient() {
       </section>
 
       {/* ── List ── */}
-      <section className="bg-white rounded-2xl border border-[#E3E9F3] overflow-hidden shadow-[0_8px_24px_-18px_rgba(11,42,91,0.35)]">
-        {loading ? (
+      <section ref={listRef} className="scroll-mt-4 bg-white rounded-2xl border border-[#E3E9F3] overflow-hidden shadow-[0_8px_24px_-18px_rgba(11,42,91,0.35)]">
+        {showSkeleton ? (
           <div role="status" aria-live="polite" aria-label="Loading activity">
             {/* Same shape as the list: a day header, then rows */}
             <div className="px-5 py-2.5 bg-[#F6F9FE] border-b border-[#EEF2F7]">
@@ -249,7 +251,7 @@ export default function AuditLogsClient() {
           </div>
         ) : (
           <motion.div
-            key={`${range}|${category}`}
+            key={`${range}|${category}|${page}`}
             initial={reduceMotion ? false : { opacity: 0, x: 16 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.3, ease: EASE }}
@@ -295,16 +297,16 @@ export default function AuditLogsClient() {
                 </ul>
               </div>
             ))}
-            {hasMore && (
-              <div className="p-4 flex justify-center border-t border-[#EEF2F7]">
-                <motion.button type="button" onClick={loadMore} disabled={loadingMore}
-                  whileHover={reduceMotion ? undefined : { y: -2 }} whileTap={reduceMotion ? undefined : { scale: 0.98 }}
-                  className="inline-flex items-center gap-2 h-11 px-6 rounded-xl text-[15px] font-semibold bg-[#1D5BD6] hover:bg-[#164BB5] disabled:opacity-70 transition-colors"
-                  style={{ color: '#FFFFFF' }}>
-                  {loadingMore ? <><Loader2 className="w-4 h-4 animate-spin" /> Loading…</> : 'Load more'}
-                </motion.button>
-              </div>
-            )}
+            <Pagination
+              page={page}
+              pageCount={pageCount}
+              onChange={goToPage}
+              layoutId="audit-pages"
+              total={matching}
+              pageSize={PAGE_SIZE}
+              noun={matching === 1 ? 'entry' : 'entries'}
+              className="px-4 sm:px-5 py-4 border-t border-[#EEF2F7]"
+            />
           </motion.div>
         )}
       </section>

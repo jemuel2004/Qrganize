@@ -6,7 +6,7 @@ import { DEFAULT_WORKLOAD_POLICY, LOAD_GRACE_UNITS, WORKLOAD_POLICY_LIMITS, pars
 
 /**
  * GET /api/settings/workload-policy — the current workload limits (any signed-in user;
- * every load page shows them). PUT — change them (Administrator / Program Chair).
+ * every load page shows them). PUT — change them (Administrator only).
  */
 export async function GET(req: NextRequest) {
   try {
@@ -26,8 +26,8 @@ async function PUT_handler(req: NextRequest) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
     if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    if (auth.role !== 'admin' && auth.role !== 'program_chair') {
-      return NextResponse.json({ error: 'Only an Administrator or Program Chair can change the workload limits.' }, { status: 403 });
+    if (auth.role !== 'admin') {
+      return NextResponse.json({ error: 'Only an Administrator can change the workload limits.' }, { status: 403 });
     }
 
     const parsed = parseWorkloadPolicy(await req.json().catch(() => null));

@@ -13,6 +13,10 @@ export interface RoomQR {
   qr_code_id: string | null;
   qr_data_url: string | null;
   qr_generated_at: string | null;
+  /** The QR holds the scan link — a phone's own camera opens it */
+  camera_ready?: boolean;
+  /** The address the QR opens (https://<site>/room/<code>) */
+  qr_link?: string | null;
 }
 
 export function downloadQR(room: RoomQR) {

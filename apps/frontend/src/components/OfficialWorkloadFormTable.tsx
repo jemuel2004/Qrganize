@@ -88,8 +88,8 @@ function ComponentChip({ kind }: { kind: 'lec' | 'lab' }) {
     : <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-[#EFF6FF] text-[#1D5BD6] border border-[#BFDBFE]">Lecture</span>;
 }
 
-/** Solid navy Block badge (e.g. "BSIT 1A") — plain text on paper. */
-function BlockBadge({ course }: { course: string }) {
+/** Solid navy Block badge (e.g. "BSIT 1A") — plain text on paper. Also used by Class Program. */
+export function BlockBadge({ course }: { course: string }) {
   if (!course) return null;
   return (
     <>

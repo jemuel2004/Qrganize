@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs';
+import { pageFooter } from './excelFooter';
 
 /*
  * SUMMARY OF FACULTY WORKLOAD as data — built once (frontend
@@ -103,6 +104,8 @@ export async function buildWorkloadSummaryWorkbook(
       margins: { left: 0.4, right: 0.4, top: 0.45, bottom: 0.5, header: 0.2, footer: 0.2 },
       horizontalCentered: true,
     },
+    // Candara 10 page footer, like every exported sheet
+    headerFooter: { oddFooter: pageFooter(`Summary of Faculty Workload — ${m.semesterHeading}, A.Y. ${m.academicYear}`) },
     views: [{ showGridLines: false }],
   });
   ws.columns = COL_WIDTHS.map(width => ({ width }));

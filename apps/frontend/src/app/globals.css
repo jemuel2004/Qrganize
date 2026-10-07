@@ -853,6 +853,11 @@ html.light [class~="bg-slate-900"] { scrollbar-color: rgba(70,95,135,0.28) trans
 html:not(.light) {
   color-scheme: dark;
 }
+/* Light theme: say so, so Samsung Internet's / Android Chrome's forced dark
+   mode doesn't invert the page (the app has its own dark theme) */
+html.light {
+  color-scheme: only light;
+}
 
 /* ━━ Page / card / panel backgrounds ━━━━━━━━━━━━━━━━━━━━ */
 html:not(.light) [class~="bg-white"] {

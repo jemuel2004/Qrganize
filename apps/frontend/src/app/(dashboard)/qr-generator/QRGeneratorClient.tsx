@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import {
-  BookOpen, CheckCircle2, Copy, Download, Loader2, Monitor, Printer, QrCode, RotateCcw, Search, Sparkles, X,
+  BookOpen, CheckCircle2, Copy, Download, Loader2, Monitor, Printer, QrCode, RotateCcw, Search, Smartphone, Sparkles, X,
 } from 'lucide-react';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
@@ -45,7 +45,9 @@ function Segmented<T extends string>({ value, options, onChange }: {
 }) {
   const reduceMotion = useReducedMotion();
   return (
-    <div className="flex flex-wrap gap-2.5" role="tablist">
+    /* Phones: three equal tiles (icon + number, label under it); from sm the
+       usual row of buttons */
+    <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap sm:gap-2.5" role="tablist">
       {options.map(o => {
         const on = o.key === value;
         return (
@@ -64,18 +66,23 @@ function Segmented<T extends string>({ value, options, onChange }: {
               boxShadow: on ? `0 10px 22px -10px ${o.color}` : '0 0 0 rgba(0,0,0,0)',
             }}
             transition={{ duration: reduceMotion ? 0 : 0.25, ease: EASE }}
-            className="flex-shrink-0 inline-flex items-center gap-2.5 px-5 h-12 rounded-2xl border-2 text-[15px] font-bold"
+            className="min-w-0 flex flex-col items-center justify-center gap-1 min-h-[64px] px-1 py-2 rounded-2xl border-2 font-bold text-center sm:flex-shrink-0 sm:inline-flex sm:flex-row sm:gap-2.5 sm:px-5 sm:py-0 sm:h-12 sm:min-h-0 sm:text-[15px]"
           >
-            {o.icon && <o.icon className="w-5 h-5" />}
-            {o.label}
-            {o.count != null && (
-              <span
-                className="min-w-7 h-7 px-2 rounded-full text-[13px] font-bold inline-flex items-center justify-center"
-                style={on ? { backgroundColor: 'rgba(255,255,255,0.25)', color: '#FFFFFF' } : { backgroundColor: '#FFFFFF', color: o.color }}
-              >
-                {o.count}
-              </span>
-            )}
+            <span className="flex items-center justify-center gap-1.5 sm:contents">
+              {o.icon && <o.icon className="w-5 h-5 flex-shrink-0" />}
+              {o.count != null && (
+                <span
+                  className="text-[19px] leading-none tabular-nums sm:order-last sm:min-w-7 sm:h-7 sm:px-2 sm:rounded-full sm:text-[14px] sm:inline-flex sm:items-center sm:justify-center sm:bg-[var(--pill-bg)]"
+                  style={{
+                    ['--pill-bg' as string]: on ? 'rgba(255,255,255,0.25)' : '#FFFFFF',
+                    color: on ? '#FFFFFF' : o.color,
+                  }}
+                >
+                  {o.count}
+                </span>
+              )}
+            </span>
+            <span className="max-w-full leading-tight text-[length:clamp(12px,3.5vw,14px)] sm:text-[15px] sm:leading-normal">{o.label}</span>
           </motion.button>
         );
       })}
@@ -99,6 +106,8 @@ export default function QRGeneratorPage() {
   const [success, setSuccess] = useState<string | null>(null);   // overlay text in the preview
   const [saved, setSaved] = useState<number | null>(null);
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Rooms whose QR was generated just now — only their image pops in */
+  const [freshQr, setFreshQr] = useState<ReadonlySet<number>>(() => new Set());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -140,6 +149,31 @@ export default function QRGeneratorPage() {
     return !q || [r.room_name, r.room_type, r.building ?? '', r.qr_code_id ?? ''].some(v => v.toLowerCase().includes(q));
   });
   const printable = filtered.filter(r => r.generated);
+  /** Generated codes that still hold the old text, so a phone camera can't open them */
+  const oldCodes = rooms.filter(r => r.generated && !r.camera_ready).length;
+  const [linking, setLinking] = useState(false);
+
+  /** Redraw every old code with the scan link — same QR ids, so printed copies keep working in the app */
+  const updateLinks = async () => {
+    setLinking(true);
+    try {
+      const res = await fetch('/api/rooms/qr-codes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_links: true, site_origin: window.location.origin }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { toast.error(data.error || 'Could not update the QR codes.'); return; }
+      const updates = new Map<number, Partial<RoomQR>>((data.rooms as (Partial<RoomQR> & { id: number })[]).map(u => [u.id, u]));
+      setFreshQr(new Set(updates.keys()));
+      setRooms(prev => prev.map(r => (updates.has(r.id) ? { ...r, ...updates.get(r.id) } : r)));
+      toast.success(`${updates.size} QR code${updates.size === 1 ? '' : 's'} updated — print them again so phone cameras can open them.`);
+    } catch {
+      toast.error('Connection error. Please try again.');
+    } finally {
+      setLinking(false);
+    }
+  };
   const showSkeleton = useMinLoading(loading && rooms.length === 0 && !loadError, PAGE_SKELETON_MIN_MS);
 
   /** Generate (or regenerate) one room, or all missing */
@@ -149,11 +183,13 @@ export default function QRGeneratorPage() {
       const res = await fetch('/api/rooms/qr-codes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(target === 'all' ? { all_missing: true } : { room_id: target }),
+        // site_origin: the address the QR links open (this site)
+        body: JSON.stringify({ ...(target === 'all' ? { all_missing: true } : { room_id: target }), site_origin: window.location.origin }),
       });
       const data = await res.json();
       if (!res.ok) { toast.error(data.error || 'Failed to generate QR code.'); return false; }
       const updates = new Map<number, Partial<RoomQR>>((data.rooms as (Partial<RoomQR> & { id: number })[]).map(u => [u.id, u]));
+      setFreshQr(new Set(updates.keys()));
       setRooms(prev => prev.map(r => (updates.has(r.id) ? { ...r, ...updates.get(r.id) } : r)));
       if (target === 'all') toast.success(`${updates.size} QR code${updates.size === 1 ? '' : 's'} generated.`);
       return true;
@@ -210,12 +246,13 @@ export default function QRGeneratorPage() {
             { key: 'Lecture', label: 'Lecture', count: counts.lec, icon: BookOpen, color: '#1D5BD6' },
             { key: 'Laboratory', label: 'Laboratory', count: counts.lab, icon: Monitor, color: '#D97706' },
           ]} />
+          {/* Phones: search on its own line, the buttons share the next one */}
           <div className="flex flex-wrap items-center gap-2 lg:ml-auto">
             <div className="relative w-full sm:w-60">
               <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#94A3B8]" />
               <input
                 type="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search room or QR ID"
-                className="w-full h-10 bg-white border border-[#D6E0EF] rounded-xl pl-9 pr-8 text-sm text-[#0B2A5B] placeholder:text-[#94A3B8] focus:outline-none focus:ring-2 focus:ring-[#1D5BD6]/25 focus:border-[#1D5BD6]"
+                className="w-full h-11 sm:h-10 bg-white border border-[#D6E0EF] rounded-xl pl-9 pr-8 text-sm text-[#0B2A5B] placeholder:text-[#94A3B8] focus:outline-none focus:ring-2 focus:ring-[#1D5BD6]/25 focus:border-[#1D5BD6]"
               />
               {search && (
                 <button type="button" onClick={() => setSearch('')} aria-label="Clear search"
@@ -235,7 +272,7 @@ export default function QRGeneratorPage() {
                   whileTap={reduceMotion ? undefined : { scale: 0.97 }}
                   onClick={() => generate('all')}
                   disabled={busy !== null}
-                  className="h-10 inline-flex items-center gap-2 px-4 rounded-xl text-sm font-semibold bg-amber-500 hover:bg-amber-600 transition-colors disabled:opacity-60"
+                  className="flex-1 sm:flex-none h-11 sm:h-10 inline-flex items-center justify-center gap-2 px-4 rounded-xl text-sm font-semibold bg-amber-500 hover:bg-amber-600 transition-colors disabled:opacity-60"
                   style={WHITE}
                 >
                   {busy === 'all' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
@@ -248,7 +285,7 @@ export default function QRGeneratorPage() {
               whileTap={reduceMotion ? undefined : { scale: 0.97 }}
               onClick={() => printRooms(printable, 'QRganize — Room QR Codes')}
               disabled={printable.length === 0}
-              className="h-10 inline-flex items-center gap-2 px-4 rounded-xl text-sm font-semibold bg-[#1D5BD6] hover:bg-[#164BB5] transition-colors disabled:opacity-40"
+              className="flex-1 sm:flex-none h-11 sm:h-10 inline-flex items-center justify-center gap-2 px-4 rounded-xl text-sm font-semibold bg-[#1D5BD6] hover:bg-[#164BB5] transition-colors disabled:opacity-40"
               style={WHITE}
             >
               <Printer className="w-4 h-4" /> Print All ({printable.length})
@@ -256,6 +293,41 @@ export default function QRGeneratorPage() {
           </div>
         </div>
       </div>
+
+      {/* Old codes hold plain text: only the app's scanner reads them. One click
+          redraws them as links a phone camera opens (shown until none are left). */}
+      <AnimatePresence initial={false}>
+        {!loading && oldCodes > 0 && (
+          <motion.div
+            key="old-codes"
+            initial={reduceMotion ? false : { opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0, transition: { duration: 0.25, ease: EASE } }}
+            exit={{ opacity: 0, transition: { duration: 0.18 } }}
+            className="flex flex-col sm:flex-row sm:items-center gap-3 rounded-2xl border border-[#BFDBFE] bg-[#EFF6FF] px-4 py-3.5"
+          >
+            <span className="flex items-start gap-3 min-w-0 flex-1">
+              <Smartphone className="w-5 h-5 text-[#1D5BD6] flex-shrink-0 mt-0.5" />
+              <span className="min-w-0">
+                <span className="block text-[15px] font-bold text-[#0B2A5B]">
+                  {`${oldCodes} QR code${oldCodes === 1 ? '' : 's'} can’t be opened with a phone camera yet`}
+                </span>
+                <span className="block text-sm text-[#475569]">Same codes — print them again after updating.</span>
+              </span>
+            </span>
+            <motion.button
+              type="button"
+              whileTap={reduceMotion ? undefined : { scale: 0.97 }}
+              onClick={updateLinks}
+              disabled={linking || busy !== null}
+              className="h-11 inline-flex items-center justify-center gap-2 px-5 rounded-xl text-sm font-semibold bg-[#1D5BD6] hover:bg-[#164BB5] transition-colors disabled:opacity-60 flex-shrink-0"
+              style={WHITE}
+            >
+              {linking ? <Loader2 className="w-4 h-4 animate-spin" /> : <Smartphone className="w-4 h-4" />}
+              Update QR codes
+            </motion.button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {loadError && !loading && (
         <p className="py-10 text-center text-sm text-[#64748B]">
@@ -271,21 +343,34 @@ export default function QRGeneratorPage() {
           </div>
         }
       >
+        {/* Switching All / Lecture / Laboratory crossfades the whole list in one
+            smooth step (cards ease in with a short stagger) instead of every
+            card sliding to a new place at once, which stuttered. */}
+        <AnimatePresence mode="wait" initial={false}>
         {!loadError && (filtered.length === 0 ? (
-          <div className="py-20 text-center">
+          <motion.div
+            key={`empty-${type}`}
+            initial={reduceMotion ? false : { opacity: 0 }}
+            animate={{ opacity: 1, transition: { duration: 0.22, ease: EASE } }}
+            exit={{ opacity: 0, transition: { duration: reduceMotion ? 0 : 0.12 } }}
+            className="py-20 text-center"
+          >
             <QrCode className="w-10 h-10 text-[#CBD5E1] mx-auto mb-3" />
             <p className="font-semibold text-[#0B2A5B]">No rooms found</p>
-          </div>
+          </motion.div>
         ) : (
-          <motion.div layout={!reduceMotion} className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-            <AnimatePresence mode="popLayout" initial={false}>
-              {filtered.map(room => (
+          <motion.div
+            key={`grid-${type}`}
+            initial={reduceMotion ? false : { opacity: 0 }}
+            animate={{ opacity: 1, transition: { duration: 0.2, ease: EASE } }}
+            exit={{ opacity: 0, transition: { duration: reduceMotion ? 0 : 0.12, ease: EASE } }}
+            className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4"
+          >
+              {filtered.map((room, i) => (
                 <motion.div
                   key={room.id}
-                  layout={!reduceMotion}
-                  initial={reduceMotion ? false : { opacity: 0, scale: 0.96 }}
-                  animate={{ opacity: 1, scale: 1, transition: { duration: 0.3, ease: EASE } }}
-                  exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, transition: { duration: 0.2 } }}
+                  initial={reduceMotion ? false : { opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0, transition: { duration: 0.3, ease: EASE, delay: Math.min(i, 10) * 0.03 } }}
                   whileHover={reduceMotion ? undefined : { y: -3 }}
                   className="bg-white rounded-2xl border border-[#E3E9F3] shadow-[0_1px_3px_rgba(11,42,91,0.06)] hover:shadow-[0_12px_28px_-16px_rgba(11,42,91,0.35)] transition-shadow overflow-hidden flex flex-col"
                 >
@@ -308,7 +393,7 @@ export default function QRGeneratorPage() {
                             key={room.qr_code_id}
                             src={room.qr_data_url}
                             alt={`QR code for ${room.room_name}`}
-                            initial={reduceMotion ? false : { opacity: 0, scale: 0.85 }}
+                            initial={reduceMotion || !freshQr.has(room.id) ? false : { opacity: 0, scale: 0.85 }}
                             animate={{ opacity: 1, scale: 1, transition: { duration: 0.4, ease: EASE } }}
                             className="w-[82%] aspect-square object-contain"
                           />
@@ -332,21 +417,22 @@ export default function QRGeneratorPage() {
                     {!room.generated && <div className="mt-1.5"><MissingPill /></div>}
                     <div className="mt-auto pt-3">
                       {room.generated ? (
-                        <div className="grid grid-cols-2 gap-1.5">
+                        /* Phones: the two buttons stack — side by side they don't fit half a card */
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
                           <button type="button" onClick={() => handleDownload(room)}
-                            className={`h-8 inline-flex items-center justify-center gap-1 rounded-lg text-xs font-semibold border transition-colors ${
+                            className={`h-9 md:h-8 inline-flex items-center justify-center gap-1 rounded-lg text-xs font-semibold border transition-colors ${
                               saved === room.id ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-[#EFF6FF] text-[#1D5BD6] border-[#BFDBFE] hover:bg-[#DBEAFE]'
                             }`}>
                             {saved === room.id ? <><CheckCircle2 className="w-3.5 h-3.5" /> Saved</> : <><Download className="w-3.5 h-3.5" /> Download</>}
                           </button>
                           <button type="button" onClick={() => printRooms([room], `QR Code — ${room.room_name}`)}
-                            className="h-8 inline-flex items-center justify-center gap-1 rounded-lg text-xs font-semibold border border-[#E2E8F0] text-[#475569] hover:bg-[#F8FAFC] hover:text-[#0B2A5B] transition-colors">
+                            className="h-9 md:h-8 inline-flex items-center justify-center gap-1 rounded-lg text-xs font-semibold border border-[#E2E8F0] text-[#475569] hover:bg-[#F8FAFC] hover:text-[#0B2A5B] transition-colors">
                             <Printer className="w-3.5 h-3.5" /> Print
                           </button>
                         </div>
                       ) : (
                         <button type="button" onClick={() => generateOne(room)} disabled={busy !== null}
-                          className="w-full h-8 inline-flex items-center justify-center gap-1.5 rounded-lg text-xs font-semibold bg-[#1D5BD6] hover:bg-[#164BB5] transition-colors disabled:opacity-50"
+                          className="w-full h-9 md:h-8 inline-flex items-center justify-center gap-1.5 rounded-lg text-xs font-semibold bg-[#1D5BD6] hover:bg-[#164BB5] transition-colors disabled:opacity-50"
                           style={WHITE}>
                           {busy === room.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <QrCode className="w-3.5 h-3.5" />} Generate QR
                         </button>
@@ -355,9 +441,9 @@ export default function QRGeneratorPage() {
                   </div>
                 </motion.div>
               ))}
-            </AnimatePresence>
           </motion.div>
         ))}
+        </AnimatePresence>
       </PageLoadTransition>
 
       {/* ── Preview ─────────────────────────────────────────────────────── */}
@@ -408,6 +494,15 @@ export default function QRGeneratorPage() {
               <div className="flex items-center gap-3 px-4 py-2.5">
                 <dt className="text-[#64748B] w-24 flex-shrink-0">Linked to</dt>
                 <dd className="font-semibold text-[#0B2A5B]">{preview.room_name}</dd>
+              </div>
+              {/* What a phone camera opens — or why it can't yet */}
+              <div className="flex items-start gap-3 px-4 py-2.5">
+                <dt className="text-[#64748B] w-24 flex-shrink-0">Opens</dt>
+                <dd className="min-w-0 flex-1 break-all">
+                  {preview.qr_link
+                    ? <a href={preview.qr_link} target="_blank" rel="noreferrer" className="font-semibold text-[#1D5BD6] hover:underline">{preview.qr_link}</a>
+                    : <span className="text-[#B45309] font-semibold">Only the app&apos;s scanner — update QR codes on the live site</span>}
+                </dd>
               </div>
               <div className="flex items-center gap-3 px-4 py-2.5">
                 <dt className="text-[#64748B] w-24 flex-shrink-0">Generated</dt>

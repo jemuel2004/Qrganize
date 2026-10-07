@@ -43,6 +43,45 @@ function NewSubjectToasts() {
   return null;
 }
 
+/** Reminders already popped up in this browser session (so a reload doesn't repeat them) */
+const SHOWN_KEY = 'qr-class-reminders-shown';
+function shownReminders(): Set<number> {
+  try { return new Set(JSON.parse(sessionStorage.getItem(SHOWN_KEY) || '[]') as number[]); } catch { return new Set(); }
+}
+
+/**
+ * Class reminders (the server makes them: "You have 3 classes today" and
+ * "Your class starts soon") pop up once on whatever page is open — also right
+ * after signing in — and stay in the bell. A class starting now is amber.
+ */
+function ClassReminderToasts() {
+  const { notifications, isInitialLoad } = useNotifications();
+  const toast = useToast();
+
+  useEffect(() => {
+    if (isInitialLoad) return;
+    const reminders = notifications
+      .filter(n => !n.is_read && (n.type === 'class_today' || n.type === 'class_starting'))
+      // The day's summary first, then what is starting
+      .sort((a, b) => Number(a.type === 'class_starting') - Number(b.type === 'class_starting'));
+    if (reminders.length === 0) return;
+    const shown = shownReminders();
+    let changed = false;
+    for (const n of reminders) {
+      if (shown.has(n.id)) continue;
+      shown.add(n.id);
+      changed = true;
+      if (n.type === 'class_starting') toast.warning(n.message, n.title);
+      else toast.info(n.message, n.title);
+    }
+    if (changed) {
+      try { sessionStorage.setItem(SHOWN_KEY, JSON.stringify([...shown].slice(-100))); } catch { /* private mode */ }
+    }
+  }, [notifications, isInitialLoad, toast]);
+
+  return null;
+}
+
 /**
  * Instructor chrome — same top-nav shell as Admin (AdminShell).
  * Menu items remain instructor-specific; colors/spacing/active/hover match Admin.
@@ -87,6 +126,7 @@ export default function InstructorShell({ children }: { children: React.ReactNod
           <NotificationProvider role="instructor">
             <ToastProvider>
               <NewSubjectToasts />
+              <ClassReminderToasts />
               <div className="flex flex-col h-screen overflow-hidden dashboard-layout-root">
                 <header className="qr-app-header sticky top-0 flex-shrink-0 z-40 bg-[#12408F] isolate no-print">
                   <div className="h-[72px] flex items-center gap-3 sm:gap-6 px-4 sm:px-6 min-w-0">

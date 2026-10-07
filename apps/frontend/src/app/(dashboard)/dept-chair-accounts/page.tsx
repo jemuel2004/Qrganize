@@ -4,6 +4,7 @@ import DeptChairAccountsClient from './DeptChairAccountsClient';
 
 export default async function DeptChairAccountsPage() {
   const role = await getPageAuthRole();
-  if (role !== 'admin' && role !== 'program_chair') redirect('/login');
+  // Administrator only — the chairs' menus don't show it (lib/roleAccess CHAIR_BLOCKED_PAGES)
+  if (role !== 'admin') redirect('/login');
   return <DeptChairAccountsClient />;
 }

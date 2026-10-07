@@ -19,7 +19,7 @@ import {
 import { ListSkeleton, TableSkeleton, Skeleton } from '@/components/ui/skeletons';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { EmploymentBadge, EMPLOYMENT_COLORS } from '@/components/ui/EmploymentBadge';
-import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
+import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import { useScrollLock } from '@/hooks/useScrollLock';
 import TimeSlotPicker from '@/components/ui/TimeSlotPicker';
 import CountFilterTabs from '@/components/ui/CountFilterTabs';
@@ -804,32 +804,32 @@ function SchedulingStepper({ current, compact }: { current: number; compact?: bo
   );
 }
 
-/* ─── Back-navigation loading overlay ──────────────────────────
-   Shown briefly over the current step while goBack()'s delay runs,
-   before the actual history navigation happens. Fixed to the viewport (below
-   the 72px app header) so the spinner is always on screen — the old overlay
-   covered the whole tall page in a white blur and centred the spinner off-screen. */
-function BackLoadingOverlay({ label = 'Going back…' }: { label?: string }) {
+/* Position Selection while it loads: title, the two choices, Continue */
+function PositionSkeleton() {
   return (
-    <div
-      className="fixed inset-x-0 bottom-0 top-[72px] z-30 flex items-center justify-center qr-fade-in"
-      style={{ backgroundColor: 'rgba(11, 42, 91, 0.08)' }}
-      role="status"
-      aria-live="polite"
-    >
-      <div className="flex items-center gap-3 px-5 py-3.5 rounded-2xl bg-white border border-[#E2E8F0] shadow-[0_12px_32px_-12px_rgba(11,42,91,0.35)]">
-        <div className="w-6 h-6 border-[3px] border-[#DBE5F4] border-t-[#1D5BD6] rounded-full animate-spin" aria-hidden="true" />
-        <p className="text-sm font-semibold text-[#0B2A5B]">{label}</p>
+    <div className="bg-white border border-[#E2E8F0] rounded-2xl p-5 sm:p-6 shadow-sm" role="status" aria-live="polite" aria-label="Loading">
+      <Skeleton className="h-5 w-40 rounded mb-4" />
+      <div className="space-y-3">
+        {Array.from({ length: 2 }, (_, i) => (
+          <div key={i} className="flex items-center gap-4 px-4 sm:px-5 py-4 rounded-xl border border-[#E2E8F0]">
+            <Skeleton className="w-10 h-10 rounded-full flex-shrink-0" />
+            <div className="flex-1 min-w-0 space-y-2">
+              <Skeleton className="h-4 w-36 rounded" />
+              <Skeleton className="h-3.5 w-[70%] rounded" />
+            </div>
+            <Skeleton className="hidden sm:block h-6 w-32 rounded-full flex-shrink-0" />
+            <Skeleton className="w-5 h-5 rounded-full flex-shrink-0" />
+          </div>
+        ))}
       </div>
+      <Skeleton className="h-11 w-full rounded-xl mt-5" />
     </div>
   );
 }
 
 /* ─── FacultyGroup ──────────────────────────────────────────── */
-function FacultyGroup({ title, items, selectedId, loadingId, onSelect }: {
+function FacultyGroup({ title, items, selectedId, onSelect }: {
   title?: string; items: Faculty[]; selectedId?: number | null;
-  /** Instructor whose schedule is opening — its button shows a spinner, others are disabled. */
-  loadingId?: number | null;
   onSelect: (f: Faculty) => void;
 }) {
   if (items.length === 0) return null;
@@ -863,7 +863,7 @@ function FacultyGroup({ title, items, selectedId, loadingId, onSelect }: {
           const incomplete = remaining(f) > 0;
           return (
           <div key={f.id}
-            className={`w-full text-left border rounded-xl px-5 py-3.5 transition-all duration-200 shadow-sm ${
+            className={`w-full text-left border rounded-xl px-4 sm:px-5 py-3.5 transition-all duration-200 shadow-sm ${
               selected
                 ? 'bg-white border-[#1D5BD6] ring-1 ring-[#1D5BD6]/30 bg-[#F5FAFF] scale-[1.01]'
                 : incomplete
@@ -871,10 +871,12 @@ function FacultyGroup({ title, items, selectedId, loadingId, onSelect }: {
                   ? 'qr-flag-pulse border-[#FECACA] hover:border-[#F87171]'
                   : 'bg-white border-[#E2E8F0] hover:border-[#1D5BD6]'
             }`}>
-            <div className="flex items-center justify-between gap-3">
+            {/* Phones: name and details on top, Remaining Load + Select on their own row
+                (side by side they squeezed the name to "Jehu Ro…" and overlapped the position) */}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
                 <div className="mb-1 flex items-center gap-2 flex-wrap">
-                  <span className="font-bold text-[#0B2A5B] text-base truncate">{f.name}</span>
+                  <span className="font-bold text-[#0B2A5B] text-base break-words sm:truncate min-w-0">{f.name}</span>
                   {(f.unscheduled_count ?? 0) > 0 && (
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-[#FFF7ED] text-[#C2410C] border border-[#FED7AA]"
                       title="Assigned classes that still need a day and time">
@@ -889,26 +891,24 @@ function FacultyGroup({ title, items, selectedId, loadingId, onSelect }: {
                 {f.specialization && (
                   <div className="text-sm text-[#1D5BD6] truncate mb-0.5">{f.specialization}</div>
                 )}
-                <div className="text-sm text-[#64748B] flex items-center gap-2">
-                  <span>{f.employee_id}</span><span>·</span><span>{f.position}</span>
+                <div className="text-sm text-[#64748B]">
+                  {[f.employee_id, f.position].filter(Boolean).join(' · ')}
                 </div>
               </div>
-              <div className="flex items-center gap-3 flex-shrink-0">
-                <div className="text-right">
-                  <div className="text-xs text-[#94A3B8]">Remaining Load</div>
+              <div className="flex items-center justify-between gap-3 flex-shrink-0 max-sm:pt-3 max-sm:border-t max-sm:border-[#0B2A5B]/10">
+                <div className="sm:text-right">
+                  <div className="text-xs text-[#64748B]">Remaining Load</div>
                   <div className={`text-base font-bold ${remainingShown(f) > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
                     {formatLoadCap(remainingShown(f))} {f.employment_status === 'Permanent' ? 'units' : 'hrs'}
                   </div>
                 </div>
-                <button type="button" onClick={() => onSelect(f)} disabled={selected || loadingId != null}
-                  className={`flex-shrink-0 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-sm font-semibold border transition-all duration-150 active:scale-95 cursor-pointer disabled:cursor-default ${
+                <button type="button" onClick={() => onSelect(f)} disabled={selected}
+                  className={`flex-shrink-0 inline-flex items-center justify-center gap-1.5 min-h-[44px] px-6 sm:min-h-0 sm:px-3.5 py-1.5 rounded-lg text-sm font-semibold border transition-all duration-150 active:scale-95 cursor-pointer disabled:cursor-default ${
                     selected
                       ? 'qr-btn-soft border-transparent'
                       : 'bg-white text-[#1D5BD6] border-[#BFDBFE] hover:bg-[#EFF6FF] hover:border-[#1D5BD6]'
                   }`}>
-                  {loadingId === f.id
-                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Opening…</>
-                    : selected ? <><CheckCircle className="w-4 h-4" /> Selected</> : 'Select'}
+                  {selected ? <><CheckCircle className="w-4 h-4" /> Selected</> : 'Select'}
                 </button>
               </div>
             </div>
@@ -1255,23 +1255,27 @@ export default function SchedulingClient() {
   const roomsRef = useRef<Room[]>([]);
   useEffect(() => { roomsRef.current = rooms; }, [rooms]);
   const [facultySearch, setFacultySearch] = useState('');
-  const [pendingFacultyId, setPendingFacultyId] = useState<number | null>(null);
-  const [backLoading, setBackLoading] = useState(false);
-  /* Position step → "Continue": show the loader briefly before moving on. */
-  const [continueLoading, setContinueLoading] = useState(false);
-  useEffect(() => { setContinueLoading(false); }, [facultyStep]);
+  /* Each step (and each faculty's schedule) opens at once behind its own
+     skeleton, held for the same time as every other page (LOADING_DELAY) —
+     no spinner over the old step. `entering` is true from the very render the
+     step changes, so the new step never flashes before its skeleton. */
+  const stepKey = view === 'schedule' ? `schedule:${selFacultyId ?? ''}` : facultyStep;
+  const [settledStep, setSettledStep] = useState<string | null>(null);
+  const entering = settledStep !== stepKey;
+  useEffect(() => {
+    if (settledStep === stepKey) return;
+    const t = window.setTimeout(() => setSettledStep(stepKey), 0);
+    return () => window.clearTimeout(t);
+  }, [stepKey, settledStep]);
+  const stepSkeleton = useMinLoading(entering, LOADING_DELAY) || entering;
   const [fetchingW, setFetchingW]         = useState(false);
 
-  /* Shared by every wizard Back control — shows a brief loading state
-     before actually walking browser history, instead of jumping instantly. */
+  /* Shared by every wizard Back control — goes back at once; the step it
+     lands on shows its skeleton for the usual time. */
   const goBack = useCallback(() => {
-    setBackLoading(true);
-    setTimeout(() => {
-      // Opened straight from Master Schedule in a fresh tab — no history to walk.
-      if (fromMsId && window.history.length <= 1) router.replace('/master-schedule');
-      else router.back();
-      setBackLoading(false);
-    }, 1500);
+    // Opened straight from Master Schedule in a fresh tab — no history to walk.
+    if (fromMsId && window.history.length <= 1) router.replace('/master-schedule');
+    else router.back();
   }, [router, fromMsId]);
   const [sessions, setSessions]       = useState<SessionItem[]>([]);
   /** "<session id>:start_time" / ":room_id" set by hand on session 2+ — session 1 no longer fills them */
@@ -1426,12 +1430,11 @@ export default function SchedulingClient() {
     if (pairDaysOf.length > 0) comboDaysRef.current = pairDaysOf;
     setSessions([]); setManualCount(saved.length > 0 ? saved.length : pairDaysOf.length || 1);
     /* Selecting a subject just swaps already-loaded local state — no fetch —
-       so without this it snapped instantly. A brief skeleton (same 2s as the
-       Minor/Major subject-category switch) makes it feel like a deliberate,
-       interactive transition instead of a jarring swap. */
+       so without this it snapped instantly. A brief skeleton (the same time
+       as every other page, LOADING_DELAY) makes it a deliberate transition. */
     setPanelSwitching(true);
     if (panelSwitchTimeout.current) clearTimeout(panelSwitchTimeout.current);
-    panelSwitchTimeout.current = setTimeout(() => setPanelSwitching(false), 2000);
+    panelSwitchTimeout.current = setTimeout(() => setPanelSwitching(false), LOADING_DELAY);
   }
 
   /* Master Schedule deep link: once this faculty's workload is in, open the
@@ -2142,9 +2145,9 @@ export default function SchedulingClient() {
   const showFacultySkeleton = useMinLoading(
     // Wait for the real remaining loads on first load so cards don't flash red
     facultyLoading || (summariesLoading && Object.keys(loadSummaries).length === 0),
-    facultyList.length === 0 ? PAGE_SKELETON_MIN_MS : 0,
-  );
-  const showWorkloadSkeleton = useMinLoading(fetchingW, workload == null ? PAGE_SKELETON_MIN_MS : 0) || showDeleteSkeleton;
+    facultyList.length === 0 ? LOADING_DELAY : 0,
+  ) || stepSkeleton;
+  const showWorkloadSkeleton = useMinLoading(fetchingW, workload == null ? LOADING_DELAY : 0) || showDeleteSkeleton || stepSkeleton;
 
   /* ══════════════════════════════════════════
      VIEW: FACULTY
@@ -2180,9 +2183,6 @@ export default function SchedulingClient() {
 
     return (
       <div className="relative p-4 sm:p-6 max-w-3xl mx-auto w-full min-w-0">
-        {backLoading && <BackLoadingOverlay />}
-        {pendingFacultyId !== null && <BackLoadingOverlay label="Opening schedule…" />}
-        {continueLoading && <BackLoadingOverlay label="Loading faculty…" />}
         <div className="mb-8">
           {facultyStep === 'position' && <BackButton />}
           <div className={facultyStep === 'position' ? 'mt-4 sm:mt-7' : ''}>
@@ -2193,6 +2193,7 @@ export default function SchedulingClient() {
         <SchedulingStepper current={stepIndex} />
 
         {facultyStep === 'position' ? (
+          <PageLoadTransition showSkeleton={showFacultySkeleton} skeleton={<PositionSkeleton />}>
           <div className="bg-white border border-[#E2E8F0] rounded-2xl p-5 sm:p-6 shadow-sm">
             <h2 className="text-base font-bold text-[#0B2A5B] mb-4">Position Selection</h2>
 
@@ -2204,7 +2205,7 @@ export default function SchedulingClient() {
                 const selected = positionFilter === opt.key;
                 const { fg, bg } = EMPLOYMENT_COLORS[opt.key];
                 return (
-                  <button key={opt.key} type="button" disabled={continueLoading} onClick={() => {
+                  <button key={opt.key} type="button" onClick={() => {
                     router.replace(buildStepUrl({
                       type: opt.key,
                       faculty: positionFilter !== opt.key ? undefined : selFacultyId ?? undefined,
@@ -2252,20 +2253,16 @@ export default function SchedulingClient() {
               })}
             </div>
 
-            <button type="button" disabled={!positionFilter || continueLoading}
-              onClick={() => {
-                setContinueLoading(true);
-                setTimeout(() => router.push(buildStepUrl({ step: 'instructor' })), 1000);
-              }}
+            <button type="button" disabled={!positionFilter}
+              onClick={() => router.push(buildStepUrl({ step: 'instructor' }))}
               className="w-full mt-5 inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-sm font-semibold qr-btn-soft disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
-              {continueLoading
-                ? <><Loader2 className="w-4 h-4 animate-spin" /> Loading faculty…</>
-                : <>Continue to Faculty Selection <ArrowRight className="w-4 h-4" /></>}
+              Continue to Faculty Selection <ArrowRight className="w-4 h-4" />
             </button>
           </div>
+          </PageLoadTransition>
         ) : (
-          <div className="bg-white border border-[#E2E8F0] rounded-2xl p-5 sm:p-6 shadow-sm">
-            <button type="button" onClick={goBack} disabled={backLoading}
+          <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 sm:p-6 shadow-sm">
+            <button type="button" onClick={goBack}
               className="inline-flex items-center gap-2 -ml-2.5 mb-2.5 min-h-10 px-3 py-2 rounded-xl text-[15px] font-semibold text-[#1D5BD6] hover:text-[#164BB5] hover:bg-[#EFF6FF] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
               <ChevronLeft className="w-5 h-5" /> Back
             </button>
@@ -2275,16 +2272,17 @@ export default function SchedulingClient() {
               </div>
             </div>
 
-            <div className="flex items-center gap-3 mb-4 flex-wrap">
-              <div className="flex flex-col gap-1.5">
+            {/* Phones: two equal boxes side by side */}
+            <div className="grid grid-cols-2 gap-3 mb-4 sm:flex sm:items-center sm:flex-wrap">
+              <div className="flex flex-col gap-1.5 min-w-0">
                 <label className="text-xs font-bold text-[#64748B] uppercase tracking-widest">Semester</label>
-                <div className="bg-[#F8FAFC] border border-[#E2E8F0] text-[#0B2A5B] rounded-xl px-3.5 py-2 text-sm font-semibold min-w-[160px] cursor-default select-none">
+                <div className="bg-[#F8FAFC] border border-[#E2E8F0] text-[#0B2A5B] rounded-xl px-3.5 py-2 text-sm font-semibold sm:min-w-[160px] truncate cursor-default select-none">
                   {semester || '—'}
                 </div>
               </div>
-              <div className="flex flex-col gap-1.5">
+              <div className="flex flex-col gap-1.5 min-w-0">
                 <label className="text-xs font-bold text-[#64748B] uppercase tracking-widest">School Year</label>
-                <div className="bg-[#F8FAFC] border border-[#E2E8F0] text-[#0B2A5B] rounded-xl px-3.5 py-2 text-sm font-semibold min-w-[140px] cursor-default select-none">
+                <div className="bg-[#F8FAFC] border border-[#E2E8F0] text-[#0B2A5B] rounded-xl px-3.5 py-2 text-sm font-semibold sm:min-w-[140px] truncate cursor-default select-none">
                   {schoolYear || '—'}
                 </div>
               </div>
@@ -2324,19 +2322,9 @@ export default function SchedulingClient() {
                 <FacultyGroup
                   title={positionFilter}
                   items={filtered}
-                  selectedId={pendingFacultyId ?? selFaculty?.id}
-                  loadingId={pendingFacultyId}
-                  onSelect={f => {
-                    /* Local highlight + loading skeleton while this waits —
-                       kept out of the URL so it doesn't create a spare
-                       history entry between "instructor picked" and
-                       "schedule view shown". */
-                    setPendingFacultyId(f.id);
-                    setTimeout(() => {
-                      router.push(buildStepUrl({ step: 'schedule', faculty: String(f.id) }));
-                      setPendingFacultyId(null);
-                    }, 2000);
-                  }}
+                  selectedId={selFaculty?.id}
+                  // Opens at once — the schedule shows its skeleton while it loads
+                  onSelect={f => router.push(buildStepUrl({ step: 'schedule', faculty: String(f.id) }))}
                 />
                 {filtered.length === 0 && (
                   <div className="text-center py-16 text-[#94A3B8] text-sm">
@@ -2477,7 +2465,6 @@ export default function SchedulingClient() {
 
   return (
     <div className="relative flex flex-col w-full min-w-0 min-h-0 h-full p-4 sm:p-6">
-      {backLoading && <BackLoadingOverlay />}
 
       {/* Save-success check — identical markup/animation to the other pages */}
       {saveSuccess && (
@@ -2503,7 +2490,7 @@ export default function SchedulingClient() {
         <div className="flex-shrink-0 bg-white border border-[#E2E8F0] rounded-2xl px-4 sm:px-6 py-3 shadow-sm">
           <div className="flex items-center justify-between gap-3 min-w-0">
             <div className="flex items-center gap-2 min-w-0">
-              <button type="button" onClick={goBack} disabled={backLoading} className="text-[#64748B] hover:text-[#0B2A5B] transition disabled:opacity-50 disabled:cursor-not-allowed">
+              <button type="button" onClick={goBack} className="text-[#64748B] hover:text-[#0B2A5B] transition disabled:opacity-50 disabled:cursor-not-allowed">
                 <ChevronLeft className="w-5 h-5" />
               </button>
               <div className="flex items-center gap-1.5 text-sm text-[#64748B] min-w-0">
@@ -2767,7 +2754,7 @@ export default function SchedulingClient() {
             <div className="flex-shrink-0 bg-white border border-[#E2E8F0] rounded-2xl px-4 sm:px-6 py-3 shadow-sm">
               <div className="flex items-center justify-between gap-3 min-w-0">
                 <div className="flex items-center gap-2 min-w-0">
-                  <button type="button" onClick={goBack} disabled={backLoading} className="text-[#64748B] hover:text-[#0B2A5B] transition disabled:opacity-50 disabled:cursor-not-allowed">
+                  <button type="button" onClick={goBack} className="text-[#64748B] hover:text-[#0B2A5B] transition disabled:opacity-50 disabled:cursor-not-allowed">
                     <ChevronLeft className="w-5 h-5" />
                   </button>
                   <div className="flex items-center gap-1.5 text-sm text-[#64748B] min-w-0">

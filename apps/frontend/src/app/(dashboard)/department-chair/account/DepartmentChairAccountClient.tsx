@@ -6,12 +6,14 @@ import { roleLabel } from '@/lib/roleAccess';
 import { useScrollLock } from '@/hooks/useScrollLock';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import BackButton from '@/components/ui/BackButton';
+import WatermarkTitle from '@/components/ui/WatermarkTitle';
+import SettingsTile, { revealFocused } from '@/components/ui/SettingsTile';
 import { FormSkeleton, Skeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import {
   CheckCircle, AlertTriangle, X, Eye, EyeOff, ShieldCheck,
   Camera, User, Palette, Lock,
-  ChevronDown, ChevronRight, KeyRound, Smartphone, Sun, Moon,
+  ChevronRight, KeyRound, Smartphone, Sun, Moon,
 } from 'lucide-react';
 import { ProfilePictureUpload } from '@/components/ui/ProfilePictureUpload';
 import TrustedDevicesPanel from '@/components/security/TrustedDevicesPanel';
@@ -85,64 +87,6 @@ function InlineAlert({ type, msg, onClose }: { type: 'error' | 'success'; msg: s
   );
 }
 
-/* ── Accordion Card (same as Admin Settings) ───────────────────── */
-
-function AccordionCard({
-  icon: Icon,
-  title,
-  subtitle,
-  open,
-  onToggle,
-  children,
-}: {
-  icon: React.ElementType;
-  title: string;
-  subtitle: string;
-  open: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="bg-white rounded-2xl border border-[#E2E8F0] overflow-hidden transition-all duration-200 shadow-sm">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        className="w-full flex items-center gap-4 px-6 py-5 text-left hover:bg-[#F8FAFC] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1D5BD6] focus-visible:ring-inset"
-      >
-        <div className="flex-shrink-0 w-11 h-11 bg-[#EFF6FF] rounded-xl flex items-center justify-center">
-          <Icon className="w-5 h-5 text-[#1D5BD6]" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-[15px] font-bold text-[#0B2A5B] leading-tight">{title}</p>
-          <p className="text-sm text-[#64748B] mt-0.5 leading-snug">{subtitle}</p>
-        </div>
-        <ChevronDown
-          className={`flex-shrink-0 w-5 h-5 text-[#94A3B8] transition-transform duration-300 ${open ? 'rotate-180' : ''}`}
-        />
-      </button>
-      <div
-        className="grid transition-all duration-300 ease-in-out"
-        style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
-      >
-        <div className="overflow-hidden">
-          <div className="border-t border-[#E2E8F0] px-6 py-5">
-            {children}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function CategoryLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#94A3B8] px-1 mb-2">
-      {children}
-    </p>
-  );
-}
-
 /* ── Security action row (opens modal) ─────────────────────────── */
 
 function SecurityActionRow({
@@ -174,7 +118,8 @@ function SecurityActionRow({
   );
 }
 
-/* ── Light modal (same as Admin Settings) ──────────────────────── */
+/* ── Window over a setting (Change Password, devices) — solid blue header,
+      fits the visible screen and scrolls inside, like the faculty Settings ── */
 
 function LightModal({
   title,
@@ -197,26 +142,27 @@ function LightModal({
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" data-modal-root>
-      <button type="button" className="absolute inset-0 bg-black/40" aria-label="Close" onClick={onClose} />
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4" data-modal-root>
+      <button type="button" className="absolute inset-0 bg-[#0B2A5B]/45" aria-label="Close" onClick={onClose} />
       <div
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={`relative w-full ${wide ? 'max-w-lg' : 'max-w-md'} rounded-2xl border border-[#E2E8F0] bg-white shadow-xl max-h-[90vh] overflow-y-auto`}
+        className={`relative w-full ${wide ? 'max-w-lg' : 'max-w-md'} rounded-2xl overflow-hidden bg-white shadow-xl max-h-[calc(100dvh-1.5rem)] sm:max-h-[90dvh] flex flex-col`}
       >
-        <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-[#E2E8F0] sticky top-0 bg-white z-10">
-          <h2 className="text-base font-bold text-[#0B2A5B]">{title}</h2>
+        <div className="flex items-center justify-between gap-3 px-5 py-4 flex-shrink-0" style={{ backgroundColor: '#1D5BD6' }}>
+          <h2 className="text-base font-bold" style={{ color: '#FFFFFF' }}>{title}</h2>
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-[#94A3B8] hover:text-[#0B2A5B] hover:bg-[#F8FAFC] transition-colors"
+            className="w-10 h-10 inline-flex items-center justify-center rounded-full bg-white/15 hover:bg-white/25 transition-colors"
+            style={{ color: '#FFFFFF' }}
             aria-label="Close dialog"
           >
-            <X className="w-4 h-4" />
+            <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="px-5 py-5">{children}</div>
+        <div className="px-5 py-5 flex-1 min-h-0 overflow-y-auto overscroll-contain" onFocusCapture={revealFocused}>{children}</div>
       </div>
     </div>
   );
@@ -524,9 +470,19 @@ function PasswordAndSecuritySection() {
   );
 }
 
-/* ── Main Settings Page ────────────────────────────────────────── */
+/* ── Main Settings Page — tiles that open pop-ups, like the faculty Settings ── */
 
-type SectionId = 'picture' | 'profile' | 'appearance' | 'security';
+type SectionId = 'picture' | 'profile' | 'security' | 'appearance';
+
+/** Colour per setting (tile + icon) — the faculty Settings colours */
+const SECTION_TONE: Record<SectionId, string> = {
+  picture: '#1D5BD6', profile: '#12408F', security: '#4F46E5', appearance: '#7C3AED',
+};
+
+/** Room inside a setting's pop-up */
+function TileBody({ children }: { children: React.ReactNode }) {
+  return <div className="px-4 py-5 sm:px-6 sm:py-6">{children}</div>;
+}
 
 export default function DepartmentChairAccountClient() {
   const [openSection, setOpenSection] = useState<SectionId | null>(null);
@@ -537,68 +493,36 @@ export default function DepartmentChairAccountClient() {
   function toggle(id: SectionId) {
     setOpenSection(prev => (prev === id ? null : id));
   }
+  const tile = (id: SectionId) => ({ id, tone: SECTION_TONE[id], open: openSection === id, onToggle: () => toggle(id) });
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] p-5 md:p-7 lg:p-8">
-      <div className="max-w-2xl">
-        <div className="mb-7">
-          <BackButton />
-          <h1 className="text-2xl font-bold text-[#0B2A5B]">Settings</h1>
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto w-full min-w-0">
+      <div className="mb-7">
+        <BackButton />
+        <div className="mt-4 sm:mt-7">
+          <WatermarkTitle>Settings</WatermarkTitle>
         </div>
-
-        <PageLoadTransition
-          showSkeleton={showSkeleton}
-          skeleton={<FormSkeleton fields={6} />}
-        >
-        <div className="space-y-8">
-          {/* PROFILE */}
-          <section className="space-y-3">
-            <CategoryLabel>Profile</CategoryLabel>
-            <AccordionCard
-              icon={Camera}
-              title="Profile Picture"
-              subtitle="Upload and manage your profile photo"
-              open={openSection === 'picture'}
-              onToggle={() => toggle('picture')}
-            >
-              <DepartmentChairProfilePicture />
-            </AccordionCard>
-            <AccordionCard
-              icon={User}
-              title="Account Details"
-              subtitle="Username, email, and role"
-              open={openSection === 'profile'}
-              onToggle={() => toggle('profile')}
-            >
-              <ProfileSettingsSection />
-            </AccordionCard>
-            <AccordionCard
-              icon={Palette}
-              title="Appearance"
-              subtitle="Theme and display preferences"
-              open={openSection === 'appearance'}
-              onToggle={() => toggle('appearance')}
-            >
-              <AppearanceSection />
-            </AccordionCard>
-          </section>
-
-          {/* ACCOUNT & SECURITY */}
-          <section className="space-y-3">
-            <CategoryLabel>Account &amp; Security</CategoryLabel>
-            <AccordionCard
-              icon={Lock}
-              title="Password and Security"
-              subtitle="Two-step verification, password, and devices"
-              open={openSection === 'security'}
-              onToggle={() => toggle('security')}
-            >
-              <PasswordAndSecuritySection />
-            </AccordionCard>
-          </section>
-        </div>
-        </PageLoadTransition>
       </div>
+
+      <PageLoadTransition
+        showSkeleton={showSkeleton}
+        skeleton={<FormSkeleton fields={6} />}
+      >
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-5xl mx-auto">
+        <SettingsTile {...tile('picture')} icon={Camera} title="Profile Picture" subtitle="Upload and manage your profile photo">
+          <TileBody><DepartmentChairProfilePicture /></TileBody>
+        </SettingsTile>
+        <SettingsTile {...tile('profile')} icon={User} title="Account Details" subtitle="Username, email, and role">
+          <TileBody><ProfileSettingsSection /></TileBody>
+        </SettingsTile>
+        <SettingsTile {...tile('security')} icon={Lock} title="Password and Security" subtitle="Two-step verification, password, and devices">
+          <TileBody><PasswordAndSecuritySection /></TileBody>
+        </SettingsTile>
+        <SettingsTile {...tile('appearance')} icon={Palette} title="Appearance" subtitle="Theme and display preferences">
+          <TileBody><AppearanceSection /></TileBody>
+        </SettingsTile>
+      </div>
+      </PageLoadTransition>
     </div>
   );
 }

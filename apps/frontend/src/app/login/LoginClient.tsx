@@ -11,6 +11,16 @@ import FlippingLogo from './FlippingLogo';
 import RisingParticles from './RisingParticles';
 import { headingFont } from '@/lib/fonts';
 
+/** Signed in from a room QR link (phone camera) → back to that room's page */
+function qrReturnPath(): string | null {
+  try {
+    const next = new URLSearchParams(window.location.search).get('next') ?? '';
+    return /^\/room\/[A-Za-z0-9%-]{4,100}$/.test(next) ? next : null;
+  } catch {
+    return null;
+  }
+}
+
 /* ── Types ────────────────────────────────────────────────────────────── */
 /**
  * Administrator, Department Chair, and Program Chair share one login option —
@@ -142,7 +152,7 @@ export default function LoginClient() {
       // The server always returns `redirect` for a successful login; this is
       // only a fallback if that were ever missing.
       const fallback = role === 'admin_chair' ? '/dashboard' : '/instructor';
-      window.location.href = data.redirect || fallback;
+      window.location.href = qrReturnPath() ?? (data.redirect || fallback);
     } catch {
       setError('Unable to reach the server. Please check your connection.');
     } finally {
@@ -177,7 +187,7 @@ export default function LoginClient() {
         }
         return;
       }
-      window.location.href = data.redirect || '/dashboard';
+      window.location.href = qrReturnPath() ?? (data.redirect || '/dashboard');
     } catch {
       setError('Unable to reach the server. Please check your connection.');
     } finally {
@@ -245,7 +255,7 @@ export default function LoginClient() {
         setError(data.error || 'This Google account is not linked to a verified account.');
         return;
       }
-      window.location.href = data.redirect || '/instructor';
+      window.location.href = qrReturnPath() ?? (data.redirect || '/instructor');
     } catch {
       setError('Unable to reach the server. Please check your connection.');
     } finally {

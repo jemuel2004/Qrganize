@@ -4,7 +4,7 @@
  */
 
 import { daysKey, parseDays, type WeekDay } from '@shared/dayCombination';
-import { NEMSU_OFFICIAL_DEPT, formatAy, semesterHeading } from '@/lib/nemsuOfficialPrintChrome';
+import { DEFAULT_FOOTER_CONFIG, NEMSU_OFFICIAL_DEPT, formatAy, semesterHeading } from '@/lib/nemsuOfficialPrintChrome';
 
 export interface SessionData { day: string; start_time: string; end_time: string; session_hours: number; }
 export interface RawSchedule {
@@ -225,6 +225,8 @@ export const CP_DEFAULTS = {
 
 export interface ClassProgramDocSettings {
   campusName: string; campusAddress: string;
+  /** Footer phone / website (Document Settings) — the address is campusAddress */
+  campusTel?: string; campusWebsite?: string;
   preparedBy: Signatory; recommendedBy: Signatory; notedBy: Signatory; approvedBy: Signatory;
 }
 
@@ -243,6 +245,8 @@ export function loadClassProgramDocSettings(programCode: string | null | undefin
   return {
     campusName: s?.campusName || CP_DEFAULTS.campusName,
     campusAddress: s?.campusAddress || CP_DEFAULTS.campusAddress,
+    campusTel: s?.campusTel || CP_DEFAULTS.campusTel,
+    campusWebsite: s?.campusWebsite || CP_DEFAULTS.campusWebsite,
     preparedBy: coordinators[key] ?? DEFAULT_COORDINATORS[key] ?? EMPTY_SIGNATORY,
     recommendedBy: { name: s?.recommendedByName || CP_DEFAULTS.recommendedBy.name, designation: s?.recommendedByDesig || CP_DEFAULTS.recommendedBy.designation },
     notedBy: { name: s?.notedByName || CP_DEFAULTS.notedBy.name, designation: s?.notedByDesig || CP_DEFAULTS.notedBy.designation },
@@ -250,7 +254,7 @@ export function loadClassProgramDocSettings(programCode: string | null | undefin
   };
 }
 
-// ─── Excel export — formatted like the printed / signed form ─────────────────
+// ─── Excel export — the printed Class Program as a sheet ──────────────────────
 
 export async function downloadClassProgramExcel(opts: {
   block: BlockDetail;
@@ -275,14 +279,16 @@ export async function downloadClassProgramExcel(opts: {
     instructor: r.faculty_name || '',
     room: r.room_name || 'No room assigned',
   });
-  // NEMSU seal for the top of the sheet — the file still downloads without it
-  const logo = await fetch('/nemlogo/NEMSU-logo.png')
-    .then(r => (r.ok ? r.arrayBuffer() : null))
-    .catch(() => null);
+  // Seal for the header and the footer marks — the file still downloads without them
+  const png = (path: string) => fetch(path).then(r => (r.ok ? r.arrayBuffer() : null)).catch(() => null);
+  const [logo, iso, bagong] = await Promise.all([
+    png('/nemlogo/NEMSU-logo.png'),
+    png('/nemlogo/ISO-UKAS.png'),
+    png('/nemlogo/BAGONG-PILIPINAS-LOGO.png'),
+  ]);
   const buffer = await buildClassProgramWorkbook({
     logo: logo ? { buffer: logo, extension: 'png' } : undefined,
     department: (block.department || '').trim() || NEMSU_OFFICIAL_DEPT,
-    campusLine: [settings.campusName, settings.campusAddress].filter(Boolean).join(' — '),
     semesterHeading: semesterHeading(block.semester),
     academicYear: formatAy(block.academic_year),
     courseYearSection: `${block.program_code} ${block.year_level} — Block ${block.block_name}`,
@@ -306,6 +312,16 @@ export async function downloadClassProgramExcel(opts: {
     recommendedBy: settings.recommendedBy,
     notedBy: settings.notedBy,
     approvedBy: settings.approvedBy,
+    // Same footer lines as the printed page
+    footer: {
+      address: settings.campusAddress || DEFAULT_FOOTER_CONFIG.address,
+      phone: settings.campusTel || DEFAULT_FOOTER_CONFIG.phone,
+      website: settings.campusWebsite || DEFAULT_FOOTER_CONFIG.website,
+    },
+    // visibleHeight: how much of each square PNG the mark fills, so both print at the same height
+    footerLogos: [{ b: iso, visibleHeight: 0.57 }, { b: bagong, visibleHeight: 0.74 }]
+      .filter((l): l is { b: ArrayBuffer; visibleHeight: number } => !!l.b)
+      .map(l => ({ buffer: l.b, extension: 'png' as const, visibleHeight: l.visibleHeight })),
   });
   const url = URL.createObjectURL(new Blob([buffer], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

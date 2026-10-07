@@ -64,7 +64,7 @@ export async function GET() {
 async function POST_handler(req: NextRequest) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || (auth.role !== 'admin' && auth.role !== 'program_chair')) {
+    if (!auth || (auth.role !== 'admin')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

@@ -390,7 +390,7 @@ export default function DeptChairAccountsClient() {
           <button
             type="button"
             onClick={openCreate}
-            className="flex items-center gap-2 bg-[#1D5BD6] hover:bg-[#164BB5] px-5 h-11 rounded-xl font-semibold text-[15px] transition-colors shadow-lg shadow-[#1D5BD6]/20"
+            className="w-full sm:w-auto flex items-center justify-center gap-2 bg-[#1D5BD6] hover:bg-[#164BB5] px-5 h-11 rounded-xl font-semibold text-[15px] transition-colors shadow-lg shadow-[#1D5BD6]/20"
             style={{ color: '#FFFFFF' }}
           >
             <Plus className="w-4 h-4" />
@@ -399,19 +399,22 @@ export default function DeptChairAccountsClient() {
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.06)] p-5">
+        <div className="bg-white rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.06)] p-4 sm:p-5">
           <div className="flex flex-wrap gap-3">
             <SearchInput
               value={search}
               onChange={setSearch}
               placeholder="Search username, email, or program…"
-              className="flex-1 min-w-[220px]"
+              className="w-full sm:w-auto sm:flex-1 sm:min-w-[220px]"
             />
-            <FilterSelect value={filterStatus} onChange={setFilterStatus} label="Status" className="min-w-[140px]">
-              <option value="">All Status</option>
-              <option value="active">Active</option>
-              <option value="inactive">Inactive</option>
-            </FilterSelect>
+            {/* Phones: Status fills the row (Clear sits beside it when shown) */}
+            <div className="flex-1 min-w-0 sm:flex-none">
+              <FilterSelect value={filterStatus} onChange={setFilterStatus} label="Status" className="h-11 sm:min-w-[140px]">
+                <option value="">All Status</option>
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+              </FilterSelect>
+            </div>
             {(search || filterStatus) && (
               <button
                 type="button"

@@ -2,19 +2,23 @@
 
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Download, Printer, RotateCcw, Settings2 } from 'lucide-react';
+import { Download, Printer, RotateCcw, Settings2, UserRound } from 'lucide-react';
 import { useSchoolYear } from '@/context/SchoolYearContext';
 import { useRealtime } from '@/context/RealtimeContext';
 import { useDayCombinations } from '@/lib/dayCombinations';
+import { blockCurriculumVersion, curriculumVersionLabel } from '@shared/curriculumVersion';
 import {
-  DEFAULT_COORDINATORS, EMPTY_SIGNATORY, downloadClassProgramExcel, expandToDisplayRows, fmtNum,
+  DEFAULT_COORDINATORS, EMPTY_SIGNATORY, downloadClassProgramExcel, expandToDisplayRows, fmt12, fmtNum,
   formatCourseLabel, formatTimeRange, groupByDay, isAM, programKey,
-  type BlockDetail, type DisplayRow, type RawSchedule, type Signatory,
+  type BlockDetail, type DayGroup, type DisplayRow, type RawSchedule, type Signatory,
 } from './classProgramReport';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
-import { FilterBar, FilterSelect, SF_INPUT } from '@/components/ui/SearchFilter';
-import { DocumentSkeleton } from '@/components/ui/skeletons';
+import FriendlySelect from '@/components/ui/FriendlySelect';
+import { BlockBadge } from '@/components/OfficialWorkloadFormTable';
+import { FilterBar, SF_INPUT } from '@/components/ui/SearchFilter';
+import { DocumentSkeleton, Skeleton } from '@/components/ui/skeletons';
+import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import { isScopedChairRole } from '@/lib/roleAccess';
 import {
@@ -38,13 +42,18 @@ interface Block {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const YEAR_LEVELS = ['1st Year', '2nd Year', '3rd Year', '4th Year'];
+/** "2nd Year" → "2" (Year & Block labels read 1A, 1B, 2A… as on Faculty Workload) */
+function yearNum(yearLevel: string): string {
+  const m = yearLevel.match(/\d+/);
+  return m ? m[0] : yearLevel;
+}
 
 /** Same label style as Blocks / Faculty Workload filter rows */
 const LABEL_CLS = 'block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1.5';
 
+/* Phones: the three actions share one row of equal buttons */
 const BTN_BASE =
-  'inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-60';
+  'inline-flex items-center justify-center gap-2 max-sm:w-full max-sm:min-h-[44px] max-sm:px-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-60';
 const BTN_SECONDARY =
   `${BTN_BASE} bg-white border border-[#E5E7EB] text-[#374151] hover:border-[#1D5BD6] hover:text-[#164BB5] hover:bg-[#F9FAFB] active:bg-[#EFF6FF]`;
 const BTN_PRIMARY =
@@ -69,6 +78,13 @@ ${officialPrintPreviewShellCss()}
     box-shadow: inset 0 1px 0 #222, inset 0 -1px 0 #222, 0 2px 4px -2px rgba(15, 23, 42, 0.25);
   }
 }
+/* Phones and tablets read the class cards; the paper form is for wide screens
+   and for printing (print is not a screen, so it still prints from a phone). */
+@media screen and (max-width: 1023.98px) {
+  .cp-doc { display: none !important; }
+}
+/* "BSIT 1A" stays on one line, as on Faculty Workload */
+.cp-shell .wl td.t-course { white-space: nowrap; }
 `;
 
 // ─── Main Component ───────────────────────────────────────────────────────────
@@ -89,8 +105,11 @@ export default function ClassProgramPage() {
   const [isChair, setIsChair] = useState(false);
   const [chairProgramId, setChairProgramId] = useState<number | null>(null);
   const [chairNoProgram, setChairNoProgram] = useState(false);
+  /** Programs and role still loading — the page shows its skeleton */
+  const [booting, setBooting] = useState(true);
 
-  // Single source of truth for Program → Year Level → Block cascade.
+  // Single source of truth for Program → Year & Block. One pick (e.g. "1A")
+  // sets both the block and its year level, as on Faculty Workload.
   const [filterProgram,   setFilterProgram]   = useState('');
   const [filterYearLevel, setFilterYearLevel] = useState('');
   const [selectedBlockId, setSelectedBlockId] = useState('');
@@ -142,6 +161,7 @@ export default function ClassProgramPage() {
           }
         }
       } catch { /* non-critical */ }
+      finally { if (!cancelled) setBooting(false); }
     })();
     return () => { cancelled = true; };
   }, []);
@@ -239,7 +259,7 @@ export default function ClassProgramPage() {
 
   // ── Derived guard: all user selections must be present ────────────────────
   // Semester is automatic (from SchoolYearContext) — not a user selection.
-  // Program, Year Level, and Block are the three required user choices.
+  // Program and Year & Block are the user's choices (the block brings its year level).
   const selectionComplete =
     !!filterProgram && !!filterYearLevel && !!selectedBlockId && !!globalSemester && !!globalYear;
 
@@ -247,29 +267,26 @@ export default function ClassProgramPage() {
   function handleProgramChange(val: string) {
     setFilterProgram(val);
     setFilterYearLevel('');   // clear child
-    setSelectedBlockId('');   // clear grandchild
+    setSelectedBlockId('');
     setBlocks([]);            // clear block list
   }
 
-  // ── Cascade handler: Year Level changed ──────────────────────────────────
-  function handleYearLevelChange(val: string) {
-    setFilterYearLevel(val);
-    setSelectedBlockId('');   // clear child
-    // blocks will re-fetch via useEffect
-  }
-
-  // ── Cascade handler: Block changed ───────────────────────────────────────
-  function handleBlockChange(val: string) {
-    setSelectedBlockId(val);
+  // ── Cascade handler: Year & Block picked — fills both ────────────────────
+  function handleYearBlockChange(blockId: string) {
+    const block = blocks.find(b => String(b.id) === blockId);
+    // Unknown id → clear both, so year level and block never disagree
+    setFilterYearLevel(block?.year_level ?? '');
+    setSelectedBlockId(block ? blockId : '');
     // document will re-fetch via useEffect
   }
 
-  // ── Effect: Lazily load blocks when parent filters are complete ──────────
+  // ── Effect: Lazily load the program's blocks for the active term ─────────
   useEffect(() => {
     // Clear selection and list whenever parent context changes
     setSelectedBlockId('');
+    setFilterYearLevel('');
 
-    if (!filterProgram || !filterYearLevel || !globalSemester || !globalYear) {
+    if (!filterProgram || !globalSemester || !globalYear) {
       blocksAbortRef.current?.abort();
       blocksQuery.current = '';
       setBlocks([]);
@@ -286,9 +303,9 @@ export default function ClassProgramPage() {
     setBlocksError('');
     setBlocks([]);
 
+    // Every year level at once — the Year & Block list runs 1A, 1B, 2A…
     const params = new URLSearchParams({
       program_id:   filterProgram,
-      year_level:   filterYearLevel,
       semester:     globalSemester,
       academic_year: globalYear,
     });
@@ -305,10 +322,11 @@ export default function ClassProgramPage() {
         }
         const list: Block[] = data.blocks || [];
         setBlocks(list);
-        // Deep link: select the requested block once the list is in
+        // Deep link: select the requested block (and its year level) once the list is in
         const pending = pendingRef.current;
         if (pending) {
-          if (list.some(b => String(b.id) === pending.block)) setSelectedBlockId(pending.block);
+          const hit = list.find(b => String(b.id) === pending.block);
+          if (hit) { setFilterYearLevel(hit.year_level); setSelectedBlockId(pending.block); }
           else { pendingRef.current = null; notifyReports('error', 'That block was not found for the active semester.'); }
         }
       })
@@ -318,7 +336,7 @@ export default function ClassProgramPage() {
       .finally(() => { if (!controller.signal.aborted) setBlocksLoading(false); });
 
     return () => { controller.abort(); };
-  }, [filterProgram, filterYearLevel, globalSemester, globalYear]);
+  }, [filterProgram, globalSemester, globalYear]);
 
   // ── Effect: Load document when ALL selections are complete ───────────────
   useEffect(() => {
@@ -407,22 +425,36 @@ export default function ClassProgramPage() {
   // Document and actions ONLY shown when all selections are complete + data loaded
   const showDocument = selectionComplete && hasLoaded && !!blockDetail;
   const showActions  = showDocument && !loading;
+  // Page and document skeletons — the same time as every other page
+  const showPageSkeleton = useMinLoading(booting, LOADING_DELAY);
   const showSkeleton = useMinLoading(loading, LOADING_DELAY);
 
   // ── Prompt state helpers ─────────────────────────────────────────────────
-  function promptStep(): 'no-semester' | 'no-program' | 'no-year' | 'no-block' | 'ready' {
+  function promptStep(): 'no-semester' | 'no-program' | 'no-block' | 'ready' {
     if (!globalSemester && !semLoading) return 'no-semester';
     if (!filterProgram) return 'no-program';
-    if (!filterYearLevel) return 'no-year';
-    if (!selectedBlockId) return 'no-block';
+    if (!selectedBlockId || !filterYearLevel) return 'no-block';
     return 'ready';
   }
   const step = promptStep();
 
+  /* Year & Block options: the program's blocks in the active term, 1A, 1B, 2A… */
+  const blockOptions = [...blocks]
+    .sort((a, b) =>
+      yearNum(a.year_level).localeCompare(yearNum(b.year_level), undefined, { numeric: true }) ||
+      a.block_name.localeCompare(b.block_name, undefined, { numeric: true }))
+    .map(b => ({
+      value: String(b.id),
+      label: `${yearNum(b.year_level)}${b.block_name}`,
+      hint: `${b.year_level}, Block ${b.block_name} · ${curriculumVersionLabel(blockCurriculumVersion(b.curriculum_version))}`,
+      badge: b.subject_count ? `${b.subject_count} subjects` : undefined,
+      badgeTone: 'muted' as const,
+    }));
+
   function emptyTitle(): string {
     if (step === 'no-semester') return 'No Active Semester';
     if (blocksLoading) return 'Loading Blocks…';
-    if (step === 'no-block' && blocks.length === 0 && filterProgram && filterYearLevel) return 'No Blocks Found';
+    if (step === 'no-block' && blocks.length === 0 && filterProgram && !blocksError) return 'No Blocks Found';
     if (step === 'ready' && hasLoaded && schedules.length === 0) return 'No Subjects Found';
     return 'No Class Program Selected';
   }
@@ -434,14 +466,16 @@ export default function ClassProgramPage() {
       block: blockDetail,
       schedules,
       combos: dayCombos,
-      settings: { campusName, campusAddress, preparedBy, recommendedBy, notedBy, approvedBy },
+      settings: { campusName, campusAddress, campusTel, campusWebsite, preparedBy, recommendedBy, notedBy, approvedBy },
     });
   }
 
   // ── Deep link: run the requested Print / Excel once the document is ready ─
+  // …and on screen: the skeletons are gone, so Print never catches a placeholder
+  const docOnScreen = showActions && !showPageSkeleton && !showSkeleton;
   useEffect(() => {
     const pending = pendingRef.current;
-    if (!pending || !showActions) return;
+    if (!pending || !docOnScreen) return;
     pendingRef.current = null;
     (async () => {
       try {
@@ -458,55 +492,64 @@ export default function ClassProgramPage() {
     })();
     // Runs once when the document becomes ready; the handlers read current state
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showActions]);
+  }, [docOnScreen]);
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="cp-print-root p-4 sm:p-6 max-w-7xl mx-auto w-full min-w-0">
       <style dangerouslySetInnerHTML={{ __html: PRINT_CSS }} />
 
-      {/* ── Page header (same structure as Master Schedule) ── */}
-      <div className="no-print mb-2 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      {/* ── Page header ── wide screens: Back | actions, title under them.
+          Phones: Back, title, then the three actions as one row of equal buttons. */}
+      <div className="no-print mb-6 sm:mb-10 grid grid-cols-1 gap-y-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-x-4 sm:gap-y-0">
         <div className="min-w-0">
           <BackButton />
         </div>
 
-        <div className="flex flex-shrink-0 flex-wrap gap-2.5" role="group" aria-label="Class program actions">
+        <div className="order-last sm:order-none grid grid-cols-3 gap-2 sm:flex sm:flex-shrink-0 sm:flex-wrap sm:gap-2.5" role="group" aria-label="Class program actions">
           <button
             type="button"
             disabled={!showActions}
             onClick={() => setShowSettings(s => !s)}
             aria-expanded={showSettings}
-            title={showActions ? 'Signatories and campus details' : 'Select program, year level, and block first'}
+            title={showActions ? 'Signatories and campus details' : 'Select program and year & block first'}
             className={`${BTN_SECONDARY} ${showSettings ? '!border-[#1D5BD6] !text-[#164BB5] !bg-[#EFF6FF]' : ''}`}
           >
-            <Settings2 className="w-4 h-4" /> {showSettings ? 'Hide Settings' : 'Document Settings'}
+            <Settings2 className="w-4 h-4 flex-shrink-0" />
+            <span className="sm:hidden">Settings</span>
+            <span className="hidden sm:inline">{showSettings ? 'Hide Settings' : 'Document Settings'}</span>
           </button>
           <button
             type="button"
             disabled={!showActions}
             onClick={handleExportExcel}
-            title={showActions ? 'Download as Excel' : 'Select program, year level, and block first'}
+            title={showActions ? 'Download as Excel' : 'Select program and year & block first'}
             className={BTN_SECONDARY}
           >
-            <Download className="w-4 h-4" /> Export Excel
+            <Download className="w-4 h-4 flex-shrink-0" />
+            <span className="sm:hidden">Excel</span>
+            <span className="hidden sm:inline">Export Excel</span>
           </button>
           <button
             type="button"
             disabled={!showActions}
             onClick={() => window.print()}
-            title={showActions ? 'Print or save as PDF' : 'Select program, year level, and block first'}
+            title={showActions ? 'Print or save as PDF' : 'Select program and year & block first'}
             className={BTN_PRIMARY}
           >
-            <Printer className="w-4 h-4" /> Print / PDF
+            <Printer className="w-4 h-4 flex-shrink-0" />
+            <span className="sm:hidden">Print</span>
+            <span className="hidden sm:inline">Print / PDF</span>
           </button>
         </div>
-      </div>
-      <div className="no-print mt-4 sm:mt-7 mb-10">
-        <WatermarkTitle>Class Program</WatermarkTitle>
+
+        <div className="sm:col-span-2 sm:mt-9">
+          <WatermarkTitle>Class Program</WatermarkTitle>
+        </div>
       </div>
 
-      {/* ── Filter panel (same FilterBar as Master Schedule) ── */}
+      <PageLoadTransition showSkeleton={showPageSkeleton} skeleton={<ClassProgramPageSkeleton />}>
+      {/* ── Filter panel — Program, then one Year & Block pick (1A, 1B, 2A…) as on Faculty Workload ── */}
       <FilterBar className="no-print relative z-20">
         <div id="cp-selection" className="space-y-4">
           <p className="text-sm font-semibold text-[#0B2A5B]">Class Program Selection</p>
@@ -523,13 +566,13 @@ export default function ClassProgramPage() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)]">
             <div className="min-w-0">
               <label className={LABEL_CLS}>
                 Program <span className="text-red-400">*</span>
               </label>
               {isChair ? (
-                <div className="flex min-h-[42px] items-center rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm font-medium text-slate-600 select-none">
+                <div className="flex min-h-[48px] items-center rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm font-medium text-slate-600 select-none">
                   <span className="truncate">
                     {lockedProgram
                       ? `${lockedProgram.code} — ${lockedProgram.name}`
@@ -537,68 +580,49 @@ export default function ClassProgramPage() {
                   </span>
                 </div>
               ) : (
-                <FilterSelect value={filterProgram} onChange={handleProgramChange} label="Program" className="min-h-[42px]">
-                  <option value="">— Select Program —</option>
-                  {programs.map(p => (
-                    <option key={p.id} value={p.id}>{p.code} — {p.name}</option>
-                  ))}
-                </FilterSelect>
+                <FriendlySelect
+                  value={filterProgram}
+                  onChange={handleProgramChange}
+                  label="Program"
+                  placeholder="Select Program"
+                  guide={!filterProgram}
+                  minPanelWidth={340}
+                  showHintInTrigger
+                  options={programs.map(p => ({ value: String(p.id), label: p.code, hint: p.name }))}
+                />
               )}
             </div>
 
             <div className="min-w-0">
               <label className={LABEL_CLS}>
-                Year Level <span className="text-red-400">*</span>
+                Year &amp; Block <span className="text-red-400">*</span>
               </label>
-              <FilterSelect
-                value={filterYearLevel}
-                onChange={handleYearLevelChange}
-                disabled={!filterProgram}
-                label="Year Level"
-                className="min-h-[42px]"
-              >
-                <option value="">— Select Year Level —</option>
-                {YEAR_LEVELS.map(y => <option key={y} value={y}>{y}</option>)}
-              </FilterSelect>
-            </div>
-
-            <div className="min-w-0">
-              <label className={LABEL_CLS}>
-                Block / Section <span className="text-red-400">*</span>
-              </label>
-              <FilterSelect
+              <FriendlySelect
                 value={selectedBlockId}
-                onChange={handleBlockChange}
-                disabled={!filterProgram || !filterYearLevel || !globalSemester || blocksLoading}
-                label="Block / Section"
-                className="min-h-[42px]"
-              >
-                <option value="">
-                  {blocksLoading ? '— Loading blocks… —'
-                    : blocksError ? '— Error loading blocks —'
-                    : blocks.length === 0 && filterProgram && filterYearLevel ? '— No blocks found —'
-                    : '— Select Block —'}
-                </option>
-                {blocks.map(b => (
-                  <option key={b.id} value={b.id}>
-                    Block {b.block_name} ({b.curriculum_version === 'new' ? 'New Curriculum' : 'Old Curriculum'})
-                    {b.subject_count ? ` · ${b.subject_count} subjects` : ''}
-                  </option>
-                ))}
-              </FilterSelect>
+                onChange={handleYearBlockChange}
+                disabled={!filterProgram || !globalSemester || blocksLoading || (!!blocksError || blocks.length === 0)}
+                label="Year & Block"
+                placeholder="Select Year & Block"
+                disabledText={
+                  !filterProgram ? 'Select a program first'
+                    : blocksLoading ? 'Loading blocks…'
+                    : blocksError ? 'Could not load blocks'
+                    : 'No blocks this semester'
+                }
+                guide={!!filterProgram && !selectedBlockId && blocks.length > 0}
+                minPanelWidth={320}
+                searchable
+                searchPlaceholder="Search, e.g. 1A"
+                options={blockOptions}
+              />
               {blocksError && <p className="mt-1.5 text-xs text-red-500">{blocksError}</p>}
-              {!blocksError && filterProgram && filterYearLevel && globalSemester && !blocksLoading && blocks.length === 0 && (
-                <p className="mt-1.5 text-xs text-slate-400">
-                  No blocks found for {filterYearLevel} in {globalSemester}.
-                </p>
-              )}
             </div>
 
-            <div className="min-w-0">
+            <div className="min-w-0 sm:col-span-2 lg:col-span-1">
               <label className={LABEL_CLS}>
                 Semester <span className="normal-case font-normal text-slate-400">(auto)</span>
               </label>
-              <div className="flex min-h-[42px] items-center rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm font-medium text-slate-600 select-none">
+              <div className="flex min-h-[48px] items-center rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm font-medium text-slate-600 select-none">
                 <span className="truncate">{semLoading ? 'Loading…' : (globalSemester || 'No active semester')}</span>
               </div>
             </div>
@@ -676,19 +700,28 @@ export default function ClassProgramPage() {
 
       {/* ── Loading / Empty / Document ── */}
       {showSkeleton ? (
-        // Shaped like the printed Class Program that loads (the filters above stay real)
+        // Shaped like what loads: the cards below lg, the printed page from lg (filters stay real)
         <div className="no-print" role="status" aria-live="polite" aria-label="Loading class program">
-          <DocumentSkeleton />
+          <div className="lg:hidden"><ClassCardsSkeleton /></div>
+          <div className="hidden lg:block"><DocumentSkeleton /></div>
         </div>
       ) : !showDocument ? (
         <div className="no-print rounded-2xl border border-[#E2E8F0] bg-white px-6 py-14 text-center shadow-sm">
           <p className="text-sm font-semibold text-[#0B2A5B]">{emptyTitle()}</p>
         </div>
       ) : (
-        <div className="cp-print-scroll max-lg:overflow-auto max-lg:max-h-[75vh] lg:overflow-visible">
-        {/* Wide screens: no inner scroll box, so the header sticks while the page scrolls.
-            Smaller screens: the preview scrolls sideways, so it gets its own scroll area
-            and the header sticks inside it. */}
+        <>
+        {/* Phones / tablets: the class program as cards, like My Workload */}
+        <ClassProgramCards
+          block={blockDetail!}
+          dayGroups={dayGroups}
+          unscheduledRows={unscheduledRows}
+          totalUnits={totalUnits}
+          totalHours={totalHours}
+        />
+        {/* Wide screens and print: the paper form (hidden on smaller screens by .cp-doc).
+            No inner scroll box, so its header sticks while the page scrolls. */}
+        <div className="cp-print-scroll cp-doc">
         <div id="cp-preview" className="cp-shell">
           <div className="page">
           {/* Page frame (officialPrintPagedHtml): the header repeats at the top of
@@ -898,7 +931,9 @@ export default function ClassProgramPage() {
           </div>
         </div>
         </div>
+        </>
       )}
+      </PageLoadTransition>
 
     </div>
   );
@@ -920,5 +955,173 @@ function ClassRow({ row, course }: { row: DisplayRow; course: string }) {
         {row.room_name ? row.room_name : <span className="no-room">No room assigned</span>}
       </td>
     </tr>
+  );
+}
+
+// ─── Phone / tablet cards ─────────────────────────────────────────────────────
+
+/** "07:00", "08:30" → "7:00 – 8:30 AM"; "11:30", "13:00" → "11:30 AM – 1:00 PM" */
+function cardTime(start: string | null, end: string | null): string {
+  if (!start) return 'No time yet';
+  const mer = (t: string) => (isAM(t) ? 'AM' : 'PM');
+  if (!end) return `${fmt12(start)} ${mer(start)}`;
+  return mer(start) === mer(end)
+    ? `${fmt12(start)} – ${fmt12(end)} ${mer(end)}`
+    : `${fmt12(start)} ${mer(start)} – ${fmt12(end)} ${mer(end)}`;
+}
+
+/** Units · Hours · Room — the small boxes at the bottom of a card */
+function CardFacts({ facts }: { facts: [string, string][] }) {
+  return (
+    <dl className={`mt-2.5 grid ${facts.length === 2 ? 'grid-cols-2' : 'grid-cols-3'} gap-2 text-center`}>
+      {facts.map(([k, v]) => (
+        <div key={k} className="rounded-lg bg-[#F8FAFC] px-1.5 py-1.5 min-w-0">
+          <dt className="text-[11px] font-semibold uppercase tracking-wide text-[#64748B]">{k}</dt>
+          <dd className="text-sm font-bold text-[#0B2A5B] truncate tabular-nums">{v || '—'}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function CardInstructor({ name }: { name: string | null }) {
+  return (
+    <p className="mt-2.5 flex items-start gap-2 text-sm">
+      <UserRound className="w-4 h-4 mt-0.5 flex-shrink-0 text-[#64748B]" aria-hidden="true" />
+      {name
+        ? <span className="font-semibold text-[#0B2A5B] break-words min-w-0">{name}</span>
+        : <span className="font-semibold text-[#B91C1C]">No instructor yet</span>}
+    </p>
+  );
+}
+
+const CARD = 'rounded-xl border border-[#E2E8F0] bg-white px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.05)]';
+
+/** Below lg: the block's classes as cards, grouped by days, then the total and
+ *  anything still unscheduled — the same layout as the workload cards. */
+function ClassProgramCards({ block, dayGroups, unscheduledRows, totalUnits, totalHours }: {
+  block: BlockDetail;
+  dayGroups: DayGroup[];
+  unscheduledRows: DisplayRow[];
+  totalUnits: number;
+  totalHours: number;
+}) {
+  return (
+    <div className="no-print lg:hidden space-y-5">
+      <div className={`${CARD} flex items-start justify-between gap-3`}>
+        <div className="min-w-0">
+          <p className="text-base font-bold text-[#0B2A5B] break-words leading-snug">{block.program_name || block.program_code}</p>
+          <p className="text-sm text-[#64748B] mt-0.5">{block.semester} · A.Y {formatAy(block.academic_year)}</p>
+        </div>
+        <BlockBadge course={formatCourseLabel(block)} />
+      </div>
+
+      {dayGroups.length === 0 ? (
+        <p className={`${CARD} py-6 text-center text-sm text-[#64748B]`}>No subjects have been scheduled yet.</p>
+      ) : dayGroups.map(group => (
+        <section key={group.pattern} className="space-y-2.5">
+          <h3 className="px-1 text-[13px] font-bold text-[#475569]">{group.label.replace(/\//g, ' · ')}</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {group.rows.map(row => (
+              <div key={row.key} className={CARD}>
+                <p className="text-sm font-semibold text-[#0B2A5B] tabular-nums">{cardTime(row.start_time, row.end_time)}</p>
+                <p className="mt-1.5 text-base font-bold text-[#0F172A] break-words">{row.subject_code}</p>
+                <p className="text-sm text-[#334155] mt-0.5 break-words">{row.subject_name}</p>
+                <CardFacts facts={[
+                  ['Units', row.is_continuation ? '' : fmtNum(row.row_units)],
+                  ['Hours', fmtNum(row.row_hours)],
+                  ['Room', row.room_name ?? ''],
+                ]} />
+                <CardInstructor name={row.faculty_name} />
+              </div>
+            ))}
+          </div>
+        </section>
+      ))}
+
+      {dayGroups.length > 0 && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3">
+          <p className="text-sm font-bold text-[#0B2A5B]">Total Number of Units</p>
+          <p className="text-right tabular-nums">
+            <span className="block text-base font-bold text-[#0B2A5B]">{fmtNum(totalUnits)} <span className="text-xs font-semibold text-[#64748B]">units</span></span>
+            <span className="block text-xs font-semibold text-[#64748B]">{fmtNum(totalHours)} hrs</span>
+          </p>
+        </div>
+      )}
+
+      {unscheduledRows.length > 0 && (
+        <section className="space-y-2.5">
+          <h3 className="px-1 text-[13px] font-bold text-[#475569]">Pending / Unscheduled</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {unscheduledRows.map(row => (
+              <div key={row.key} className={CARD}>
+                <p className="text-base font-bold text-[#0F172A] break-words">{row.subject_code}</p>
+                <p className="text-sm text-[#334155] mt-0.5 break-words">{row.subject_name}</p>
+                <CardFacts facts={[
+                  ['Units', fmtNum(row.row_units)],
+                  ['Hours', fmtNum(row.row_hours)],
+                ]} />
+                <CardInstructor name={row.faculty_name} />
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+// ─── Skeletons ────────────────────────────────────────────────────────────────
+
+/** The selection card while the page loads: title, then Program · Year & Block · Semester */
+function ClassProgramPageSkeleton() {
+  return (
+    <div className="no-print" role="status" aria-live="polite" aria-label="Loading class program">
+      <div className="bg-white rounded-2xl border border-[#E2E8F0]/70 shadow-sm p-5 mb-5 space-y-4">
+        <Skeleton className="h-4 w-48 rounded" />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)]">
+          {Array.from({ length: 3 }, (_, i) => (
+            <div key={i} className={`min-w-0 space-y-2 ${i === 2 ? 'sm:col-span-2 lg:col-span-1' : ''}`}>
+              <Skeleton className="h-3 w-24 rounded" />
+              <Skeleton className="h-12 w-full rounded-xl" />
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="rounded-2xl border border-[#E2E8F0] bg-white px-6 py-14 shadow-sm flex justify-center">
+        <Skeleton className="h-4 w-56 max-w-full rounded" />
+      </div>
+    </div>
+  );
+}
+
+/** Phones / tablets: block heading card, a day heading, then class cards */
+function ClassCardsSkeleton() {
+  return (
+    <div className="space-y-5">
+      <div className={`${CARD} flex items-start justify-between gap-3`}>
+        <div className="min-w-0 flex-1 space-y-2">
+          <Skeleton className="h-4 w-[70%] rounded" />
+          <Skeleton className="h-3.5 w-[45%] rounded" />
+        </div>
+        <Skeleton className="h-6 w-16 rounded-md flex-shrink-0" />
+      </div>
+      <div className="space-y-2.5">
+        <Skeleton className="h-3.5 w-32 rounded ml-1" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          {Array.from({ length: 3 }, (_, i) => (
+            <div key={i} className={CARD}>
+              <Skeleton className="h-3.5 w-28 rounded" />
+              <Skeleton className="h-4 w-20 rounded mt-2.5" />
+              <Skeleton className={`h-3.5 rounded mt-2 ${i % 2 ? 'w-[55%]' : 'w-[75%]'}`} />
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                {Array.from({ length: 3 }, (_, c) => <Skeleton key={c} className="h-11 rounded-lg" />)}
+              </div>
+              <Skeleton className="h-3.5 w-40 rounded mt-3" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }

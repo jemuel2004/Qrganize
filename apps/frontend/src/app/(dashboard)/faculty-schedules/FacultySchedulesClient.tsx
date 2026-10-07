@@ -25,6 +25,8 @@ import {
   type SummarySignatories,
 } from '@/lib/workloadSummaryPrint';
 import { blockCode } from '@shared/blockCode';
+import { useDayCombinations } from '@/lib/dayCombinations';
+import { buildOfficialGroups, matchOfficialSlot, parseTimeMinutes } from '@/lib/officialWorkloadSlots';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -136,6 +138,25 @@ function byLoadThenTime(a: FacultyScheduleRow, b: FacultyScheduleRow): number {
     || a.subject_code.localeCompare(b.subject_code, undefined, { numeric: true })
     || String(a.year_level ?? '').localeCompare(String(b.year_level ?? ''), undefined, { numeric: true })
     || String(a.block_name ?? '').localeCompare(String(b.block_name ?? ''));
+}
+
+/**
+ * The printed form's order (Actual Load and the others): the term's day groups
+ * as on paper — Settings → Day Combinations order, Morning before Afternoon —
+ * then start time, so Regular, Overload and Praise classes mix by when they
+ * meet. Rows the form can't place (no day/time) go last.
+ */
+function inPrintOrder(list: FacultyScheduleRow[], combos: Parameters<typeof buildOfficialGroups>[0]): FacultyScheduleRow[] {
+  const groups = buildOfficialGroups(combos, list.map(r => r.day_pattern));
+  const groupOfSlot = new Map<string, number>();
+  groups.forEach((g, gi) => g.slots.forEach(slot => groupOfSlot.set(slot.id, gi)));
+  return list
+    .map(row => {
+      const slot = matchOfficialSlot(row.day_pattern, row.start_time, row.end_time, groups);
+      return { row, group: slot == null ? groups.length : groupOfSlot.get(slot) ?? groups.length, start: parseTimeMinutes(row.start_time) ?? 24 * 60 };
+    })
+    .sort((a, b) => a.group - b.group || a.start - b.start || byLoadThenTime(a.row, b.row))
+    .map(x => x.row);
 }
 
 /* ── Sub-components ─────────────────────────────────────────────────────── */
@@ -328,11 +349,13 @@ export default function FacultySchedulesClient({
   const [cardPick, setCardPick] = useState<{ facultyId: number; filter: CardFilter } | null>(null);
   const cardFilter: CardFilter = viewFaculty && cardPick?.facultyId === viewFaculty.id ? cardPick.filter : 'all';
   const reduceMotion = useReducedMotion();
+  const { active: dayCombos } = useDayCombinations(globalSemester, globalYear);
   /* The open Schedule Details reads the live rows, so a background refresh
-     (another user changing this faculty's classes) shows up there too. */
+     (another user changing this faculty's classes) shows up there too —
+     listed in the same order as the printed form. */
   const viewRows = useMemo(
-    () => (viewFaculty ? rows.filter(r => r.faculty_id === viewFaculty.id).sort(byLoadThenTime) : []),
-    [rows, viewFaculty],
+    () => (viewFaculty ? inPrintOrder(rows.filter(r => r.faculty_id === viewFaculty.id), dayCombos) : []),
+    [rows, viewFaculty, dayCombos],
   );
 
   const [filters, setFilters] = useState({
@@ -658,7 +681,8 @@ export default function FacultySchedulesClient({
         <div className="mt-4 sm:mt-7 mb-4">
           <WatermarkTitle>Faculty Schedule</WatermarkTitle>
         </div>
-        <div className="flex flex-wrap justify-end gap-3">
+        {/* Phones: the two buttons share one row, equal width */}
+        <div className="grid grid-cols-2 gap-2.5 sm:flex sm:flex-wrap sm:justify-end sm:gap-3">
           {/* Excel: the same sheet as the print, with the names saved from Print Summary */}
           <motion.button
             type="button"
@@ -667,11 +691,11 @@ export default function FacultySchedulesClient({
             whileHover={reduceMotion || summaryProgress ? undefined : { y: -1 }}
             whileTap={reduceMotion || summaryProgress ? undefined : { scale: 0.96 }}
             title="Download the Summary of Faculty Workload as an Excel file"
-            className="group inline-flex items-center justify-center gap-2 h-11 px-4 rounded-xl text-[15px] font-semibold border-2 border-[#1D5BD6] text-[#1D5BD6] bg-white hover:bg-[#EFF6FF] transition-colors disabled:cursor-wait disabled:opacity-70"
+            className="group min-w-0 inline-flex items-center justify-center gap-2 min-h-[44px] py-1.5 px-3 sm:h-11 sm:py-0 sm:px-4 rounded-xl text-[length:clamp(13px,3.8vw,15px)] sm:text-[15px] leading-tight text-center font-semibold border-2 border-[#1D5BD6] text-[#1D5BD6] bg-white hover:bg-[#EFF6FF] transition-colors disabled:cursor-wait disabled:opacity-70"
           >
             {summaryProgress?.excel
               ? <><Loader2 className="w-4 h-4 animate-spin" /> Preparing Excel… {summaryProgress.done} of {summaryProgress.total}</>
-              : <><FileSpreadsheet className="w-4 h-4 transition-transform duration-200 group-hover:-translate-y-px" style={{ color: '#1D6F42' }} /> Download Excel</>}
+              : <><FileSpreadsheet className="w-4 h-4 flex-shrink-0 transition-transform duration-200 group-hover:-translate-y-px" style={{ color: '#1D6F42' }} /> Download Excel</>}
           </motion.button>
           <motion.button
             type="button"
@@ -680,13 +704,13 @@ export default function FacultySchedulesClient({
             whileHover={reduceMotion || summaryProgress ? undefined : { y: -1 }}
             whileTap={reduceMotion || summaryProgress ? undefined : { scale: 0.96 }}
             title="Print the Summary of Faculty Workload for this term"
-            className="group inline-flex items-center justify-center gap-2 h-11 px-4 rounded-xl text-[15px] font-semibold bg-[#1D5BD6] hover:bg-[#164BB5] shadow-lg shadow-[#1D5BD6]/20 transition-colors disabled:cursor-wait disabled:opacity-90"
+            className="group min-w-0 inline-flex items-center justify-center gap-2 min-h-[44px] py-1.5 px-3 sm:h-11 sm:py-0 sm:px-4 rounded-xl text-[length:clamp(13px,3.8vw,15px)] sm:text-[15px] leading-tight text-center font-semibold bg-[#1D5BD6] hover:bg-[#164BB5] shadow-lg shadow-[#1D5BD6]/20 transition-colors disabled:cursor-wait disabled:opacity-90"
             // White set inline — the light-mode rule repaints `text-white` as dark ink
             style={{ color: '#FFFFFF' }}
           >
             {summaryProgress && !summaryProgress.excel
               ? <><Loader2 className="w-4 h-4 animate-spin" /> Preparing… {summaryProgress.done} of {summaryProgress.total}</>
-              : <><Printer className="w-4 h-4 transition-transform duration-200 group-hover:-translate-y-px" /> Print Summary</>}
+              : <><Printer className="w-4 h-4 flex-shrink-0 transition-transform duration-200 group-hover:-translate-y-px" /> Print Summary</>}
           </motion.button>
         </div>
       </div>
@@ -802,9 +826,10 @@ export default function FacultySchedulesClient({
                   </div>
                   <div className="mt-3 grid grid-cols-4 gap-2">
                     {stats.map(st => (
-                      <div key={st.label} className="rounded-lg bg-[#F8FAFC] border border-[#EEF2F8] px-2 py-1.5 text-center min-w-0">
+                      <div key={st.label} className="rounded-lg bg-[#F8FAFC] border border-[#EEF2F8] px-1 py-1.5 text-center min-w-0">
                         <p className="text-[15px] font-bold tabular-nums" style={{ color: '#0B2A5B' }}>{st.value}</p>
-                        <p className="text-[11px] font-semibold truncate" style={{ color: '#64748B' }}>{st.label}</p>
+                        {/* Scales with the phone so "Overload" fits a quarter of the card */}
+                        <p className="text-[length:clamp(11.5px,3.2vw,13px)] font-semibold truncate" style={{ color: '#64748B' }}>{st.label}</p>
                       </div>
                     ))}
                   </div>

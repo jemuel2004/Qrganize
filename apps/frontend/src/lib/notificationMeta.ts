@@ -39,6 +39,9 @@ export function notificationCategory(n: Pick<NotificationLike, 'type' | 'related
  * informational is collected under "Recent Activity".
  */
 const TYPE_GROUPS: { type: string; label: string }[] = [
+  // Faculty: class reminders (services/classReminders on the server)
+  { type: 'class_starting', label: 'Class Now' },
+  { type: 'class_today', label: 'Classes Today' },
   { type: 'room_request_pending', label: 'Room Requests Pending' },
   { type: 'block_schedule_incomplete', label: 'Incomplete Block Schedule' },
   { type: 'schedule_needed', label: 'Faculty Schedule Needed' },
@@ -64,6 +67,9 @@ export function groupNotifications<T extends NotificationLike>(list: T[]): Notif
 }
 
 const PRIORITY: Record<string, NotificationPriority> = {
+  // Faculty: a class starting / in session, then the day's classes
+  class_starting: 'high',
+  class_today: 'medium',
   // Needs attention
   workload_incomplete: 'high',
   schedule_needed: 'high',
@@ -99,6 +105,8 @@ export function notificationAction(n: NotificationLike, role: Role): { href: str
   const faculty = role === 'instructor';
 
   if (faculty) {
+    if (n.type === 'class_starting') return { href: '/instructor/scan', label: 'Scan Room QR' };
+    if (n.type === 'class_today') return { href: '/instructor/schedule', label: 'View Schedule' };
     if (n.type.startsWith('room_request_')) return { href: '/instructor/room-requests', label: 'View Request' };
     if (n.type.startsWith('qr_scan_') || n.related_module === 'room') return { href: '/instructor/available-rooms', label: 'View Rooms' };
     if (n.type === 'schedule_updated') return { href: '/instructor/schedule', label: 'View Schedule' };

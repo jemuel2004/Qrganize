@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs';
+import { addOfficialFooter, exactAnchor, gapToPageBottom, type FooterLogo } from './excelFooter';
 
 /*
  * Official NEMSU Faculty Workload form as data — computed once (frontend
@@ -97,59 +98,14 @@ const BORDER: Partial<ExcelJS.Borders> = { top: THIN, left: THIN, bottom: THIN, 
 const LOGO_PX = 60;
 const widthToPx = (w: number) => Math.floor(w * 7 + 5);
 
-/* Long bond page (8.5×13 in) minus margins, in points — used to push the
-   official footer to the bottom of the printed page. */
+/* Long bond page (8.5×13 in) and margins (in) — the footer is pushed to the
+   bottom of the printed page. */
 const PAGE = { width: 8.5, height: 13, left: 0.45, right: 0.45, top: 0.4, bottom: 0.45 };
-/** Visible height of each footer mark (frame grows to cover transparent padding) */
-const FOOTER_MARK_PX = 32;
-const FOOTER_LOGO_GAP_PX = 16;
 /** Space between the Approved block and the footer rule */
 const FOOTER_MIN_GAP_PT = 22;
 const FOOTER_MAX_GAP_PT = 44;
 
-type ImageInput = {
-  buffer: ArrayBuffer | Uint8Array;
-  extension: 'png' | 'jpeg';
-  /** Share of the image height the mark actually fills (rest is transparent padding); default 1 */
-  visibleHeight?: number;
-};
-
-/** Width / height of a PNG (IHDR); 1 when unknown. */
-function imageRatio(img: ImageInput): number {
-  const b = img.buffer instanceof Uint8Array ? img.buffer : new Uint8Array(img.buffer);
-  if (img.extension !== 'png' || b.length < 24) return 1;
-  const u32 = (o: number) => ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0;
-  const w = u32(16);
-  const h = u32(20);
-  return w > 0 && h > 0 ? w / h : 1;
-}
-
-const EMU_PER_PX = 9525;
-const PT_TO_PX = 4 / 3;
-
-/**
- * Exact image anchor (native col/row + EMU offsets) for a point `xPx` from the
- * sheet's left edge and `yPx` below the top of 1-based `row`. ExcelJS's own
- * fractional anchors assume ~10000 EMU per width unit, far off from Excel's
- * real column pixels, which misplaces images — so offsets are computed here.
- */
-function exactAnchor(ws: ExcelJS.Worksheet, xPx: number, row: number, yPx: number): ExcelJS.Anchor {
-  let left = Math.max(0, xPx);
-  let col = 0;
-  while (col < COL_WIDTHS.length - 1 && left >= widthToPx(COL_WIDTHS[col])) { left -= widthToPx(COL_WIDTHS[col]); col += 1; }
-  let top = Math.max(0, yPx);
-  let r = row;
-  for (;;) {
-    const h = (ws.getRow(r).height ?? 15) * PT_TO_PX;
-    if (top < h || r >= ws.rowCount) break;
-    top -= h;
-    r += 1;
-  }
-  return {
-    nativeCol: col, nativeColOff: Math.round(left * EMU_PER_PX),
-    nativeRow: r - 1, nativeRowOff: Math.round(top * EMU_PER_PX),
-  } as unknown as ExcelJS.Anchor;
-}
+type ImageInput = FooterLogo;
 
 /** The official Faculty Workload form as a formatted .xlsx (long bond, one page),
  *  ending with the official footer (contact lines + accreditation logos). */
@@ -195,7 +151,7 @@ export async function buildWorkloadFormWorkbook(
     const totalPx = COL_WIDTHS.reduce((s, w) => s + widthToPx(w), 0);
     const imageId = wb.addImage({ buffer: logo.buffer as ExcelJS.Buffer, extension: logo.extension });
     ws.addImage(imageId, {
-      tl: exactAnchor(ws, (totalPx - LOGO_PX) / 2, logoRow.number, 2),
+      tl: exactAnchor(ws, COL_WIDTHS, (totalPx - LOGO_PX) / 2, logoRow.number, 2),
       ext: { width: LOGO_PX, height: LOGO_PX },
     });
   }
@@ -337,58 +293,10 @@ export async function buildWorkloadFormWorkbook(
   line(sg.approved.name, { bold: true, size: 8.5 });
   line(sg.approved.title, { size: 8 });
 
-  // ── Official footer, pushed to the bottom of the page ─────────────────────
-  const DEFAULT_ROW_PT = 15;
-  const FOOTER_LINE_PT = 4;
-  const FOOTER_TEXT_PT = 14;
-  const footerPt = FOOTER_LINE_PT + FOOTER_TEXT_PT * 3;
-  const sheetWidthPx = COL_WIDTHS.reduce((s, w) => s + widthToPx(w), 0);
-  // Printed scale when fitting the columns to the page width (px → pt = 0.75)
-  const scale = Math.min(1, ((PAGE.width - PAGE.left - PAGE.right) * 72) / (sheetWidthPx * 0.75));
-  const pageHeightPt = ((PAGE.height - PAGE.top - PAGE.bottom) * 72) / scale;
-  let usedPt = 0;
-  for (let r = 1; r <= ws.rowCount; r++) usedPt += ws.getRow(r).height ?? DEFAULT_ROW_PT;
-  // At least a clear gap after Approved; when the page is full, fit-to-page scales instead
-  // A modest gap after Approved — reaches toward the page bottom, but never
-  // opens a large empty band (fit-to-page scales down long forms instead)
-  blank(Math.min(FOOTER_MAX_GAP_PT, Math.max(FOOTER_MIN_GAP_PT, Math.floor(pageHeightPt - usedPt - footerPt))));
-
-  const rule = ws.addRow([]);
-  rule.height = FOOTER_LINE_PT;
-  for (let c = 1; c <= LAST_COL; c++) rule.getCell(c).border = { top: { style: 'thin', color: { argb: 'FF555555' } } };
-
-  const contact: { text: string; link?: string }[] = [
-    { text: `📍  ${m.footer.address}` },
-    { text: `☎  ${m.footer.phone}` },
-    { text: `🌐  ${m.footer.website}`, link: `https://${m.footer.website}` },
-  ];
-  const firstTextRow = ws.rowCount + 1;
-  for (const c of contact) {
-    const row = ws.addRow([]);
-    row.height = FOOTER_TEXT_PT;
-    ws.mergeCells(row.number, 1, row.number, HALF_SPLIT_COL);
-    const cell = row.getCell(1);
-    cell.value = c.link ? { text: c.text, hyperlink: c.link } : c.text;
-    cell.font = font({ size: 8, color: c.link ? { argb: 'FF1D4ED8' } : undefined, underline: !!c.link });
-    cell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
-  }
-
-  // Logos on the right, vertically centred on the three contact lines
-  // Logos on the right: equal visible height, each centred on the three contact lines
-  if (footerLogos.length > 0) {
-    const textPx = FOOTER_TEXT_PT * 3 * PT_TO_PX;
-    const frames = footerLogos.map(img => {
-      const height = Math.round(Math.min(textPx, FOOTER_MARK_PX / Math.min(1, Math.max(0.2, img.visibleHeight ?? 1))));
-      return { img, height, width: Math.round(height * imageRatio(img)) };
-    });
-    let x = sheetWidthPx - frames.reduce((s, f) => s + f.width, 0) - FOOTER_LOGO_GAP_PX * (frames.length - 1) - 4;
-    for (const f of frames) {
-      const id = wb.addImage({ buffer: f.img.buffer as ExcelJS.Buffer, extension: f.img.extension });
-      ws.addImage(id, { tl: exactAnchor(ws, x, firstTextRow, (textPx - f.height) / 2), ext: { width: f.width, height: f.height } });
-      x += f.width + FOOTER_LOGO_GAP_PX;
-    }
-  }
-  ws.pageSetup.printArea = `A1:H${ws.rowCount}`;
+  // ── Official footer (Candara 10), pushed to the bottom of the page ────────
+  blank(gapToPageBottom(ws, COL_WIDTHS, PAGE, FOOTER_MIN_GAP_PT, FOOTER_MAX_GAP_PT));
+  addOfficialFooter(wb, ws, { colWidths: COL_WIDTHS, textToCol: HALF_SPLIT_COL, contact: m.footer, logos: footerLogos });
+  ws.pageSetup.printArea = `A1:G${ws.rowCount}`;
 
   return wb.xlsx.writeBuffer() as Promise<ArrayBuffer>;
 }

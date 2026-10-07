@@ -11,7 +11,7 @@ type Params = { params: Promise<{ id: string }> };
 async function POST_handler(req: NextRequest, { params }: Params) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'program_chair'].includes(auth.role ?? '')) {
+    if (!auth || auth.role !== 'admin') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -59,7 +59,7 @@ async function POST_handler(req: NextRequest, { params }: Params) {
 async function DELETE_handler(req: NextRequest, { params }: Params) {
   try {
     const auth = await getAuthUser(req) as { role?: string } | null;
-    if (!auth || !['admin', 'program_chair'].includes(auth.role ?? '')) {
+    if (!auth || auth.role !== 'admin') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
