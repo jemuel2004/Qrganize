@@ -11,6 +11,7 @@ import {
   assertUsernameAllowed,
 } from '@/auth/emailIdentity';
 import { withAudit } from '@/services/audit';
+import { weakPasswordReason } from '@/auth/passwordPolicy';
 
 function adminOnly(auth: { role?: string } | null) {
   return !auth || (auth.role !== 'admin');
@@ -65,6 +66,8 @@ async function POST_handler(req: NextRequest) {
     if (password.length < 8) {
       return NextResponse.json({ error: 'Password must be at least 8 characters.', field: 'password' }, { status: 400 });
     }
+    const weakPw = weakPasswordReason(password);
+    if (weakPw) return NextResponse.json({ error: weakPw, field: 'password' }, { status: 400 });
 
     const program = await resolveRequiredProgramId(program_id);
     if (!program.ok) {

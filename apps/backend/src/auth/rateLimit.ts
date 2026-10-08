@@ -57,17 +57,18 @@ export function checkRateLimit(key: string): {
   return { allowed: true };
 }
 
-export function recordFailure(key: string): void {
+/** `maxAttempts`: failures within the window before the key is locked (per-account keys allow more than per-IP) */
+export function recordFailure(key: string, maxAttempts = MAX_ATTEMPTS): void {
   const now = Date.now();
   const entry = store.get(key);
 
   if (!entry || now - entry.firstAt > WINDOW_MS) {
-    store.set(key, { count: 1, firstAt: now, lockedUntil: null });
+    store.set(key, { count: 1, firstAt: now, lockedUntil: maxAttempts <= 1 ? now + LOCKOUT_MS : null });
     return;
   }
 
   entry.count += 1;
-  if (entry.count >= MAX_ATTEMPTS) {
+  if (entry.count >= maxAttempts) {
     entry.lockedUntil = now + LOCKOUT_MS;
   }
   store.set(key, entry);

@@ -17,6 +17,9 @@ import {
   revokeOtherTrustedDevices,
 } from '@/auth/trustedDevices';
 import { withAudit } from '@/services/audit';
+import { weakPasswordReason } from '@/auth/passwordPolicy';
+import { ensurePasswordChangeColumns } from '@/auth/passwordChange';
+import { checkRateLimit, clearFailures, recordFailure } from '@/auth/rateLimit';
 
 function passwordPolicyOk(pw: string): boolean {
   if (pw.length < 8) return false;
@@ -70,6 +73,8 @@ async function POST_handler(req: NextRequest) {
         { status: 400 }
       );
     }
+    const weakPw = weakPasswordReason(new_password, authUser.username);
+    if (weakPw) return NextResponse.json({ error: weakPw }, { status: 400 });
     if (current_password === new_password) {
       return NextResponse.json(
         { error: 'Your new password must be different from your current password.' },
@@ -86,14 +91,26 @@ async function POST_handler(req: NextRequest) {
     }
 
     const accountId = Number(account.rows[0].id);
+    // Wrong current passwords are limited per account (a borrowed session can't guess it)
+    const guessKey = `pw-change:instructor:${accountId}`;
+    const guessLimit = checkRateLimit(guessKey);
+    if (!guessLimit.allowed) {
+      return NextResponse.json(
+        { error: `Too many incorrect attempts. Please try again in ${guessLimit.retryAfterSeconds} seconds.` },
+        { status: 429 }
+      );
+    }
     const valid = await bcrypt.compare(current_password, account.rows[0].password_hash);
     if (!valid) {
+      recordFailure(guessKey);
       return NextResponse.json({ error: 'Current password is incorrect.' }, { status: 400 });
     }
+    clearFailures(guessKey);
 
     const newHash = await bcrypt.hash(new_password, 12);
+    await ensurePasswordChangeColumns();
     await query(
-      'UPDATE instructor_accounts SET password_hash = $1, updated_at = NOW() WHERE faculty_id = $2',
+      'UPDATE instructor_accounts SET password_hash = $1, must_change_password = FALSE, updated_at = NOW() WHERE faculty_id = $2',
       [newHash, authUser.faculty_id]
     );
 

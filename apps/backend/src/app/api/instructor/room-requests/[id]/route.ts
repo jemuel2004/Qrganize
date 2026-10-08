@@ -2,6 +2,7 @@
 import { getAuthUser } from '@/auth/auth';
 import { query } from '@/database/db';
 import { withAudit } from '@/services/audit';
+import { parseId } from '@/database/ids';
 
 async function DELETE_handler(
   req: NextRequest,
@@ -14,7 +15,8 @@ async function DELETE_handler(
     }
 
     const { id } = await params;
-    const rid = parseInt(id);
+    const rid = parseId(id);
+    if (rid === null) return NextResponse.json({ error: 'Invalid request id.' }, { status: 400 });
 
     const existing = await query(
       'SELECT id, status, requested_room_id FROM room_change_requests WHERE id = $1 AND faculty_id = $2',

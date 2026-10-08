@@ -25,6 +25,7 @@ import {
   type SummarySignatories,
 } from '@/lib/workloadSummaryPrint';
 import { blockCode } from '@shared/blockCode';
+import { formLoadValue } from '@shared/loadSplit';
 import { useDayCombinations } from '@/lib/dayCombinations';
 import { buildOfficialGroups, matchOfficialSlot, parseTimeMinutes } from '@/lib/officialWorkloadSlots';
 
@@ -62,7 +63,23 @@ interface FacultyScheduleRow {
   split_component?: 'lec' | 'lab' | null;
   /** This row is the moved part of the subject listed in another row */
   split_portion?: boolean;
+  /* What the official forms value the subject by (@shared/loadSplit) */
+  lecture_hours?: number | string | null;
+  laboratory_hours?: number | string | null;
+  lec_scheduled?: boolean;
+  lab_scheduled?: boolean;
+  overload_component?: string | null;
+  split_overload_units?: number | string | null;
+  split_overload_hours?: number | string | null;
+  split_lec_part?: number | string | null;
 }
+
+/** Deloading (Designation, Extension, Research/Extension, Special Assignment…) — Permanent only */
+interface DeloadingRow { id: number; faculty_id: number; deduction_type: string; description: string; units: number }
+/** A Praise Load record that isn't a class (Research, Committee Work…) — Permanent only */
+interface PraiseRecordRow { id: number; faculty_id: number; praise_type: string | null; description: string; units: number }
+/** One of the form's lines that isn't a class, as Schedule Details lists it */
+interface ExtraLine { key: string; label: string; description: string; value: number }
 
 interface Summary {
   totalSchedules: number;
@@ -114,8 +131,17 @@ const LOAD_META: Record<LoadKey, { category: string; label: string; color: strin
   praise:   { category: 'Praise',   label: 'Praise Load',  color: 'var(--load-praise)' },
 };
 
+/** A row's units (Permanent) or hours (Contractual) — the value the official forms
+ *  give it: the Regular part of a subject, or the moved part on an Overload / Praise
+ *  row, over the parts that are on the forms (a Laboratory without its class time
+ *  yet isn't). Worked out from the subject's hours, so it never drifts from the print. */
 function rowValue(row: FacultyScheduleRow): number {
-  if (row.employment_status === 'Permanent') {
+  const isP = row.employment_status === 'Permanent';
+  if (row.lecture_hours != null || row.laboratory_hours != null) {
+    const share = row.load_category === 'Regular' && !row.split_portion ? 'regular' : 'moved';
+    return formLoadValue({ ...row, load_category: row.split_portion ? 'Regular' : row.load_category }, isP, share);
+  }
+  if (isP) {
     const u = (row.units !== null && Number(row.units) > 0) ? Number(row.units) : row.curriculum_units;
     return u ?? 0;
   }
@@ -291,7 +317,26 @@ function NonTeachingTime({ facultyId, semester, academicYear }: { facultyId: num
 const LOAD_COLOR: Record<string, string> = {
   Overload: 'var(--load-overload)',
   Praise:   'var(--load-praise)',
+  Deloading: 'var(--load-actual)',
 };
+
+/** Deloading in the printed form's order: Designation, Extension, Research/Extension,
+ *  any other type, then Special Assignment (its own line) */
+const DELOAD_RANK: Record<string, number> = { Designation: 0, Extension: 1, 'Research/Extension': 2, 'Special Assignment': 4 };
+function deloadingLinesOf(list: DeloadingRow[], facultyId: number): ExtraLine[] {
+  return list
+    .filter(d => d.faculty_id === facultyId && Number(d.units) > 0.001)
+    .sort((a, b) => (DELOAD_RANK[a.deduction_type] ?? 3) - (DELOAD_RANK[b.deduction_type] ?? 3) || a.id - b.id)
+    .map(d => ({ key: `ded-${d.id}`, label: d.deduction_type, description: (d.description ?? '').trim(), value: Number(d.units) || 0 }));
+}
+function praiseLinesOf(list: PraiseRecordRow[], facultyId: number): ExtraLine[] {
+  return list
+    .filter(p => p.faculty_id === facultyId)
+    .map(p => ({
+      key: `praise-${p.id}`, label: p.praise_type || 'Other Non-Teaching Load',
+      description: (p.description ?? '').trim(), value: Number(p.units) || 0,
+    }));
+}
 
 /** Stat card that filters the Schedule Details table (Actual Load = every subject). */
 function FilterCard({ label, value, color, active, onClick }: {
@@ -334,6 +379,15 @@ export default function FacultySchedulesClient({
 
   /** Every faculty's subjects this term — Employment Type, Faculty and search filter it on the page */
   const [rows, setRows]               = useState<FacultyScheduleRow[]>([]);
+  /* The forms' other lines: Actual Load and Regular Load add Deloading to the
+     classes, Praise Load adds its records — the totals here match the print. */
+  const [deloading, setDeloading]           = useState<DeloadingRow[]>([]);
+  const [praiseRecords, setPraiseRecords]   = useState<PraiseRecordRow[]>([]);
+  const deloadByFaculty = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const d of deloading) m.set(d.faculty_id, (m.get(d.faculty_id) ?? 0) + (Number(d.units) || 0));
+    return m;
+  }, [deloading]);
   const [facultyList, setFacultyList] = useState<FacultyOption[]>([]);
   const [loading, setLoading]         = useState(true);
 
@@ -417,6 +471,8 @@ export default function FacultySchedulesClient({
       if (!res.ok) { if (!silent) toast.error(data.error ?? 'Failed to load schedules.'); return; }
 
       setRows(data.schedules ?? []);
+      setDeloading(data.deloading ?? []);
+      setPraiseRecords(data.praise_records ?? []);
     } catch {
       if (!silent && seq === loadSeq.current) toast.error('Connection error. Please try again.');
     } finally {
@@ -492,7 +548,8 @@ export default function FacultySchedulesClient({
     }
     // Permanent block first, then Contractual — never interleaved. Within each
     // block, lowest total load (least complete) first; ties by name.
-    const totalOf = (g: Group) => g.rows.reduce((sum, r) => sum + rowValue(r), 0);
+    const totalOf = (g: Group) => g.rows.reduce((sum, r) => sum + rowValue(r), 0)
+      + (g.empStatus === 'Permanent' ? deloadByFaculty.get(g.facultyId) ?? 0 : 0);
     return [...byFaculty.values()].sort((a, b) => {
       const ta = a.empStatus === 'Permanent' ? 0 : 1;
       const tb = b.empStatus === 'Permanent' ? 0 : 1;
@@ -501,7 +558,7 @@ export default function FacultySchedulesClient({
       if (Math.abs(diff) > 0.001) return diff;
       return a.facultyName.localeCompare(b.facultyName);
     });
-  }, [rows]);
+  }, [rows, deloadByFaculty]);
 
   /** The chosen Employment Type and Faculty */
   const groups = useMemo(() => allGroups.filter(g =>
@@ -803,7 +860,9 @@ export default function FacultySchedulesClient({
             <li className="text-center py-16 px-4 text-[15px]" style={{ color: '#94A3B8' }}>No faculty found. Try adjusting your filters.</li>
           ) : visibleGroups.map(group => {
             const isPermanent = group.empStatus === 'Permanent';
-            const totalValue = group.rows.reduce((sum, r) => sum + rowValue(r), 0);
+            // The Actual Load form's total: classes + deloading
+            const totalValue = group.rows.reduce((sum, r) => sum + rowValue(r), 0)
+              + (isPermanent ? deloadByFaculty.get(group.facultyId) ?? 0 : 0);
             const stats = [
               { label: 'Regular', value: group.rows.filter(r => r.load_category === 'Regular').length },
               { label: 'Overload', value: group.rows.filter(r => r.load_category === 'Overload').length },
@@ -872,7 +931,9 @@ export default function FacultySchedulesClient({
                   const isPermanent = group.empStatus === 'Permanent';
                   const regularCount  = group.rows.filter(r => r.load_category === 'Regular').length;
                   const overloadCount = group.rows.filter(r => r.load_category === 'Overload').length;
-                  const totalValue    = group.rows.reduce((sum, r) => sum + rowValue(r), 0);
+                  // The Actual Load form's total: classes + deloading
+                  const totalValue    = group.rows.reduce((sum, r) => sum + rowValue(r), 0)
+                    + (isPermanent ? deloadByFaculty.get(group.facultyId) ?? 0 : 0);
                   const valueLabel    = isPermanent
                     ? `${totalValue.toFixed(2)} units`
                     : `${totalValue.toFixed(1)} hrs`;
@@ -935,9 +996,18 @@ export default function FacultySchedulesClient({
         const regularRows  = viewRows.filter(r => r.load_category === 'Regular');
         const overloadRows = viewRows.filter(r => r.load_category === 'Overload');
         const praiseRows   = viewRows.filter(r => r.load_category === 'Praise');
-        const totalVal     = viewRows.reduce((s, r) => s + rowValue(r), 0);
+        const teachingVal  = viewRows.reduce((s, r) => s + rowValue(r), 0);
+        /* As on the printed forms: Actual Load and Regular Load = classes + Deloading,
+           Praise Load = classes + its records, Overload = classes */
+        const deloadLines  = isPerm ? deloadingLinesOf(deloading, viewFaculty.id) : [];
+        const deloadTotal  = isPerm ? deloadByFaculty.get(viewFaculty.id) ?? 0 : 0;
+        const praiseLines  = praiseLinesOf(praiseRecords, viewFaculty.id);
+        const totalVal     = teachingVal + deloadTotal;
         const shownRows    = cardFilter === 'all' ? viewRows : viewRows.filter(r => r.load_category === cardFilter);
-        const shownTotal   = shownRows.reduce((s, r) => s + rowValue(r), 0);
+        const extraLines   = cardFilter === 'Praise' ? praiseLines : cardFilter === 'Overload' ? [] : deloadLines;
+        const extraTotal   = cardFilter === 'Praise' ? praiseLines.reduce((s, l) => s + l.value, 0)
+          : cardFilter === 'Overload' ? 0 : deloadTotal;
+        const shownTotal   = shownRows.reduce((s, r) => s + rowValue(r), 0) + extraTotal;
         const pickCard = (filter: CardFilter) => setCardPick({
           facultyId: viewFaculty.id,
           // Clicking the chosen card again goes back to every subject
@@ -1030,7 +1100,7 @@ export default function FacultySchedulesClient({
                     { filter: 'all' as const,      label: 'Actual Load',  value: viewRows.length, color: '#0B2A5B' },
                     { filter: 'Regular' as const,  label: 'Regular Load', value: regularRows.length,      color: 'var(--load-regular)' },
                     { filter: 'Overload' as const, label: 'Overload',     value: overloadRows.length,     color: 'var(--load-overload)' },
-                    { filter: 'Praise' as const,   label: 'Praise Load',  value: praiseRows.length,       color: 'var(--load-praise)' },
+                    { filter: 'Praise' as const,   label: 'Praise Load',  value: praiseRows.length + praiseLines.length, color: 'var(--load-praise)' },
                   ]).map(c => (
                     <FilterCard
                       key={c.filter}
@@ -1089,7 +1159,7 @@ export default function FacultySchedulesClient({
                     </tr>
                   </thead>
                   <tbody key={cardFilter}>
-                    {shownRows.length === 0 && (
+                    {shownRows.length === 0 && extraLines.length === 0 && (
                       <tr>
                         <td colSpan={9} className="px-4 py-10 text-center text-sm" style={{ color: '#94A3B8' }}>
                           No subjects{cardFilter === 'all' ? '' : ` in ${cardFilter === 'Overload' ? 'Overload' : `${cardFilter} Load`}`}.
@@ -1160,9 +1230,51 @@ export default function FacultySchedulesClient({
                         </motion.tr>
                       );
                     })}
+                    {/* The form's other lines, counted in its total: Deloading (Actual Load /
+                        Regular Load) or the Praise Load records (Praise Load) */}
+                    {extraLines.length > 0 && (
+                      <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
+                        <td
+                          colSpan={9}
+                          className="px-4 pt-3.5 pb-2"
+                          style={{ color: '#475569', fontSize: '12px', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}
+                        >
+                          {cardFilter === 'Praise' ? 'Other Praise Load' : 'Deloading'}
+                        </td>
+                      </tr>
+                    )}
+                    {extraLines.map((line, i) => (
+                      <motion.tr
+                        key={line.key}
+                        initial={reduceMotion ? false : { opacity: 0, y: 6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1], delay: reduceMotion ? 0 : Math.min(shownRows.length + i, 12) * 0.035 }}
+                        className="hover:bg-[#F8FAFC] transition-colors"
+                        style={{ borderBottom: '1px solid #F1F5F9' }}
+                      >
+                        <td colSpan={3} className="px-4 py-2.5 font-semibold" style={{ color: '#0B2A5B' }}>
+                          {line.label}
+                        </td>
+                        <td className="px-4 py-2.5" style={{ color: '#0B2A5B' }}>
+                          {line.description && line.description !== line.label ? line.description : '—'}
+                        </td>
+                        <td aria-hidden="true" />
+                        <td aria-hidden="true" />
+                        <td className="px-4 py-2.5 whitespace-nowrap">
+                          <LoadBadge cat={cardFilter === 'Praise' ? 'Praise' : 'Deloading'} />
+                        </td>
+                        <td
+                          className="px-4 py-2.5 whitespace-nowrap font-semibold text-right"
+                          style={{ color: LOAD_COLOR[cardFilter === 'Praise' ? 'Praise' : 'Deloading'] }}
+                        >
+                          {line.value.toFixed(2)}
+                        </td>
+                        <td aria-hidden="true" />
+                      </motion.tr>
+                    ))}
                   </tbody>
                   {/* Total of the Hours / Units column — pinned so it stays visible while scrolling */}
-                  {shownRows.length > 0 && (
+                  {(shownRows.length > 0 || extraLines.length > 0) && (
                     <tfoot className="sticky bottom-0 z-10">
                       <tr style={{ backgroundColor: '#F4F7FC', borderTop: '2px solid #D6E0EF' }}>
                         <td
@@ -1187,7 +1299,9 @@ export default function FacultySchedulesClient({
               {/* ── Footer ── */}
               <div className="px-6 py-3 border-t border-[#F1F5F9] flex items-center justify-between flex-shrink-0">
                 <span className="text-xs" style={{ color: '#94A3B8' }}>
-                  {shownRows.length} load{shownRows.length !== 1 ? 's' : ''}
+                  {shownRows.length === 0 && extraLines.length > 0
+                    ? `${extraLines.length} record${extraLines.length !== 1 ? 's' : ''}`
+                    : `${shownRows.length} load${shownRows.length !== 1 ? 's' : ''}`}
                   {cardFilter === 'all' ? ' total' : ` · ${cardFilter === 'Overload' ? 'Overload' : `${cardFilter} Load`} only`}
                 </span>
                 <motion.button

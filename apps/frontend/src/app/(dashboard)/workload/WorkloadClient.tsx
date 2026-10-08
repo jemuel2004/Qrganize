@@ -14,6 +14,7 @@ import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import TrashDropAnimation from '@/components/ui/TrashDropAnimation';
 import OfficialWorkloadFormTable, { type OfficialFormRow } from '@/components/OfficialWorkloadFormTable';
+import SectionReveal from '@/components/ui/SectionReveal';
 import {
   buildOfficialGroups,
   loadDayPatterns,
@@ -52,7 +53,7 @@ import Pagination from '@/components/ui/Pagination';
 import {
   Plus, X, AlertTriangle, Check, Minus,
   Eye, Award, CheckCircle2, Pencil,
-  Trash2, ArrowUpCircle, ArrowDownCircle, ArrowRight, ArrowLeft, Ban,
+  Trash2, ArrowDownCircle, ArrowRight, ArrowLeft, Ban,
 } from 'lucide-react';
 import { useLivePrograms } from '@/hooks/useLivePrograms';
 
@@ -169,8 +170,8 @@ interface WorkloadDeduction {
 interface WorkloadSummary {
   faculty: Faculty;
   loads: WorkloadLoad[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  praise: any[];
+  /** Praise table rows (the API sends every column) */
+  praise: (PraiseRecordLite & { equivalent_units: unknown; equivalent_hours?: unknown })[];
   deductions: WorkloadDeduction[];
   summary: {
     regular_load_limit: number; remaining_regular_load: number;
@@ -219,7 +220,6 @@ interface OverloadConfirmData {
   remaining: number;
 }
 
-const SEMESTERS = ['1st Semester', '2nd Semester', 'Summer'];
 /** Faculty list rows per page (same as Setup → Faculty) */
 const FACULTY_LIST_PAGE_SIZE = 10;
 
@@ -311,26 +311,6 @@ const overFromRemaining = (remaining: number, permanent: boolean) =>
 
 interface DeductionEntry { type: string; description: string; units: string; }
 const DEDUCTION_OPTIONS = ['Designation', 'Extension', 'Research/Extension', 'Special Assignment'] as const;
-
-function deductionsToEntries(deductions: WorkloadDeduction[]): { entries: DeductionEntry[]; isNone: boolean } {
-  if (!deductions || deductions.length === 0) return { entries: [], isNone: true };
-  return {
-    entries: deductions.map(d => ({
-      type: d.deduction_type,
-      description: d.description || '',
-      units: String(d.deducted_units),
-    })),
-    isNone: false,
-  };
-}
-
-function designationLabel(f: Faculty): string {
-  const t = f.designation_type || '';
-  if (!t || t === 'No Designation' || t === 'None') return 'No Deduction';
-  const u = Number(f.designation_units);
-  if (u > 0) return `${t} (${u} unit${u !== 1 ? 's' : ''} deducted)`;
-  return t;
-}
 
 /** Praise Load types — picked like Faculty Deloading: tick a type, fill its fields. */
 const PRAISE_TYPES = [
@@ -493,9 +473,6 @@ export default function WorkloadPage({
   const [availLoading, setAvailLoading] = useState(false);
   const [filtersApplied, setFiltersApplied] = useState(false);
 
-  const [assignMsg, setAssignMsg] = useState('');
-  const [assignError, setAssignError] = useState('');
-
   /* Assignment confirmation modals */
   const [overloadConfirm, setOverloadConfirm] = useState<OverloadConfirmData | null>(null);
 
@@ -506,16 +483,23 @@ export default function WorkloadPage({
   /** Split boxes (Move to Overload / Praise Load → Choose amounts): how much of the Lecture and Laboratory moves */
   const [splitDraft, setSplitDraft] = useState<SplitDraft>({ lec: '', lab: '' });
 
-  const [instructorPanelCollapsed, setInstructorPanelCollapsed] = useState(false);
   const [workloadModalOpen, setWorkloadModalOpen] = useState(false);
   const [workloadModalTab, setWorkloadModalTab] = useState<WorkloadModalTab>('actual');
   /** Slide direction for the form's tab content: 1 = moving right (Workload → Overload), -1 = left */
   const [modalTabDir, setModalTabDir] = useState<1 | -1>(1);
   const MODAL_TAB_ORDER = { actual: 0, regular: 1, overload: 2, praise: 3 } as const;
+  /** The opened section — brought into view when it is below the visible part of the pop-up */
+  const modalSectionRef = useRef<HTMLDivElement>(null);
   function switchModalTab(next: WorkloadModalTab, current: WorkloadModalTab) {
     if (next === current) return;
     setModalTabDir(MODAL_TAB_ORDER[next] > MODAL_TAB_ORDER[current] ? 1 : -1);
     setWorkloadModalTab(next);
+    requestAnimationFrame(() => {
+      const el = modalSectionRef.current;
+      if (el && el.getBoundingClientRect().top > window.innerHeight - 160) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
   }
   const [printError, setPrintError] = useState('');
   const [printOfferFallback, setPrintOfferFallback] = useState(false);
@@ -567,7 +551,6 @@ export default function WorkloadPage({
   /** Praise Load saved — same animated check */
   const [praiseSavedNote, setPraiseSavedNote] = useState<string | null>(null);
   const [modalDeductionsLoading, setModalDeductionsLoading] = useState(false);
-  const [deductionMsg, setDeductionMsg] = useState('');
   const [subjectSearch, setSubjectSearch] = useState('');
   const [subjectCategory, setSubjectCategory] = useState<'Minor' | 'Major'>('Minor');
   const [categorySwitching, setCategorySwitching] = useState(false);
@@ -765,8 +748,6 @@ export default function WorkloadPage({
       setAvailableSchedules([]);
       setFiltersApplied(false);
     }
-    setAssignMsg('');
-    setAssignError('');
     setOverloadConfirm(null);
     setMoveToOverloadTarget(null);
     setMoveToOverloadMode('entire');
@@ -965,7 +946,6 @@ export default function WorkloadPage({
     opts: { fromConfirm?: boolean } = {},
   ): Promise<{ ok: boolean; note?: string }> {
     if (!selectedFaculty) return { ok: false };
-    setAssignMsg(''); setAssignError('');
     try {
       const res = await fetch('/api/workload/assign', {
         method: 'POST',
@@ -997,8 +977,7 @@ export default function WorkloadPage({
         return { ok: false };
       }
 
-      if (!res.ok) { setAssignError(data.error || 'Failed to assign subject'); toast.error(data.error || 'Failed to assign subject.'); return { ok: false }; }
-      setAssignMsg(data.message || 'Subject assigned successfully.');
+      if (!res.ok) { toast.error(data.error || 'Failed to assign subject.'); return { ok: false }; }
       const remainingNote = typeof data.remaining === 'number' && data.unit
         ? (data.remaining < -0.001
           ? ` ${overFromRemaining(data.remaining, data.unit === 'units').toFixed(2)} ${data.unit} over the regular limit.`
@@ -1012,7 +991,6 @@ export default function WorkloadPage({
       loadWorkload(); loadAllFacultyLoads(); loadAvailable(); loadFacultySummaries(); loadBlocks();
       return { ok: true, note: remainingNote.trim() };
     } catch {
-      setAssignError('Connection error');
       toast.error('Connection error. Please try again.');
       return { ok: false };
     }
@@ -1048,7 +1026,6 @@ export default function WorkloadPage({
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        setAssignError(d.error || 'Failed to unassign subject');
         toast.error(d.error || 'Failed to remove subject.');
         return;
       }
@@ -1092,7 +1069,6 @@ export default function WorkloadPage({
   async function confirmMoveToOverload() {
     if (!selectedFaculty || !moveToOverloadTarget) return;
     setMoveToOverloadProcessing(true);
-    setAssignError('');
     try {
       const { load, component } = moveToOverloadTarget;
       const lec = parseFloat(String(load.lecture_hours)) || 0;
@@ -1125,16 +1101,14 @@ export default function WorkloadPage({
       });
       const data = await res.json();
       if (!res.ok) {
-        setAssignError(data.error || 'Failed to move subject to overload');
         toast.error(data.error || 'Failed to move subject to overload.');
         setMoveToOverloadTarget(null);
         return;
       }
       toast.success('Subject moved to overload successfully.');
-      setAssignMsg(data.message || 'Subject updated.');
       setMoveToOverloadTarget(null);
       loadWorkload(); loadAllFacultyLoads(); loadFacultySummaries();
-    } catch { setAssignError('Connection error'); toast.error('Connection error. Please try again.'); }
+    } catch { toast.error('Connection error. Please try again.'); }
     finally { setMoveToOverloadProcessing(false); }
   }
 
@@ -1478,7 +1452,6 @@ export default function WorkloadPage({
   ]);
 
   const selectFaculty = useCallback((f: Faculty) => {
-    setAssignMsg(''); setAssignError('');
     setOverloadConfirm(null);
     setMoveToOverloadTarget(null); setMoveToOverloadMode('entire');
     /* The faculty's own program only seeds the filters in the normal flow. From
@@ -1495,30 +1468,7 @@ export default function WorkloadPage({
     setSelectedFaculty(f);
   }, [keepSubjectContext]);
 
-  useEffect(() => {
-    const raw = initialFacultyQuery.trim();
-    if (!raw) return;
-    if (appliedFacultyQuery.current === raw) return;
-    if (faculty.length === 0) return;
-
-    appliedFacultyQuery.current = raw;
-    const id = Number.parseInt(raw, 10);
-    if (!Number.isFinite(id) || id <= 0) {
-      toast.error('Invalid faculty.');
-      return;
-    }
-    const match = faculty.find(f => f.id === id);
-    if (!match) {
-      toast.error('Faculty not found or is no longer active.');
-      return;
-    }
-    selectFaculty(match);
-    if (match.employment_status === 'Permanent') {
-      void openDeductionModal(match);
-    }
-  }, [faculty, initialFacultyQuery, selectFaculty, toast]);
-
-  async function openDeductionModal(f: Faculty) {
+  const openDeductionModal = useCallback(async (f: Faculty) => {
     setDesignationError('');
     setDeductionEntries([]);
     setDeductionNone(true);
@@ -1542,7 +1492,32 @@ export default function WorkloadPage({
       }
     } catch { /* silently use empty defaults */ }
     finally { setModalDeductionsLoading(false); }
-  }
+  }, [listSemester, listYear]);
+
+  useEffect(() => {
+    const raw = initialFacultyQuery.trim();
+    if (!raw) return;
+    if (appliedFacultyQuery.current === raw) return;
+    /* Wait for the term too: the deloading pop-up opened before it is known showed
+       "None" for a faculty who has deloading, and confirming saved that over them */
+    if (faculty.length === 0 || !listSemester || !listYear) return;
+
+    appliedFacultyQuery.current = raw;
+    const id = Number.parseInt(raw, 10);
+    if (!Number.isFinite(id) || id <= 0) {
+      toast.error('Invalid faculty.');
+      return;
+    }
+    const match = faculty.find(f => f.id === id);
+    if (!match) {
+      toast.error('Faculty not found or is no longer active.');
+      return;
+    }
+    selectFaculty(match);
+    if (match.employment_status === 'Permanent') {
+      void openDeductionModal(match);
+    }
+  }, [faculty, initialFacultyQuery, listSemester, listYear, selectFaculty, openDeductionModal, toast]);
 
   async function confirmDesignation() {
     if (!designationPending) return;
@@ -1589,7 +1564,6 @@ export default function WorkloadPage({
       };
       setFaculty(prev => prev.map(f => f.id === updated.id ? updated : f));
       setSelectedFaculty(updated);
-      setDeductionMsg('Load deduction saved. Workload updated.');
       const availableLoad = Math.max(0, regularCap - (Number(data.total_deduction) || 0));
       // Animated check inside the modal, then it closes on its own
       setDeloadSavedNote(`${loadDisplay(availableLoad)} units regular load available.`);
@@ -1712,77 +1686,12 @@ export default function WorkloadPage({
     if (top < 130) facultyListRef.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
   }
 
-  const selectedBlock   = allBlocks.find(b => String(b.id) === filterBlock);
-  const selectedProgram = programs.find(p => String(p.id) === filterProgram);
   const instructorSelected = selectedFaculty != null;
   // Only programs that have at least one block assigned to this faculty
   const programsForInstructor = (keepSubjectContext ? sortPrograms(programs) : programsAllowedForInstructor(selectedFaculty, programs))
     .filter(p => optionBlocks.some(b => b.program_id === p.id));
   /** Program select is usable once there's a faculty, or a subject being assigned. */
   const programEnabled = instructorSelected || keepSubjectContext;
-
-  function loadBadge(load: WorkloadLoad, rowType: 'lec' | 'lab') {
-    const lec2 = parseFloat(String(load.lecture_hours)) || 0;
-    const lab2 = parseFloat(String(load.laboratory_hours)) || 0;
-    const hasBoth2 = lec2 > 0 && lab2 > 0;
-
-    if (load.load_category === 'Overload') {
-      // For lec+lab overload rows, only show badge on the lec (first) row
-      if (hasBoth2 && rowType === 'lab') return null;
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30">
-          <ArrowUpCircle className="w-3 h-3" /> Overload
-        </span>
-      );
-    }
-
-    if (load.load_category === 'Praise') {
-      if (hasBoth2 && rowType === 'lab') return null;
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-violet-500/20 text-violet-400 border border-violet-500/30">
-          <Award className="w-3 h-3" /> Praise Load
-        </span>
-      );
-    }
-
-    const splitOvVal = isPermanent
-      ? parseFloat(String(load.split_overload_units)) || 0
-      : parseFloat(String(load.split_overload_hours)) || 0;
-
-    if (load.load_category === 'Regular' && splitOvVal > 0.001) {
-      const oc = (load.overload_component || 'full') as 'lec' | 'lab' | 'full';
-      if (hasBoth2 && oc !== 'full') {
-        // Component-specific split: show Split only on the split component row, Regular on the other
-        if (rowType === oc) {
-          return (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-orange-500/15 text-orange-600 border border-orange-500/30">
-              <ArrowUpCircle className="w-3 h-3" /> Split
-            </span>
-          );
-        }
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-500/20 text-blue-400 border border-blue-500/30">
-            <CheckCircle2 className="w-3 h-3" /> Regular
-          </span>
-        );
-      }
-      // Full / single-component split: show Split on first (lec) row only
-      if (hasBoth2 && rowType === 'lab') return null;
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-orange-500/15 text-orange-600 border border-orange-500/30">
-          <ArrowUpCircle className="w-3 h-3" /> Split
-        </span>
-      );
-    }
-
-    // Plain regular: show only on lec (first) row for lec+lab subjects
-    if (hasBoth2 && rowType === 'lab') return null;
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-500/20 text-blue-400 border border-blue-500/30">
-        <CheckCircle2 className="w-3 h-3" /> Regular
-      </span>
-    );
-  }
 
 
   /* Subjects to Handle (Faculty profile): when set, only those subjects are
@@ -3268,17 +3177,8 @@ export default function WorkloadPage({
          * Regular table uses semester-filtered workload.loads.
          * Overload/split tables use allWorkloadLoads so cross-semester overloads appear. */
 
-        // Count only the hours for components that are actually scheduled this semester
-        const totalContactHours = workload.loads.reduce((acc, l) => {
-          const lec = parseFloat(String(l.lecture_hours)) || 0;
-          const lab = parseFloat(String(l.laboratory_hours)) || 0;
-          const lecSched = l.lec_scheduled !== false;
-          const labSched = l.lab_scheduled !== false;
-          const hasBoth = lec > 0 && lab > 0;
-          return acc + (hasBoth ? ((lecSched ? lec : 0) + (labSched ? lab : 0)) : lec + lab);
-        }, 0);
 
-        const praiseTotal = workload.praise.reduce((sum: number, p) => sum + (parseFloat(p.equivalent_units) || 0), 0);
+        const praiseTotal = workload.praise.reduce((sum: number, p) => sum + (parseFloat(String(p.equivalent_units)) || 0), 0);
         // No. of Preparation: distinct subjects — the same subject (code + title)
         // taught to several blocks is one preparation.
         const distinctSubjects = mergeSameSubjects(workload.loads).length;
@@ -4108,14 +4008,9 @@ export default function WorkloadPage({
                 </div>
               </div>
 
-              {/* Tab content slides in from the side you moved toward */}
-              <motion.div
-                key={effectiveModalTab}
-                initial={reduceMotion ? false : { opacity: 0, x: 28 * modalTabDir }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-                className="min-w-0 max-w-full"
-              >
+              {/* The opened section fades in and rises into place (from the side you moved toward) */}
+              <div ref={modalSectionRef} className="scroll-mt-4">
+              <SectionReveal sectionKey={effectiveModalTab} play offsetX={modalTabDir} className="min-w-0 max-w-full">
               {/* -- ACTUAL LOAD TABLE (every subject of the term; Permanent faculty can move any of them) -- */}
               {hasActualSection && (
                 <div style={{ display: effectiveModalTab === 'actual' ? '' : 'none' }} className="min-w-0 max-w-full">
@@ -4165,7 +4060,8 @@ export default function WorkloadPage({
                   />
               </div>
               )}
-              </motion.div>
+              </SectionReveal>
+              </div>
             </div>
             </div>
           </Modal>
@@ -4494,7 +4390,6 @@ export default function WorkloadPage({
           const load = returnToRegularTarget;
           if (!load) return null;
           const overloadUnits = overloadReturnValue(load, isPermanent);
-          const remaining = summary?.remaining_regular_load ?? 0;
           const amountToReturn = returnToRegularMode === 'entire' ? overloadUnits : returnToRegularAmount;
           const isInvalidAmount = returnToRegularMode === 'partial' &&
             (returnToRegularAmount <= 0.001 || returnToRegularAmount > overloadUnits + 0.001);

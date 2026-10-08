@@ -13,6 +13,7 @@ import { createNotification } from '@/services/notifications';
 import { withAudit } from '@/services/audit';
 import { getActiveAcademicPeriod } from '@/services/activeAcademicPeriod';
 import { qrCodeFromScan } from '@/services/roomQr';
+import { isQrCode } from '@shared/qrLink';
 
 /*
   QR Scan Logic — Thesis Hybrid Room Request System
@@ -115,6 +116,10 @@ async function POST_handler(req: NextRequest) {
     }
     // A /q/<code> link (phone camera), the older JSON text, or the bare code
     const qr_code_id = qrCodeFromScan(rawQr);
+    // Only a room code as issued (letters, digits, dashes) is looked up — anything else in a QR is ignored
+    if (!isQrCode(qr_code_id)) {
+      return NextResponse.json({ status: 'Invalid', message: 'Invalid Room QR Code.', scan_time: manilaClock().time }, { status: 404 });
+    }
 
     const faculty_id = Number(rawFacultyId);
     if (!Number.isInteger(faculty_id) || faculty_id <= 0) {

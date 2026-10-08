@@ -131,3 +131,45 @@ export function sumParts(parts: LoadParts): PartShare {
   const add = (k: keyof PartShare) => round2(all.reduce((s, p) => s + p[k], 0));
   return { regularUnits: add('regularUnits'), regularHours: add('regularHours'), movedUnits: add('movedUnits'), movedHours: add('movedHours') };
 }
+
+/** Whether each part has its class time (schedule_sessions), as the workload APIs return it */
+export interface LoadScheduleFields {
+  lec_scheduled?: boolean | null;
+  lab_scheduled?: boolean | null;
+}
+
+/**
+ * The parts of a subject the official forms list: a Lecture + Laboratory
+ * subject shows each part that has its class time (both while neither has one
+ * yet); a one-part subject shows that part.
+ */
+export function formParts(load: LoadSplitFields & LoadScheduleFields): LoadPart[] {
+  const hasLec = num(load.lecture_hours) > 0;
+  const hasLab = num(load.laboratory_hours) > 0;
+  if (hasLec && hasLab) {
+    const shown: LoadPart[] = [];
+    if (load.lec_scheduled !== false) shown.push('lec');
+    if (load.lab_scheduled !== false) shown.push('lab');
+    return shown.length > 0 ? shown : ['lec', 'lab'];
+  }
+  return hasLab ? ['lab'] : ['lec'];
+}
+
+/**
+ * A subject's value as the official forms count it, over the parts they list:
+ * what stays Regular, or the moved part (all of it for a whole Overload or
+ * Praise subject). Work units for Permanent faculty, contact hours for Contractual.
+ */
+export function formLoadValue(
+  load: LoadSplitFields & LoadScheduleFields,
+  isPermanent: boolean,
+  share: 'regular' | 'moved',
+): number {
+  const parts = loadParts(load, isPermanent);
+  return round2(formParts(load).reduce((sum, type) => {
+    const p = partOf(parts, type);
+    if (!p) return sum;
+    if (share === 'regular') return sum + (isPermanent ? p.regularUnits : p.regularHours);
+    return sum + (isPermanent ? p.movedUnits : p.movedHours);
+  }, 0));
+}

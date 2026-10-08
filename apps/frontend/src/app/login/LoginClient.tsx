@@ -54,6 +54,15 @@ export default function LoginClient() {
   const touchedRef = useRef(false);
   /** A sign-in taking this long is waiting for the server to wake up */
   const [slowServer, setSlowServer] = useState(false);
+  /** Back from /change-password: the new password is in place, or a fresh sign-in is needed to set it */
+  const [passwordNotice, setPasswordNotice] = useState('');
+  useEffect(() => {
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.get('changed') === '1') setPasswordNotice('Password changed. Sign in with your new password.');
+      else if (sp.get('again') === '1') setPasswordNotice('For your security, sign in again to set your new password.');
+    } catch { /* no notice */ }
+  }, []);
   const googleBtnRef = useRef<HTMLDivElement>(null);
   const reduceMotion = useReducedMotion();
   // Bumped each time the flipped-in card finishes turning, so the Google button
@@ -605,6 +614,11 @@ export default function LoginClient() {
                   </div>
 
                   <form onSubmit={handleSubmit} noValidate>
+                    {passwordNotice && !error && (
+                      <div role="status" className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-3.5 py-3 rounded-xl text-[15px] leading-snug mb-4">
+                        {passwordNotice}
+                      </div>
+                    )}
                     {errorAlert}
 
                     {/* Username */}

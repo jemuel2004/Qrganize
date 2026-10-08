@@ -18,6 +18,13 @@ export async function register() {
       console.error('[startup] Migration error (non-fatal):', err);
     }
 
+    // Accounts still on a well-known default password must change it (once per database, in the background)
+    setTimeout(() => {
+      import('./auth/passwordChange')
+        .then(m => m.scanForDefaultPasswordsOnce())
+        .catch(err => console.warn('[startup] Default-password check skipped:', (err as Error).message));
+    }, 15_000).unref?.();
+
     /*
      * Next.js 16 + Turbopack (dev): intermittent route-tree race can leave
      * existing App Router pages/handlers returning HTML 404 for the whole

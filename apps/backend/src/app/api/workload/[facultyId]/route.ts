@@ -53,6 +53,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ facu
     await ensureSessionTypes();
 
     const facultyResult = await query('SELECT * FROM faculty WHERE id=$1', [facultyId]);
+    // Legacy sign-in column on faculty — never sent to the browser
+    for (const row of facultyResult.rows) delete (row as Record<string, unknown>).password_hash;
     if (facultyResult.rows.length === 0) return NextResponse.json({ error: 'Faculty not found' }, { status: 404 });
     const faculty = facultyResult.rows[0];
     if (!(await canAccessProgram(auth, faculty.program_id))) {

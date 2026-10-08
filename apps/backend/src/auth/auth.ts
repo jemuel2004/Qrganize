@@ -1,4 +1,5 @@
-﻿import { SignJWT, jwtVerify } from 'jose';
+﻿import { randomUUID } from 'crypto';
+import { SignJWT, jwtVerify } from 'jose';
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
@@ -17,6 +18,8 @@ export const SESSION_MAX_AGE = SESSION_DAYS * 24 * 60 * 60;
 export async function signToken(payload: Record<string, unknown>): Promise<string> {
   return new SignJWT(payload)
     .setProtectedHeader({ alg: 'HS256' })
+    // Session id: signing out revokes this one session (auth/sessionRevocation.ts)
+    .setJti(randomUUID())
     .setIssuedAt()
     .setExpirationTime(`${SESSION_DAYS}d`)
     .sign(JWT_SECRET);
@@ -51,7 +54,9 @@ export async function getAuthUser(req?: NextRequest) {
     if (!token) {
       const raw = req.headers.get('cookie') ?? '';
       const match = /(?:^|;\s*)auth_token=([^;]+)/.exec(raw);
-      if (match) token = decodeURIComponent(match[1]);
+      if (match) {
+        try { token = decodeURIComponent(match[1]); } catch { token = undefined; } // malformed cookie = signed out
+      }
     }
   }
 

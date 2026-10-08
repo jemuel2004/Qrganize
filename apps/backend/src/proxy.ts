@@ -37,6 +37,19 @@ const TOKEN_ONLY_API = new Set([
   'GET:/api/realtime/versions',
 ]);
 
+/**
+ * All a session on a default / common password may do until it is changed
+ * (auth/passwordChange.ts): read who it is, change the password, sign out.
+ */
+const PASSWORD_CHANGE_API = new Set([
+  'GET:/api/auth/session',
+  'GET:/api/auth/me',
+  'POST:/api/auth/change-default-password',
+  'POST:/api/account/change-password',
+  'POST:/api/instructor/profile/password',
+  'POST:/api/error-logs/report',
+]);
+
 function clearAuth(res: NextResponse) {
   res.cookies.set('auth_token', '', {
     httpOnly: true,
@@ -77,8 +90,15 @@ export async function proxy(req: NextRequest) {
   if (TOKEN_ONLY_API.has(`${req.method}:${pathname}`)) return forward(req, payload);
 
   try {
-    if (!(await evaluateSession(payload)).live) {
+    const session = await evaluateSession(payload);
+    if (!session.live) {
       return clearAuth(NextResponse.json({ error: 'Session expired' }, { status: 401 }));
+    }
+    if (session.mustChangePassword && !PASSWORD_CHANGE_API.has(`${req.method}:${pathname}`)) {
+      return NextResponse.json(
+        { error: 'Please change your password to continue.', code: 'PASSWORD_CHANGE_REQUIRED' },
+        { status: 403 },
+      );
     }
   } catch {
     // Database briefly unavailable — allow a still-valid JWT through.

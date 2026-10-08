@@ -54,7 +54,6 @@ async function getReader(): Promise<CityReader | null> {
 }
 
 function buildLabel(city: string | null, region: string | null, country: string | null): string {
-  const parts = [city, region, country].filter(Boolean) as string[];
   // Prefer "City, Country" or "Region, Country" when all three would be long.
   if (city && country) return `${city}, ${country}`;
   if (region && country && region !== country) return `${region}, ${country}`;

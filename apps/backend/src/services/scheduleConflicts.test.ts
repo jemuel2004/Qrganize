@@ -19,6 +19,13 @@ test('partial overlaps on the same day are refused', () => {
   assert.match(found[0].message, /Session 2 overlaps with Session 1 on Tuesday \(1:00 PM–2:30 PM\)/);
 });
 
+test('7:30–8:30 and 8:00–9:00 overlap (either order)', () => {
+  assert.equal(findOverlappingSessions([s('Monday', '07:30', 1), s('Monday', '08:00', 1)]).length, 1);
+  assert.equal(findOverlappingSessions([s('Monday', '08:00', 1), s('Monday', '07:30', 1)]).length, 1);
+  // One inside the other
+  assert.equal(findOverlappingSessions([s('Monday', '07:30', 3), s('Monday', '08:00', 1)]).length, 1);
+});
+
 test('back-to-back sessions and different days are fine', () => {
   assert.deepEqual(findOverlappingSessions([s('Monday', '08:00', 1), s('Monday', '09:00', 1)]), []);
   assert.deepEqual(findOverlappingSessions([s('Monday', '08:00', 2), s('Wednesday', '08:00', 2), s('Friday', '08:00', 2)]), []);

@@ -69,9 +69,15 @@ export function footerCss(): string {
 `;
 }
 
+/** Text placed in the footer HTML — escaped, so a value from settings can never become markup */
+const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+
 /** Returns the footer <div> HTML string. */
 export function footerHtml(cfg: FooterConfig): string {
-  const { address, phone, website, logoOrigin } = cfg;
+  const address = esc(cfg.address);
+  const phone = esc(cfg.phone);
+  const website = esc(cfg.website);
+  const logoOrigin = esc(cfg.logoOrigin);
   return `
 <div class="pf">
   <div class="pf-inner">

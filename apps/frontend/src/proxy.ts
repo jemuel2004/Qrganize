@@ -12,7 +12,11 @@ import { ROLE_HEADER } from '@/lib/pageAuth';
 
 const BACKEND_URL = (process.env.BACKEND_URL || 'http://localhost:4000').replace(/\/$/, '');
 
-type Session = { state: 'live'; role: string } | { state: 'dead' } | { state: 'unreachable' };
+/** mustChangePassword: signed in on a default / common password — every page goes to /change-password */
+type Session = { state: 'live'; role: string; mustChangePassword: boolean } | { state: 'dead' } | { state: 'unreachable' };
+
+/** The page where a default / common password is replaced before anything else */
+const CHANGE_PASSWORD = '/change-password';
 
 // Short cache so page + prefetch requests don't all hit the backend.
 const CACHE_MS = 10_000;
@@ -37,8 +41,10 @@ async function checkSession(token: string, timeoutMs: number): Promise<Session> 
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (res.ok) {
-      const data = await res.json() as { role?: string };
-      session = data.role ? { state: 'live', role: data.role } : { state: 'dead' };
+      const data = await res.json() as { role?: string; must_change_password?: boolean };
+      session = data.role
+        ? { state: 'live', role: data.role, mustChangePassword: data.must_change_password === true }
+        : { state: 'dead' };
     } else {
       session = res.status === 401 || res.status === 403 ? { state: 'dead' } : { state: 'unreachable' };
     }
@@ -90,10 +96,21 @@ export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const token = req.cookies.get('auth_token')?.value;
 
+  // Replacing a default / common password: only for a session that has to
+  if (pathname === CHANGE_PASSWORD) {
+    if (!token) return NextResponse.redirect(new URL('/login', req.url));
+    const s = await checkSession(token, PAGE_CHECK_MS);
+    if (s.state === 'dead') return clearAuth(NextResponse.redirect(new URL('/login', req.url)));
+    if (s.state === 'unreachable') return NextResponse.redirect(new URL('/login', req.url));
+    if (!s.mustChangePassword) return NextResponse.redirect(new URL(homeForRole(s.role), req.url));
+    return next(req, s.role);
+  }
+
   if (pathname === '/' || pathname === '/login') {
     if (token) {
       const s = await checkSession(token, LOGIN_CHECK_MS);
       if (s.state === 'live') {
+        if (s.mustChangePassword) return NextResponse.redirect(new URL(CHANGE_PASSWORD, req.url));
         // Already signed in: a room QR link goes straight on to that room
         const back = req.nextUrl.searchParams.get('next') ?? '';
         const target = isQrLink(back) && /^\/room\/[A-Za-z0-9%-]{4,100}$/.test(back) ? back : homeForRole(s.role);
@@ -119,6 +136,9 @@ export async function proxy(req: NextRequest) {
   if (s.state === 'dead') return clearAuth(toLogin());
   // Backend down: keep the cookie, send to login (every page needs the backend anyway).
   if (s.state === 'unreachable') return NextResponse.redirect(new URL('/login', req.url));
+
+  // A default / common password is changed before any page opens
+  if (s.mustChangePassword) return NextResponse.redirect(new URL(CHANGE_PASSWORD, req.url));
 
   // Cross-role page access (a room QR link sorts each role out itself)
   if (isQrLink(pathname)) return next(req, s.role);

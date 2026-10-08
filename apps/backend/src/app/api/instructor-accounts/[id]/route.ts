@@ -10,6 +10,7 @@ import { ensureFacultyProfileColumns, ensureInstructorGooglePicture } from '@/da
 import { assertEmailAvailable, EMAIL_ALREADY_REGISTERED, assertUsernameAllowed } from '@/auth/emailIdentity';
 import { PRIORITY_SUBJECTS_SUBQUERY, setPrioritySubjects, type PrioritySubject } from '@/services/facultyPrioritySubjects';
 import { withAudit } from '@/services/audit';
+import { weakPasswordReason } from '@/auth/passwordPolicy';
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -84,6 +85,8 @@ async function PUT_handler(req: NextRequest, { params }: Params) {
 
     if (password && password.length < 8)
       return NextResponse.json({ error: 'Password must be at least 8 characters.', field: 'password' }, { status: 400 });
+    const weakPw = password ? weakPasswordReason(password) : null;
+    if (weakPw) return NextResponse.json({ error: weakPw, field: 'password' }, { status: 400 });
 
     const accountIdRow = await query(
       'SELECT id, google_verified FROM instructor_accounts WHERE faculty_id = $1',
@@ -242,6 +245,8 @@ async function PATCH_handler(req: NextRequest, { params }: Params) {
       const { new_password } = body;
       if (!new_password || new_password.length < 8)
         return NextResponse.json({ error: 'Password must be at least 8 characters.' }, { status: 400 });
+      const weakPw = weakPasswordReason(new_password);
+      if (weakPw) return NextResponse.json({ error: weakPw }, { status: 400 });
 
       const passwordHash = await bcrypt.hash(new_password, 12);
       const result = await query(`

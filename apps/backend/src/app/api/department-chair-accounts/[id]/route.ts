@@ -14,6 +14,7 @@ import {
   assertUsernameAllowed,
 } from '@/auth/emailIdentity';
 import { withAudit } from '@/services/audit';
+import { weakPasswordReason } from '@/auth/passwordPolicy';
 
 function adminOnly(auth: { role?: string } | null) {
   return !auth || (auth.role !== 'admin');
@@ -67,6 +68,8 @@ async function PUT_handler(req: NextRequest, { params }: Ctx) {
     if (password && password.length < 8) {
       return NextResponse.json({ error: 'Password must be at least 8 characters.', field: 'password' }, { status: 400 });
     }
+    const weakPw = password ? weakPasswordReason(password) : null;
+    if (weakPw) return NextResponse.json({ error: weakPw, field: 'password' }, { status: 400 });
 
     const existing = await query(
       `SELECT id, email, google_verified FROM users WHERE id = $1 AND role = 'department_chair'`,
@@ -173,6 +176,8 @@ async function PATCH_handler(req: NextRequest, { params }: Ctx) {
       if (!new_password || new_password.length < 8) {
         return NextResponse.json({ error: 'New password must be at least 8 characters.' }, { status: 400 });
       }
+      const weakPw = weakPasswordReason(new_password);
+      if (weakPw) return NextResponse.json({ error: weakPw }, { status: 400 });
       const hash = await bcrypt.hash(new_password, 12);
       const result = await query(
         `UPDATE users SET password_hash = $1, updated_at = NOW()

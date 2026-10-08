@@ -7,9 +7,8 @@ import { useRealtime } from '@/context/RealtimeContext';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
-  ArrowLeft, BookOpen, Plus, Trash2, RefreshCw,
-  CheckCircle, AlertTriangle, X, Users, Calendar,
-  GraduationCap, Hash, ChevronRight, Clock,
+  ArrowLeft, Plus, Trash2, RefreshCw,
+  CheckCircle, AlertTriangle, X, ChevronRight,
   ChevronDown,
 } from 'lucide-react';
 import { SearchInput } from '@/components/ui/SearchFilter';
@@ -176,21 +175,6 @@ function NextStepLink({ href, children }: { href: string; children: React.ReactN
     </Link>
   );
 }
-
-function InfoCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
-  return (
-    <div className="bg-white/5 rounded-xl p-4 flex items-start gap-3 border border-white/5">
-      <div className="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center flex-shrink-0 text-blue-400">
-        {icon}
-      </div>
-      <div className="min-w-0">
-        <p className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-0.5">{label}</p>
-        <p className="text-sm font-semibold text-white truncate">{value}</p>
-      </div>
-    </div>
-  );
-}
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -430,8 +414,6 @@ export default function BlockDetailPage() {
   const unassignedCount = subjects.filter(s => !s.schedule_status || s.schedule_status === 'Unassigned').length;
   const assignedCount   = subjects.filter(s => s.schedule_status === 'Assigned').length;
   const scheduledCount  = subjects.filter(s => s.schedule_status === 'Scheduled').length;
-  const totalLecHours   = subjects.reduce((n, s) => n + parseFloat(String(s.lecture_hours    ?? 0)), 0);
-  const totalLabHours   = subjects.reduce((n, s) => n + parseFloat(String(s.laboratory_hours ?? 0)), 0);
   const totalHoursSum   = subjects.reduce((n, s) => n + parseFloat(String(s.total_hours      ?? 0)), 0);
   const totalUnits      = subjects.reduce((n, s) => n + parseFloat(String(s.units            ?? 0)), 0);
 

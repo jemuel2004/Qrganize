@@ -26,6 +26,7 @@ import { openWorkloadPrintableVersion } from '@/lib/openPrintHtmlDocument';
 import { canHaveOverloadOrPraise, formatLoadCap, regularUnitsCap, shownUnitsCap, shownUnitsOver } from '@shared/regularLoad';
 import { useWorkloadPolicy } from '@/hooks/useWorkloadPolicy';
 import { LOAD_TONE } from '@/lib/loadTone';
+import SectionReveal from '@/components/ui/SectionReveal';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { Skeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
@@ -87,8 +88,7 @@ interface WorkloadLoad {
 interface WorkloadDeduction {
   id: number; deduction_type: string; description: string; deducted_units: number;
 }
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-interface PraiseRecord { id: number; praise_type: string; description: string; equivalent_units: number; equivalent_hours: number; semester: string; academic_year: string; remarks: string; [key: string]: any; }
+interface PraiseRecord { id: number; praise_type: string; description: string; equivalent_units: number; equivalent_hours: number; semester: string; academic_year: string; remarks: string; [key: string]: unknown; }
 interface FacultyInfo {
   id: number; name: string; first_name: string; last_name: string;
   position: string; employment_status: string; employee_id: string;
@@ -272,12 +272,15 @@ export default function InstructorWorkloadClient() {
   const [printOfferFallback, setPrintOfferFallback] = useState(false);
   /** Whether the currently selected workload table is visible. */
   const [tableVisible, setTableVisible] = useState(true);
+  /** A card was tapped at least once — from then on the opened section is revealed with motion */
+  const [sectionSwitched, setSectionSwitched] = useState(false);
 
   /** The heading above the open form — tapping a card brings it into view when it's below the screen */
   const sectionRef = useRef<HTMLDivElement>(null);
   function selectTab(key: WorkloadTab) {
     setActiveTab(key);
     setTableVisible(true);
+    setSectionSwitched(true);
     requestAnimationFrame(() => {
       const el = sectionRef.current;
       if (el && el.getBoundingClientRect().top > window.innerHeight - 160) {
@@ -942,9 +945,11 @@ export default function InstructorWorkloadClient() {
 
               {/* What the cards above opened: its name and count, and Hide / Show */}
               <div ref={sectionRef} className="flex items-center justify-between gap-3 scroll-mt-4">
-                <h2 className="min-w-0 flex items-baseline gap-x-2 flex-wrap">
-                  <span className="text-lg font-bold" style={{ color: TAB_TONE[effectiveTab] }}>{sectionLabel}</span>
-                  <span className="text-sm font-semibold text-[#64748B]">{sectionCount}</span>
+                <h2 className="min-w-0">
+                  <SectionReveal sectionKey={`title-${effectiveTab}`} play={sectionSwitched} className="flex items-baseline gap-x-2 flex-wrap">
+                    <span className="text-lg font-bold" style={{ color: TAB_TONE[effectiveTab] }}>{sectionLabel}</span>
+                    <span className="text-sm font-semibold text-[#64748B]">{sectionCount}</span>
+                  </SectionReveal>
                 </h2>
                 <button
                   type="button"
@@ -962,7 +967,7 @@ export default function InstructorWorkloadClient() {
               <WorkloadCollapsible open={tableVisible}>
                 {/* The official form as a table on every screen, in a white box — phones
                     swipe it sideways (the user asked for the table, not cards, 2026-10-08) */}
-                <div className="bg-white border border-[#E2E8F0] rounded-lg overflow-hidden">
+                <SectionReveal sectionKey={effectiveTab} play={sectionSwitched} className="bg-white border border-[#E2E8F0] rounded-lg overflow-hidden">
                   {effectiveTab === 'regular' && (
                     regularPrintLoads.length === 0 ? (
                       <div className="px-4 py-8 text-center">
@@ -1012,7 +1017,7 @@ export default function InstructorWorkloadClient() {
                       groups={formGroups}
                     />
                   )}
-                </div>
+                </SectionReveal>
               </WorkloadCollapsible>
             </div>
           </>

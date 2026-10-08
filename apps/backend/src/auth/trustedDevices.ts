@@ -1,4 +1,6 @@
 import { createHmac, randomBytes, randomUUID } from 'crypto';
+import { ensureRevokedSessionsTable, sessionIdOf } from '@/auth/sessionRevocation';
+import { ensurePasswordChangeColumns } from '@/auth/passwordChange';
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { query } from '@/database/db';
@@ -348,43 +350,55 @@ export async function getAuthVersion(accountKind: AccountKind, accountId: number
   }
 }
 
-type LiveSession = { live: boolean; reason?: 'missing' | 'inactive' | 'version' };
+type LiveSession = {
+  live: boolean;
+  reason?: 'missing' | 'inactive' | 'version' | 'revoked';
+  /** Signed in on a default / common password — only the password change is allowed (auth/passwordChange.ts) */
+  mustChangePassword?: boolean;
+};
 
 export async function evaluateSession(payload: Record<string, unknown>): Promise<LiveSession> {
   const role = String(payload.role ?? '');
   const accountId = Number(payload.id);
   if (!accountId || !role) return { live: false, reason: 'missing' };
   const jwtAv = jwtAuthVersion(payload);
+  // Signed-out session (auth/sessionRevocation.ts) — checked in the same query
+  const jti = sessionIdOf(payload);
+  if (jti) await ensureRevokedSessionsTable();
+  await ensurePasswordChangeColumns();
+  const REVOKED_SQL = `($2::text IS NOT NULL AND EXISTS (SELECT 1 FROM revoked_sessions rs WHERE rs.jti = $2::text)) AS revoked`;
 
   try {
     if (role === 'instructor') {
       const result = await query(
-        `SELECT ia.auth_version, ia.is_active AS account_active, f.is_active AS faculty_active
+        `SELECT ia.auth_version, ia.is_active AS account_active, f.is_active AS faculty_active, ia.must_change_password, ${REVOKED_SQL}
          FROM instructor_accounts ia
          JOIN faculty f ON f.id = ia.faculty_id
          WHERE ia.id = $1`,
-        [accountId]
+        [accountId, jti]
       );
       const row = result.rows[0] as
-        | { auth_version?: number; account_active?: boolean; faculty_active?: boolean }
+        | { auth_version?: number; account_active?: boolean; faculty_active?: boolean; revoked?: boolean; must_change_password?: boolean }
         | undefined;
       if (!row) return { live: false, reason: 'missing' };
       if (row.account_active === false || row.faculty_active === false) {
         return { live: false, reason: 'inactive' };
       }
       if (Number(row.auth_version ?? 1) !== jwtAv) return { live: false, reason: 'version' };
-      return { live: true };
+      if (row.revoked) return { live: false, reason: 'revoked' };
+      return { live: true, mustChangePassword: row.must_change_password === true };
     }
 
     const result = await query(
-      `SELECT auth_version, is_active FROM users WHERE id = $1`,
-      [accountId]
+      `SELECT auth_version, is_active, must_change_password, ${REVOKED_SQL} FROM users WHERE id = $1`,
+      [accountId, jti]
     );
-    const row = result.rows[0] as { auth_version?: number; is_active?: boolean } | undefined;
+    const row = result.rows[0] as { auth_version?: number; is_active?: boolean; revoked?: boolean; must_change_password?: boolean } | undefined;
     if (!row) return { live: false, reason: 'missing' };
     if (row.is_active === false) return { live: false, reason: 'inactive' };
     if (Number(row.auth_version ?? 1) !== jwtAv) return { live: false, reason: 'version' };
-    return { live: true };
+    if (row.revoked) return { live: false, reason: 'revoked' };
+    return { live: true, mustChangePassword: row.must_change_password === true };
   } catch (err) {
     if ((err as { code?: string }).code === '42703') return { live: true };
     throw err;

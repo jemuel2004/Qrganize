@@ -25,6 +25,7 @@ import { PRIORITY_SUBJECTS_SUBQUERY, setPrioritySubjects, type PrioritySubject }
 import { ASSIGNED_BLOCK_IDS_SUBQUERY, setFacultyBlocks } from '@/services/facultyBlocks';
 import { canAccessProgram, isScopedChair } from '@/services/programScope';
 import { withAudit } from '@/services/audit';
+import { weakPasswordReason } from '@/auth/passwordPolicy';
 
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -177,6 +178,8 @@ async function PUT_handler(req: NextRequest, { params }: { params: Promise<{ id:
 
     if (password && String(password).length < 8)
       return NextResponse.json({ error: 'Password must be at least 8 characters.', field: 'password' }, { status: 400 });
+    const weakPw = password ? weakPasswordReason(password) : null;
+    if (weakPw) return NextResponse.json({ error: weakPw, field: 'password' }, { status: 400 });
 
     // Only Contractual is hour-based; Temporary Permanent is unit-based like Permanent.
     const isHourBased = pos.position === 'Contractual';

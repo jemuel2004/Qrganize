@@ -56,6 +56,11 @@ export async function GET(req: NextRequest) {
         c.subject_name,
         c.units        AS curriculum_units,
         c.total_hours,
+        -- What the official forms value the subject by (@shared/loadSplit formLoadValue)
+        c.lecture_hours,
+        c.laboratory_hours,
+        EXISTS(SELECT 1 FROM schedule_sessions ss_l WHERE ss_l.master_schedule_id = ms.id AND ss_l.type = 'lec') AS lec_scheduled,
+        EXISTS(SELECT 1 FROM schedule_sessions ss_b WHERE ss_b.master_schedule_id = ms.id AND ss_b.type = 'lab') AS lab_scheduled,
         b.block_name,
         b.year_level,
         b.semester,
@@ -102,6 +107,7 @@ export async function GET(req: NextRequest) {
       LEFT JOIN LATERAL (
         SELECT COALESCE(SUM(o.units), 0) AS split_units,
                COALESCE(SUM(o.hours), 0) AS split_hours,
+               SUM(o.lec_part)           AS split_lec_part,
                BOOL_OR(o.is_praise)      AS split_is_praise
         FROM overloads o
         WHERE o.faculty_id = il.faculty_id AND o.master_schedule_id = il.master_schedule_id
@@ -114,8 +120,17 @@ export async function GET(req: NextRequest) {
     // and listed like the Faculty Workload page does.
     const rows: Record<string, unknown>[] = [];
     for (const r of result.rows as Record<string, unknown>[]) {
-      const { overload_component, split_units, split_hours, split_is_praise,
-              split_day_pattern, split_start_time, split_end_time, ...base } = r;
+      const { overload_component, split_units, split_hours, split_lec_part, split_is_praise,
+              split_day_pattern, split_start_time, split_end_time, ...rest } = r;
+      // The split as the Workload API gives it to the official forms, so the page
+      // values each row the same way the forms do (see @shared/loadSplit)
+      const base: Record<string, unknown> = {
+        ...rest,
+        overload_component,
+        split_overload_units: split_units ?? 0,
+        split_overload_hours: split_hours ?? 0,
+        split_lec_part: split_lec_part ?? null,
+      };
       rows.push(base);
       const isPerm = base.employment_status === 'Permanent';
       const portion = parseFloat(String((isPerm ? split_units : split_hours) ?? 0)) || 0;
@@ -148,8 +163,41 @@ export async function GET(req: NextRequest) {
       []
     );
 
+    /* The official forms' other lines, for the faculty listed (Permanent only, as
+       the forms count them): Deloading is added to the classes on the Actual Load
+       and Regular Load forms, Praise Load records on the Praise Load form — so the
+       page's totals match the print. */
+    const listed = [...new Set(rows.map(r => Number(r.faculty_id)))];
+    const [deloadingResult, praiseResult] = listed.length === 0
+      ? [{ rows: [] }, { rows: [] }]
+      : await Promise.all([
+          query(
+            `SELECT d.id, d.faculty_id, d.deduction_type, d.description, COALESCE(d.deducted_units, 0)::float AS units
+             FROM instructor_load_deductions d
+             JOIN faculty f ON f.id = d.faculty_id AND f.employment_status = 'Permanent'
+             WHERE d.faculty_id = ANY($1::int[])
+               AND ($2::text = '' OR d.semester = $2::text)
+               AND ($3::text = '' OR d.school_year = $3::text)
+             ORDER BY d.id`,
+            [listed, semester, academic_year],
+          ),
+          query(
+            `SELECT p.id, p.faculty_id, p.praise_type, COALESCE(NULLIF(p.description, ''), NULLIF(p.remarks, ''), '') AS description,
+                    COALESCE(p.equivalent_units, 0)::float AS units
+             FROM praise p
+             JOIN faculty f ON f.id = p.faculty_id AND f.employment_status = 'Permanent'
+             WHERE p.faculty_id = ANY($1::int[])
+               AND ($2::text = '' OR p.semester = $2::text)
+               AND ($3::text = '' OR p.academic_year = $3::text)
+             ORDER BY p.id`,
+            [listed, semester, academic_year],
+          ),
+        ]);
+
     return NextResponse.json({
       schedules:      rows,
+      deloading:      deloadingResult.rows,
+      praise_records: praiseResult.rows,
       summary:        { totalSchedules, totalInstructors, totalRegular, totalOverload, totalPraise },
       academic_years: yearsResult.rows.map((r: Record<string, unknown>) => r.academic_year),
     });

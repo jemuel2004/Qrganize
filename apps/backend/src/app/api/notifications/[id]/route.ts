@@ -2,6 +2,7 @@
 import { getAuthUser } from '@/auth/auth';
 import { query } from '@/database/db';
 import { withAudit } from '@/services/audit';
+import { parseId } from '@/database/ids';
 import { bumpNotifications } from '@/services/realtime';
 
 async function PATCH_handler(
@@ -18,8 +19,8 @@ async function PATCH_handler(
     }
 
     const { id } = await params;
-    const nid = parseInt(id);
-    if (isNaN(nid)) return NextResponse.json({ error: 'Invalid id' }, { status: 400 });
+    const nid = parseId(id);
+    if (nid === null) return NextResponse.json({ error: 'Invalid id' }, { status: 400 });
 
     let updated = 0;
     if (authUser.role === 'admin') {

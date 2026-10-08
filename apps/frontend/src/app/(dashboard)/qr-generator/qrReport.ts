@@ -33,7 +33,7 @@ const esc = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt
 const cardHtml = (r: RoomQR) => `
   <div class="card">
     <div class="brand">QRganize</div>
-    <img src="${r.qr_data_url}" alt="QR ${esc(r.room_name)}" />
+    <img src="${esc(r.qr_data_url ?? '')}" alt="QR ${esc(r.room_name)}" />
     <div class="name">${esc(r.room_name)}</div>
     <div class="meta">${esc([r.room_type, r.building].filter(Boolean).join(' · '))}</div>
     <div class="id">${esc(r.qr_code_id ?? '')}</div>

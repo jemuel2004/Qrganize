@@ -11,6 +11,7 @@ import {
 import { PRIORITY_SUBJECTS_SUBQUERY, setPrioritySubjects, type PrioritySubject } from '@/services/facultyPrioritySubjects';
 import { ensureFacultyProfileColumns } from '@/database/schema-guard';
 import { withAudit } from '@/services/audit';
+import { weakPasswordReason } from '@/auth/passwordPolicy';
 
 export async function GET(req: NextRequest) {
   try {
@@ -124,6 +125,8 @@ async function POST_handler(req: NextRequest) {
       return NextResponse.json({ error: 'Password is required.', field: 'password' }, { status: 400 });
     if (password.length < 8)
       return NextResponse.json({ error: 'Password must be at least 8 characters.', field: 'password' }, { status: 400 });
+    const weakPw = weakPasswordReason(password);
+    if (weakPw) return NextResponse.json({ error: weakPw, field: 'password' }, { status: 400 });
 
     // Username: normal usernames only on create (new accounts are unverified)
     const usernameCheck = assertUsernameAllowed(username, { emailVerified: false });

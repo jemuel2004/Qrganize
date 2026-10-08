@@ -726,7 +726,7 @@ export function buildRegularLoadPrintHtml(input: BuildRegularLoadPrintInput): st
   }
 
   const tableHtml = m.sections
-    .map(sec => `<tr class="sec-hdr"><td colspan="8">${sec.label}</td></tr>` + sec.rows.map(rowHtml).join(''))
+    .map(sec => `<tr class="sec-hdr"><td colspan="8">${escHtml(sec.label)}</td></tr>` + sec.rows.map(rowHtml).join(''))
     .join('');
   const summaryHtml = m.summary.map(summaryRowHtml).join('');
 
@@ -752,7 +752,7 @@ ${officialPrintPagedHtml(officialPrintHeaderHtml({
 <div class="info">
   <div class="info-left">
     <div class="hf"><span class="i-lbl">Name:</span><span class="i-val"><strong>${escHtml(fac.name)}</strong></span></div>
-    <div class="hf"><span class="i-lbl">Years in Service:</span><span class="i-val">${fac.yearsInService}</span></div>
+    <div class="hf"><span class="i-lbl">Years in Service:</span><span class="i-val">${escHtml(fac.yearsInService)}</span></div>
     <div class="hf"><span class="i-lbl">Status:</span><span class="i-val"><strong>${escHtml(fac.status)}</strong></span></div>
   </div>
   <div class="info-right">

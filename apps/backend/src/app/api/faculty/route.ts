@@ -15,6 +15,7 @@ import { PRIORITY_SUBJECTS_SUBQUERY, setPrioritySubjects, type PrioritySubject }
 import { ASSIGNED_BLOCK_IDS_SUBQUERY, setFacultyBlocks } from '@/services/facultyBlocks';
 import { resolveProgramScope, canAccessProgram } from '@/services/programScope';
 import { withAudit } from '@/services/audit';
+import { weakPasswordReason } from '@/auth/passwordPolicy';
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -139,6 +140,8 @@ async function POST_handler(req: NextRequest) {
       return NextResponse.json({ error: 'Password is required.', field: 'password' }, { status: 400 });
     if (String(password).length < 8)
       return NextResponse.json({ error: 'Password must be at least 8 characters.', field: 'password' }, { status: 400 });
+    const weakPw = weakPasswordReason(password);
+    if (weakPw) return NextResponse.json({ error: weakPw, field: 'password' }, { status: 400 });
 
     // ── Sanitise and derive computed values ───────────────────────────────────
     const fnStr  = String(first_name).trim().slice(0, 100);

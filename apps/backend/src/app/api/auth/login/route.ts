@@ -14,9 +14,42 @@ import {
 } from '@/auth/emailIdentity';
 import { clearEmailVerifyCookie } from '@/auth/emailVerifyChallenge';
 import { withAudit } from '@/services/audit';
+import { recordPasswordStrength } from '@/auth/passwordChange';
 
 const OTP_START_WINDOW_MS = 15 * 60 * 1000;
 const OTP_START_MAX = 8;
+
+/** Wrong passwords for one username — from any number of addresses — before it is locked for 15 minutes */
+const ACCOUNT_MAX_FAILURES = 10;
+/** Longest username / password accepted (bcrypt only reads the first 72 bytes) */
+const MAX_LOGIN_ID = 254;
+const MAX_PASSWORD = 256;
+/** Sign-in messages: the username was found but the password is wrong / no such username */
+const WRONG_PASSWORD = 'Incorrect password.';
+const NO_SUCH_ACCOUNT = 'Username and password are incorrect.';
+
+/** Compared when no account matches, so an unknown username takes as long as a wrong password
+ *  (response time can't be used to find out which usernames exist) */
+const NO_ACCOUNT_HASH = bcrypt.hashSync('qrganize-no-such-account', 12); // = HASH_ROUNDS
+
+/** Password hash cost used for every account (older seeded hashes used 10) */
+const HASH_ROUNDS = 12;
+
+/**
+ * Hashes made with a lower cost are upgraded at sign-in (the password is known
+ * then), so every account is equally slow to guess offline — and an unknown
+ * username, checked against NO_ACCOUNT_HASH, takes as long as a real one.
+ */
+function upgradeOldHash(table: 'users' | 'instructor_accounts', id: number, password: string, hash: string): void {
+  try {
+    if (bcrypt.getRounds(hash) >= HASH_ROUNDS) return;
+  } catch {
+    return; // not a bcrypt hash
+  }
+  void bcrypt.hash(password, HASH_ROUNDS)
+    .then(next => query(`UPDATE ${table} SET password_hash = $1 WHERE id = $2 AND password_hash = $3`, [next, id, hash]))
+    .catch(err => console.warn('[auth/login] could not upgrade the password hash:', (err as Error).message));
+}
 
 function clientIp(req: NextRequest): string {
   return (
@@ -84,10 +117,30 @@ async function POST_handler(req: NextRequest) {
     if (!loginId || !password) {
       return NextResponse.json({ error: 'Username and password are required.' }, { status: 400 });
     }
+    if (loginId.length > MAX_LOGIN_ID || String(password).length > MAX_PASSWORD) {
+      recordFailure(ip);
+      return NextResponse.json({ error: NO_SUCH_ACCOUNT }, { status: 401 });
+    }
 
     if (!role || !['admin_chair', 'instructor'].includes(String(role))) {
       return NextResponse.json({ error: 'Please select a valid role.' }, { status: 400 });
     }
+
+    /* Per-account lockout as well as per-address: guessing one account's password
+       from many addresses (or a forged X-Forwarded-For) is stopped too. Counted for
+       unknown usernames alike, so a lockout never reveals which accounts exist. */
+    const accountKey = `login-account:${String(role)}:${loginId.toLowerCase()}`;
+    const accountLimit = checkRateLimit(accountKey);
+    if (!accountLimit.allowed) {
+      return NextResponse.json(
+        { error: `Too many failed login attempts. Please try again in ${accountLimit.retryAfterSeconds} seconds.` },
+        { status: 429 }
+      );
+    }
+    const loginFailed = () => {
+      recordFailure(ip);
+      recordFailure(accountKey, ACCOUNT_MAX_FAILURES);
+    };
 
     /*
      * Administrator, Department Chair, and Program Chair share one login
@@ -103,20 +156,24 @@ async function POST_handler(req: NextRequest) {
       );
 
       if (result.rows.length === 0) {
-        recordFailure(ip);
-        return NextResponse.json({ error: 'Invalid username or password.' }, { status: 401 });
+        await bcrypt.compare(String(password), NO_ACCOUNT_HASH);
+        loginFailed();
+        return NextResponse.json({ error: NO_SUCH_ACCOUNT }, { status: 401 });
       }
 
       const user = result.rows[0];
       const validPassword = await bcrypt.compare(String(password), user.password_hash);
       if (!validPassword) {
-        recordFailure(ip);
-        return NextResponse.json({ error: 'Invalid username or password.' }, { status: 401 });
+        loginFailed();
+        return NextResponse.json({ error: WRONG_PASSWORD }, { status: 401 });
       }
+      upgradeOldHash('users', Number(user.id), String(password), String(user.password_hash));
+      // A default / common password must be changed before anything else (auth/passwordChange.ts)
+      await recordPasswordStrength('user', Number(user.id), String(password), user.username as string);
 
       const actualRole = user.role as string;
       if (!['admin', 'department_chair', 'program_chair'].includes(actualRole)) {
-        recordFailure(ip);
+        loginFailed();
         return NextResponse.json(
           { error: 'This account is not allowed to login as Administrator / Chair.' },
           { status: 403 }
@@ -135,6 +192,7 @@ async function POST_handler(req: NextRequest) {
         const otpEnabled = user.otp_enabled === true;
         if (!otpEnabled) {
           clearFailures(ip);
+          clearFailures(accountKey);
           return withLoginCookies(
             await adminLoginResponse({ id: user.id, username: user.username }, { req, registerDevice: true })
           );
@@ -143,6 +201,7 @@ async function POST_handler(req: NextRequest) {
         const trusted = await findTrustedDevice(req, 'user', user.id);
         if (trusted) {
           clearFailures(ip);
+          clearFailures(accountKey);
           return withLoginCookies(
             await adminLoginResponse(
               { id: user.id, username: user.username },
@@ -186,6 +245,7 @@ async function POST_handler(req: NextRequest) {
       const otpEnabled = user.otp_enabled === true && emailVerified;
       if (!otpEnabled) {
         clearFailures(ip);
+        clearFailures(accountKey);
         return withLoginCookies(
           await chairLoginResponse(chairUser, chairRole, { req, registerDevice: true })
         );
@@ -194,6 +254,7 @@ async function POST_handler(req: NextRequest) {
       const trusted = await findTrustedDevice(req, 'user', user.id);
       if (trusted) {
         clearFailures(ip);
+        clearFailures(accountKey);
         return withLoginCookies(
           await chairLoginResponse(chairUser, chairRole, { req, registerDevice: true })
         );
@@ -230,17 +291,20 @@ async function POST_handler(req: NextRequest) {
       );
 
       if (result.rows.length === 0) {
-        recordFailure(ip);
-        return NextResponse.json({ error: 'Invalid username or password.' }, { status: 401 });
+        await bcrypt.compare(String(password), NO_ACCOUNT_HASH);
+        loginFailed();
+        return NextResponse.json({ error: NO_SUCH_ACCOUNT }, { status: 401 });
       }
 
       const row = result.rows[0];
 
       const validPassword = await bcrypt.compare(String(password), row.password_hash);
       if (!validPassword) {
-        recordFailure(ip);
-        return NextResponse.json({ error: 'Invalid username or password.' }, { status: 401 });
+        loginFailed();
+        return NextResponse.json({ error: WRONG_PASSWORD }, { status: 401 });
       }
+      upgradeOldHash('instructor_accounts', Number(row.account_id), String(password), String(row.password_hash));
+      await recordPasswordStrength('instructor', Number(row.account_id), String(password), row.username as string);
 
       if (!row.account_active || !row.faculty_active) {
         return NextResponse.json(
@@ -269,6 +333,7 @@ async function POST_handler(req: NextRequest) {
 
       if (!otpEnabled) {
         clearFailures(ip);
+        clearFailures(accountKey);
         return withLoginCookies(
           await instructorLoginResponse(instructorUser, { req, registerDevice: true })
         );
@@ -277,6 +342,7 @@ async function POST_handler(req: NextRequest) {
       const trusted = await findTrustedDevice(req, 'instructor', row.account_id);
       if (trusted) {
         clearFailures(ip);
+        clearFailures(accountKey);
         return withLoginCookies(
           await instructorLoginResponse(instructorUser, { req, registerDevice: true })
         );

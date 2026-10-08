@@ -3,7 +3,10 @@
  *
  *   npx tsx --env-file=apps/backend/.env.local --tsconfig apps/backend/tsconfig.json \
  *     apps/backend/scripts/import-workload.ts "<workbook.xlsx>" [--apply] [--report report.md]
- *     [--academic-year 2026-2027] [--semester "1st Semester"]
+ *     [--academic-year 2026-2027] [--semester "1st Semester"] [--initial-password "<password>"]
+ *
+ * New faculty accounts get the --initial-password (or IMPORT_INITIAL_PASSWORD);
+ * there is no built-in default, so imported accounts never share a guessable one.
  *
  * Without --apply it is a dry run: the whole import runs in a transaction that
  * is rolled back, and the report shows what would happen. With --apply the
@@ -14,11 +17,9 @@ import path from 'node:path';
 import pool from '@/database/db';
 import { runWorkloadImport } from '@/services/workloadImport/apply';
 import { renderImportReport } from '@/services/workloadImport/report';
+import { weakPasswordReason } from '@/auth/passwordPolicy';
 
-/** Initial password for accounts created for new faculty (as instructed) */
-const INITIAL_PASSWORD = 'password';
-
-const VALUE_FLAGS = new Set(['--report', '--academic-year', '--semester']);
+const VALUE_FLAGS = new Set(['--report', '--academic-year', '--semester', '--initial-password']);
 
 /** Command line: one workbook path, --apply, and flags that take a value */
 function parseArgs(argv: string[]) {
@@ -46,7 +47,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const { file, apply } = args;
   if (!file || !fs.existsSync(file)) {
-    console.error('Usage: import-workload.ts "<workbook.xlsx>" [--apply] [--report report.md] [--academic-year YYYY-YYYY] [--semester "1st Semester"]');
+    console.error('Usage: import-workload.ts "<workbook.xlsx>" --initial-password "<password>" [--apply] [--report report.md] [--academic-year YYYY-YYYY] [--semester "1st Semester"]');
     process.exit(2);
   }
   const guessed = termFromFileName(file);
@@ -56,9 +57,16 @@ async function main() {
     console.error('Could not tell the term from the file name — pass --academic-year YYYY-YYYY and --semester "1st Semester".');
     process.exit(2);
   }
+  // Password for the accounts of new faculty — given each time, never a built-in default
+  const initialPassword = args.value('--initial-password') ?? process.env.IMPORT_INITIAL_PASSWORD ?? '';
+  const weak = initialPassword.length < 8 ? 'it must be at least 8 characters' : weakPasswordReason(initialPassword);
+  if (weak) {
+    console.error(`Give new faculty accounts a strong starting password with --initial-password "<password>" (or IMPORT_INITIAL_PASSWORD): ${weak}`);
+    process.exit(2);
+  }
   console.log(`${apply ? 'Importing' : 'Dry run of'} ${path.basename(file)} for ${semester}, ${academicYear}…`);
 
-  const report = await runWorkloadImport({ filePath: file, term: { academicYear, semester }, apply, initialPassword: INITIAL_PASSWORD });
+  const report = await runWorkloadImport({ filePath: file, term: { academicYear, semester }, apply, initialPassword });
   const text = renderImportReport(report);
   const out = args.value('--report');
   if (out) fs.writeFileSync(out, text, 'utf8');
