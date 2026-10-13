@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { parseId } from '@/database/ids';
 import { query, transaction } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { resolveProgramScope, isScopedChair, assertBlockProgramAccess } from '@/services/programScope';
@@ -19,6 +20,8 @@ export async function GET(req: NextRequest) {
 
     const { searchParams } = new URL(req.url);
     const programId = searchParams.get('program_id');
+    // An id the database can't read (e.g. "x") is a bad request, not a server error
+    if (programId && parseId(programId) === null) return NextResponse.json({ error: 'Invalid program_id' }, { status: 400 });
 
     /*
      * Program scoping for department chairs is feature-specific:

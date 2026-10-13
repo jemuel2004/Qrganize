@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { parseId } from '@/database/ids';
 import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { getChairAssignedProgramId, isScopedChair } from '@/services/programScope';
@@ -29,6 +30,9 @@ export async function GET(req: NextRequest) {
       programId = String(chairProgramId);
     }
     const employmentType = searchParams.get('employment_type') || '';
+    if ((facultyId && parseId(facultyId) === null) || (programId && parseId(programId) === null)) {
+      return NextResponse.json({ error: 'Invalid faculty_id or program_id' }, { status: 400 });
+    }
     const search         = searchParams.get('search')          || '';
 
     let sql = `

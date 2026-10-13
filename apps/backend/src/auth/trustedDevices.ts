@@ -244,12 +244,16 @@ export async function listTrustedDevices(accountKind: AccountKind, accountId: nu
   }>;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function revokeTrustedDevice(
   req: NextRequest,
   accountKind: AccountKind,
   accountId: number,
   deviceId: string
 ): Promise<{ revoked: boolean; wasCurrent: boolean }> {
+  // Device ids are UUIDs — anything else can't be one (and would make the query fail)
+  if (!UUID_RE.test(deviceId)) return { revoked: false, wasCurrent: false };
   const result = await query(
     `UPDATE trusted_devices
      SET revoked_at = NOW()

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { parseId } from '@/database/ids';
 import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { resolveProgramScope, isScopedChair } from '@/services/programScope';
@@ -16,6 +17,7 @@ export async function GET(req: NextRequest) {
     const semester          = searchParams.get('semester') || '';
     const academic_year     = searchParams.get('academic_year') || '';
     const faculty_id        = searchParams.get('faculty_id') || '';
+    if (faculty_id && parseId(faculty_id) === null) return NextResponse.json({ error: 'Invalid faculty_id' }, { status: 400 });
 
     let programId = '';
     if (isScopedChair(auth)) {

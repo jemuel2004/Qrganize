@@ -6,7 +6,16 @@ import { normalizeYearLevel, normalizeSemester } from '@shared/normalizeCurricul
 import { resolveSubjectCategory } from '@shared/subjectCategory';
 import { canAccessProgram, isScopedChair } from '@/services/programScope';
 import { withAudit } from '@/services/audit';
+import { parseId } from '@/database/ids';
 import { assignedSubjectCodes, assignedSubjectsMessage } from '@/services/curriculumUsage';
+
+/** The Edit Subject form */
+interface CurriculumBody {
+  program_id?: number | string; year_level?: string; semester?: string;
+  subject_code?: string; subject_name?: string;
+  lecture_hours?: number; laboratory_hours?: number; units?: number | string;
+  prerequisites?: string; grade?: string; subject_category?: string;
+}
 
 async function PUT_handler(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -17,7 +26,8 @@ async function PUT_handler(req: NextRequest, { params }: { params: Promise<{ id:
 
     await ensureCurriculumFields();
 
-    const { id } = await params;
+    const id = parseId((await params).id);
+    if (id === null) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
     if (isScopedChair(auth)) {
       const ownerCheck = await query('SELECT program_id FROM curriculums WHERE id = $1', [id]);
@@ -27,8 +37,21 @@ async function PUT_handler(req: NextRequest, { params }: { params: Promise<{ id:
       }
     }
 
+    const body = await req.json().catch(() => null) as CurriculumBody | null;
+    if (!body || typeof body !== 'object') return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
     const { program_id, year_level, semester, subject_code, subject_name,
-            lecture_hours, laboratory_hours, units, prerequisites, grade, subject_category } = await req.json();
+            lecture_hours, laboratory_hours, units, prerequisites, grade, subject_category } = body;
+
+    // The same checks as adding a subject (POST /api/curriculum)
+    if (!program_id || !year_level || !semester || !String(subject_code ?? '').trim() || !String(subject_name ?? '').trim()) {
+      return NextResponse.json({ error: 'All required fields must be filled' }, { status: 400 });
+    }
+    if (Number(lecture_hours) < 0 || Number(laboratory_hours) < 0) {
+      return NextResponse.json({ error: 'Hours cannot be negative' }, { status: 400 });
+    }
+    if (Number(units) < 0) {
+      return NextResponse.json({ error: 'Credit Units cannot be negative' }, { status: 400 });
+    }
 
     if (!(await canAccessProgram(auth, Number(program_id)))) {
       return NextResponse.json({ error: 'You can only manage curriculum for your assigned program.' }, { status: 403 });
@@ -75,26 +98,23 @@ async function DELETE_handler(req: NextRequest, { params }: { params: Promise<{ 
     if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-    const { id } = await params;
+    const curriculumId = parseId((await params).id);
+    if (curriculumId === null) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
     if (isScopedChair(auth)) {
-      const ownerCheck = await query('SELECT program_id FROM curriculums WHERE id = $1', [id]);
+      const ownerCheck = await query('SELECT program_id FROM curriculums WHERE id = $1', [curriculumId]);
       if (ownerCheck.rows.length === 0) return NextResponse.json({ error: 'Not found' }, { status: 404 });
       if (!(await canAccessProgram(auth, ownerCheck.rows[0].program_id))) {
         return NextResponse.json({ error: 'Not found' }, { status: 404 });
       }
-    }
-
-    const curriculumId = Number(id);
-    if (!Number.isInteger(curriculumId) || curriculumId <= 0) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
     const inUse = await assignedSubjectCodes([curriculumId]);
     if (inUse.length > 0) {
       return NextResponse.json({ error: assignedSubjectsMessage(inUse) }, { status: 409 });
     }
 
-    await query('UPDATE curriculums SET is_active=false, updated_at=NOW() WHERE id=$1', [curriculumId]);
+    const removed = await query('UPDATE curriculums SET is_active=false, updated_at=NOW() WHERE id=$1', [curriculumId]);
+    if ((removed.rowCount ?? 0) === 0) return NextResponse.json({ error: 'Not found' }, { status: 404 });
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('[DELETE /api/curriculum/[id]]', error);

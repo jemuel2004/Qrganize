@@ -452,7 +452,8 @@ function alertsFor(snapshot: WorkloadMonitoringSnapshot, requests: PendingReques
     alerts.push({
       type: 'block_unassigned', module: BLOCK_MODULE, id: b.block_id,
       title: 'Subjects Need a Faculty',
-      message: `${b.program_code} — Block ${b.block_name} has ${plural(b.unassigned_count, 'subject')} without an assigned faculty.`,
+      // The year level too: "BSCS — Block A" alone reads the same for 2nd Year A and 4th Year A
+      message: `${`${b.program_code} ${b.year_level}`.trim()} — Block ${b.block_name} has ${plural(b.unassigned_count, 'subject')} without an assigned faculty.`,
     });
   }
   if (snapshot.unstarted_schedule_blocks.length > 0) {

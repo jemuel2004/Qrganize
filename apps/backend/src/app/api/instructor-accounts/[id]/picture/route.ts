@@ -21,7 +21,9 @@ async function POST_handler(req: NextRequest, { params }: Params) {
       return NextResponse.json({ error: 'Invalid faculty ID.' }, { status: 400 });
     }
 
-    const formData = await req.formData();
+    // Not a file upload (no form data) → the same answer as no file
+    const formData = await req.formData().catch(() => null);
+    if (!formData) return NextResponse.json({ error: 'No file uploaded.' }, { status: 400 });
     const file = formData.get('picture') as File | null;
 
     if (!file || file.size === 0)

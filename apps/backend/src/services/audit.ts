@@ -1,4 +1,4 @@
-import type { NextRequest } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
 import { query } from '@/database/db';
 import { ensureAuditTable } from '@/database/auditSchema';
 import { getAuthUser } from '@/auth/auth';
@@ -148,6 +148,11 @@ export function describe(method: string, path: string, body: Record<string, unkn
 
 type Handler<C> = (req: NextRequest, ctx: C) => Promise<Response> | Response;
 
+/** The text parses as JSON */
+function isJson(text: string): boolean {
+  try { JSON.parse(text); return true; } catch { return false; }
+}
+
 /**
  * Wraps a route handler so successful writes land in the audit trail and tell
  * open tabs which data changed (real-time sync, services/realtime.ts).
@@ -157,18 +162,25 @@ export function withAudit<C = unknown>(handler: Handler<C>): (req: NextRequest, 
     const path = req.nextUrl?.pathname ?? new URL(req.url).pathname;
     const method = req.method.toUpperCase();
     if (method === 'GET') return handler(req, ctx);
+
+    // A body sent as JSON that isn't JSON is answered here (400) — routes read it with
+    // req.json(), which would throw and end as a 500. Read from a copy: the handler
+    // still gets the original.
+    let raw = '';
+    if ((req.headers.get('content-type') ?? '').includes('application/json')) {
+      raw = await req.clone().text().catch(() => '');
+      if (raw.trim() && !isJson(raw)) return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+    }
+
     if (SKIP.some(re => re.test(path))) {
       const res = await handler(req, ctx);
       if (res.status < 400) bumpTopics(topicsForWrite(method, path));
       return res;
     }
 
-    // Read the JSON body from a copy — the handler still gets the original.
-    let body: Record<string, unknown> | null = null;
-    if ((req.headers.get('content-type') ?? '').includes('application/json')) {
-      body = await req.clone().json().catch(() => null);
-      if (body && (typeof body !== 'object' || Array.isArray(body))) body = { items: body };
-    }
+    // The JSON body (read above, from a copy) for the audit trail
+    let body: Record<string, unknown> | null = raw.trim() ? JSON.parse(raw) as Record<string, unknown> | null : null;
+    if (body && (typeof body !== 'object' || Array.isArray(body))) body = { items: body };
     // Session of whoever is acting (before sign-out clears it)
     const actor = await getAuthUser(req).catch(() => null);
 
