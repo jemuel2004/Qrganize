@@ -145,8 +145,9 @@ export async function ensureRoomOccupancy(): Promise<void> {
   ready = true;
 }
 
-/** Expire stale Pending/Occupied rows whose expires_at has passed.
- *  Occupied rows tied to an older In-Use room request (one that moved its
+/** Expire stale Pending/Occupied rows: a class's hold the moment its class ends
+ *  (no running over — the user's rule, 2026-10-13), anything else once its
+ *  expires_at has passed. Occupied rows tied to an older In-Use room request (one that moved its
  *  class) stay active until the instructor (or admin) explicitly releases
  *  them; a today-only request's hold ends with its class time. Then request
  *  statuses that time changes are brought up to date, and today-only requests
@@ -165,14 +166,14 @@ export async function expireStaleOccupancy(roomId?: number): Promise<void> {
       SET    status = 'Expired', released_at = NOW()
       WHERE  room_id = $1
         AND  status IN ('Pending', 'Occupied')
-        AND  expires_at < NOW()
+        AND  ${holdEndSql('room_occupancy')} <= NOW()
         ${inUseGuard}
     `, [roomId])
     : await query(`
       UPDATE room_occupancy
       SET    status = 'Expired', released_at = NOW()
       WHERE  status IN ('Pending', 'Occupied')
-        AND  expires_at < NOW()
+        AND  ${holdEndSql('room_occupancy')} <= NOW()
         ${inUseGuard}
     `);
   // Time-based change — open tabs refresh the rooms that just freed up

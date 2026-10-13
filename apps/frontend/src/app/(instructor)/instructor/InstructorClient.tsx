@@ -5,12 +5,10 @@ import { useInstructorProfile } from '@/context/InstructorProfileContext';
 import { useVisibilityAwareInterval } from '@/hooks/useVisibilityAwareInterval';
 import { useRealtime } from '@/context/RealtimeContext';
 import { useToast } from '@/context/ToastContext';
-import { useNotifications } from '@/context/NotificationContext';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
 import { PageLoadTransition, revealProps } from '@/components/ui/PageLoadTransition';
 import { Skeleton } from '@/components/ui/skeletons';
-import { RefreshButton } from '@/components/ui/RefreshButton';
 import Link from 'next/link';
 import {
   CalendarDays, QrCode, ChevronLeft, ChevronRight,
@@ -79,6 +77,17 @@ function schoolMinutes(d = new Date()): number {
   return (get('hour') % 24) * 60 + get('minute');
 }
 const schoolHour = () => Math.floor(schoolMinutes() / 60);
+const schoolSecondFmt = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: 'numeric', second: 'numeric', hourCycle: 'h23', timeZone: SCHOOL_TZ });
+/** Milliseconds since midnight at the school */
+function schoolMsOfDay(ms: number): number {
+  const parts = schoolSecondFmt.formatToParts(new Date(ms));
+  const get = (t: string) => Number(parts.find(p => p.type === t)?.value ?? 0);
+  return (((get('hour') % 24) * 60 + get('minute')) * 60 + get('second')) * 1000 + (ms % 1000);
+}
+/** When an in-use room session ends (ms): its class end today at the school, or the hold's own end */
+function sessionEndMs(r: Reservation, nowMs: number): number {
+  return r.class_end ? nowMs - schoolMsOfDay(nowMs) + sessionMins(r.class_end) * 60_000 : Date.parse(r.expires_at);
+}
 function sessionMins(t: string) {
   const [h, m] = t.split(':').map(Number);
   return h * 60 + m;
@@ -406,16 +415,16 @@ const POLL_MS = 60_000;
 
 /* ─── Main component ─────────────────────────────────────────────── */
 export default function InstructorDashboard() {
-  const { name, facultyId, refresh: refreshProfile } = useInstructorProfile();
-  const { refresh: refreshNotifications } = useNotifications();
+  const { name, facultyId } = useInstructorProfile();
   const toast = useToast();
   const reduceMotion = useReducedMotion();
-  const [refreshing, setRefreshing]       = useState(false);
   const [data, setData]                   = useState<DashboardData | null>(null);
   const [loading, setLoading]             = useState(true);
   const [loadError, setLoadError]         = useState(false);
   const [nowHour, setNowHour]             = useState(schoolHour);
   const [dateStr, setDateStr]             = useState('');
+  /** The time the page last looked at the clock — the session card leaves on its end time */
+  const [clockMs, setClockMs]             = useState(() => Date.now());
 
   const [releasing, setReleasing]   = useState(false);
   const [releaseOpen, setReleaseOpen] = useState(false);
@@ -428,8 +437,11 @@ export default function InstructorDashboard() {
     const d = new Date();
     setNowHour(Math.floor(schoolMinutes(d) / 60));
     setDateStr(d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: SCHOOL_TZ }));
+    setClockMs(d.getTime());
   }, []);
   useEffect(() => { stampDate(); }, [stampDate]);
+  // The greeting, date and Now / Next chips keep up with the clock
+  useVisibilityAwareInterval(stampDate, 30_000);
 
   // Google verification notice
   const loadAccount = useCallback(() => fetch('/api/auth/me', { cache: 'no-store' })
@@ -481,23 +493,25 @@ export default function InstructorDashboard() {
   useRealtime(['schedule', 'workload', 'occupancy', 'room-requests', 'rooms', 'term'], () => load(true), { enabled: !loading });
   useVisibilityAwareInterval(() => load(true), POLL_MS);
 
-  // Refresh button: everything on the page (and the bell and name above it)
-  // is fetched again behind the skeleton, then the cards fade back in
-  const refreshAll = useCallback(async () => {
-    setRefreshing(true);
-    stampDate();
-    refreshNotifications();
-    const [ok] = await Promise.all([
-      load(true),
-      loadAccount(),
-      refreshProfile(),
-    ]);
-    setRefreshing(false);
-    if (!ok) toast.error('Could not refresh the dashboard. Check your connection and try again.');
-    return ok;
-  }, [stampDate, refreshNotifications, load, loadAccount, refreshProfile, toast]);
+  const showSkeleton = useMinLoading(loading && !data, PAGE_SKELETON_MIN_MS);
 
-  const showSkeleton = useMinLoading((loading && !data) || refreshing, PAGE_SKELETON_MIN_MS);
+  // The room session ends with its class: the card fades away on the end time by this
+  // device's clock, and the dashboard re-reads (the server closes the hold then too)
+  const rawHold = data?.my_reservation ?? null;
+  const holdEndMs = rawHold?.status === 'Occupied' ? sessionEndMs(rawHold, clockMs) : null;
+  useEffect(() => {
+    if (holdEndMs == null) return;
+    const left = holdEndMs - Date.now();
+    if (left <= 0) return;
+    const t = window.setTimeout(() => { setClockMs(Date.now()); void load(true); }, left + 300);
+    return () => window.clearTimeout(t);
+  }, [holdEndMs, load]);
+  const myHold = rawHold && !(holdEndMs != null && holdEndMs <= clockMs) ? rawHold : null;
+  const sessionFade = reduceMotion ? {} : {
+    initial: { opacity: 0 },
+    animate: { opacity: 1, transition: { duration: 0.5, ease: 'easeInOut' as const } },
+    exit:    { opacity: 0, transition: { duration: 0.5, ease: 'easeInOut' as const } },
+  };
 
   async function confirmReleaseRoom() {
     if (!facultyId || !data?.my_reservation) return;
@@ -554,11 +568,6 @@ export default function InstructorDashboard() {
             </p>
           </div>
         </div>
-      </div>
-
-      {/* Same Refresh button, colour and place as My Schedule and My Workload */}
-      <div className="flex justify-end">
-        <RefreshButton overlay={false} onRefresh={refreshAll} loading={refreshing || showSkeleton} />
       </div>
 
       {gmailVerified === false && !hideGmailNotice && (
@@ -632,39 +641,41 @@ export default function InstructorDashboard() {
         className="flex flex-col gap-5"
       >
       {/* ══ ACTIVE SESSION CARD ════════════════════════════════════════ */}
-      {data?.my_reservation ? (
-        <motion.div {...revealProps(0, reduceMotion)} className={[
+      {/* Session ↔ no session: the old card fades out, then the new one fades in (calm 0.5 s) */}
+      <AnimatePresence mode="wait" initial={false}>
+      {myHold ? (
+        <motion.div key={`hold-${myHold.id}-${myHold.status}`} {...sessionFade} className={[
           'bg-[#111827] rounded-2xl border-2 px-4 sm:px-6 py-4 sm:py-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 sm:gap-6',
-          data.my_reservation.status === 'Pending'
+          myHold.status === 'Pending'
             ? 'border-amber-500/40'
             : 'border-emerald-500/40',
         ].join(' ')}>
           {/* Status icon + info */}
           <div className="flex items-center gap-3 sm:gap-4 min-w-0">
             <div className={`w-11 h-11 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${
-              data.my_reservation.status === 'Pending' ? 'bg-amber-500/15' : 'bg-emerald-500/15'
+              myHold.status === 'Pending' ? 'bg-amber-500/15' : 'bg-emerald-500/15'
             }`}>
-              {data.my_reservation.status === 'Pending'
+              {myHold.status === 'Pending'
                 ? <Timer className="w-5 h-5 sm:w-6 sm:h-6 text-amber-400" />
                 : <CircleDot className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-400" />}
             </div>
             <div className="min-w-0">
               <p className={`text-sm font-black uppercase tracking-wider mb-0.5 ${
-                data.my_reservation.status === 'Pending' ? 'text-amber-400' : 'text-emerald-400'
+                myHold.status === 'Pending' ? 'text-amber-400' : 'text-emerald-400'
               }`}>
-                {data.my_reservation.status === 'Pending' ? 'Pending QR Confirmation' : 'Active Room Session'}
+                {myHold.status === 'Pending' ? 'Pending QR Confirmation' : 'Active Room Session'}
               </p>
-              <p className="text-lg sm:text-xl font-black text-white leading-tight truncate">{data.my_reservation.room_name}</p>
+              <p className="text-lg sm:text-xl font-black text-white leading-tight truncate">{myHold.room_name}</p>
               <div className="flex items-center gap-2 sm:gap-3 mt-1.5 flex-wrap">
-                <TypeBadge type={data.my_reservation.room_type} />
-                {data.my_reservation.building && (
+                <TypeBadge type={myHold.room_type} />
+                {myHold.building && (
                   <span className="text-sm text-slate-300 flex items-center gap-1.5">
-                    <Building2 className="w-4 h-4" /> {data.my_reservation.building}
+                    <Building2 className="w-4 h-4" /> {myHold.building}
                   </span>
                 )}
-                {data.my_reservation.capacity && (
+                {myHold.capacity && (
                   <span className="text-sm text-slate-300 flex items-center gap-1.5">
-                    <Users className="w-4 h-4" /> {data.my_reservation.capacity} seats
+                    <Users className="w-4 h-4" /> {myHold.capacity} seats
                   </span>
                 )}
               </div>
@@ -673,23 +684,23 @@ export default function InstructorDashboard() {
 
           {/* Right: countdown / time + actions */}
           <div className="flex items-center gap-3 sm:gap-5 flex-wrap w-full sm:w-auto">
-            {data.my_reservation.status === 'Pending' && (
+            {myHold.status === 'Pending' && (
               <div>
                 <p className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-1">Scan within</p>
-                <Countdown expiresAt={data.my_reservation.expires_at} onExpired={() => load(true)} />
+                <Countdown expiresAt={myHold.expires_at} onExpired={() => load(true)} />
               </div>
             )}
-            {data.my_reservation.status === 'Occupied' && (
-              <SessionTimes reservation={data.my_reservation} />
+            {myHold.status === 'Occupied' && (
+              <SessionTimes reservation={myHold} />
             )}
             <div className="flex items-center gap-2.5 w-full sm:w-auto">
-              {data.my_reservation.status === 'Pending' && (
+              {myHold.status === 'Pending' && (
                 <Link href="/instructor/scan"
                   className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 bg-[#1D5BD6] hover:bg-[#12408F] text-white px-5 py-3 rounded-xl text-base font-bold transition-colors shadow-lg shadow-[#1D5BD6]/20 min-h-12">
                   <QrCode className="w-5 h-5" /> Scan QR Now
                 </Link>
               )}
-              {data.my_reservation.status === 'Occupied' && (
+              {myHold.status === 'Occupied' && (
                 <button
                   type="button"
                   onClick={() => setReleaseOpen(true)}
@@ -703,7 +714,7 @@ export default function InstructorDashboard() {
           </div>
         </motion.div>
       ) : data ? (
-        <motion.div {...revealProps(0, reduceMotion)} className="bg-[#111827] border border-dashed border-white/10 rounded-2xl px-4 sm:px-6 py-4 flex flex-wrap sm:flex-nowrap items-center gap-4">
+        <motion.div key="no-hold" {...sessionFade} className="bg-[#111827] border border-dashed border-white/10 rounded-2xl px-4 sm:px-6 py-4 flex flex-wrap sm:flex-nowrap items-center gap-4">
           <div className="w-12 h-12 bg-white/5 border border-white/10 rounded-xl flex items-center justify-center flex-shrink-0">
             <DoorOpen className="w-6 h-6 text-slate-500" />
           </div>
@@ -717,6 +728,7 @@ export default function InstructorDashboard() {
           </Link>
         </motion.div>
       ) : null}
+      </AnimatePresence>
 
       {/* ══ MAIN BODY: Available Rooms · Class Schedule ════════════════ */}
       {data ? (
@@ -826,7 +838,7 @@ export default function InstructorDashboard() {
           </p>
           <p className="text-slate-400 text-sm mt-1">Check your connection and try again.</p>
           <button onClick={() => load()} className="mt-4 flex items-center gap-2 text-sm text-[#1D5BD6] hover:text-white font-semibold transition-colors">
-            <RefreshCw className="w-4 h-4" /> Refresh
+            <RefreshCw className="w-4 h-4" /> Try Again
           </button>
         </div>
       )}

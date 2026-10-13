@@ -11,14 +11,11 @@ import { RefreshButton } from '@/components/ui/RefreshButton';
 import { motion, useReducedMotion } from 'framer-motion';
 import { WEEK_DAYS, daysLabel, normalizeDay, parseDays } from '@shared/dayCombination';
 import { blockCode } from '@shared/blockCode';
-import { clockRange12 } from '@shared/clock12';
+import { clock12, clockRange12 } from '@shared/clock12';
 import { useToast } from '@/context/ToastContext';
 import Modal from '@/components/ui/Modal';
-import {
-  CalendarDays, MapPin, Users, Clock,
-  QrCode, CheckCircle2, AlertTriangle, XCircle, Timer,
-  Hourglass, ShieldCheck, DoorOpen, Loader2,
-} from 'lucide-react';
+import Link from 'next/link';
+import { CalendarDays, MapPin, Users, Clock, QrCode, DoorOpen, Loader2 } from 'lucide-react';
 import ReleaseClassroomDialog from './ReleaseClassroomDialog';
 import WeekCalendar, { WeekCalendarSkeleton, minutesOf, type CalendarEvent, type CalendarFlag } from './WeekCalendar';
 import { RELEASE_STATE, releaseDateLabel, type RoomRelease } from '@/lib/roomRelease';
@@ -54,6 +51,10 @@ interface Schedule {
   sessions: SessionData[] | null;
 }
 interface RoomOccupancy { status: string; is_self: boolean; }
+/** Today's QR scan for one class time ("<class id>|HH:MM" of its start) */
+interface TodayScan { status: 'Valid' | 'Late'; at: string }
+/** QR scanning opens this many minutes before a class starts */
+const SCAN_EARLY_MIN = 15;
 
 /* ── Scan Availability Logic ─────────────────────────────────────────────── */
 type ScanStatus =
@@ -105,58 +106,40 @@ function getScanStatus(
   return 'available';
 }
 
-interface BadgeConfig {
-  label: string;
-  icon: React.ReactNode;
-  classes: string;
-  pulse?: boolean;
+/** A class time today, as the class details show it — scan words like the admin side */
+type TodayState = 'scan-now' | 'waiting' | 'scanned' | 'late' | 'not-scanned' | 'opens' | 'in-use-other' | 'released' | 'no-room';
+
+interface TodayRow { state: TodayState; label: string; cls: string; pulse?: boolean }
+
+/** "HH:MM" minus some minutes → "12:45 PM" */
+function minus12(t: string, mins: number): string {
+  const [h, m] = t.split(':').map(Number);
+  return clock12((h * 60 + m - mins + 1440) % 1440);
 }
 
-function badgeConfig(status: ScanStatus): BadgeConfig | null {
-  switch (status) {
-    case 'not-today': return null;
-    case 'released':
-      return { label: 'Freed for others today', icon: <DoorOpen className="w-3.5 h-3.5" />, classes: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
-    case 'no-room':
-      return { label: 'No Room Assigned', icon: <MapPin className="w-3.5 h-3.5" />, classes: 'bg-[#F8FAFC] text-[#64748B] border-[#E2E8F0]' };
-    case 'not-yet':
-      return { label: 'Not Yet Available', icon: <Hourglass className="w-3.5 h-3.5" />, classes: 'bg-[#EFF6FF] text-[#1D5BD6] border-[#BFDBFE]' };
-    case 'available':
-      return { label: 'Available to Scan', icon: <QrCode className="w-3.5 h-3.5" />, classes: 'bg-emerald-50 text-emerald-700 border-emerald-200', pulse: true };
-    case 'in-use-self':
-      return { label: 'Scan Active — In Use', icon: <ShieldCheck className="w-3.5 h-3.5" />, classes: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
-    case 'in-use-other':
-      return { label: 'Room Already In Use', icon: <XCircle className="w-3.5 h-3.5" />, classes: 'bg-red-50 text-red-700 border-red-200' };
-    case 'pending-confirmation':
-      return { label: 'Pending Confirmation', icon: <Timer className="w-3.5 h-3.5" />, classes: 'bg-amber-50 text-amber-700 border-amber-200', pulse: true };
-    case 'approved':
-      return { label: 'Room Change Approved', icon: <CheckCircle2 className="w-3.5 h-3.5" />, classes: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
-    case 'expired':
-      return { label: 'Scan Window Expired', icon: <AlertTriangle className="w-3.5 h-3.5" />, classes: 'bg-[#F8FAFC] text-[#64748B] border-[#E2E8F0]' };
-    default: return null;
+function todayRow(
+  sess: SessionData, nowMins: number, occupancy: Record<number, RoomOccupancy>,
+  requests: Record<number, string>, msId: number, releasedToday: boolean,
+  scan: TodayScan | undefined,
+): TodayRow {
+  const GREEN = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+  const GREY = 'bg-[#F8FAFC] text-[#64748B] border-[#E2E8F0]';
+  if (releasedToday) return { state: 'released', label: 'Free for others today', cls: GREEN };
+  if (!sess.room_id) return { state: 'no-room', label: 'No room assigned', cls: GREY };
+  if (scan) {
+    return scan.status === 'Late'
+      ? { state: 'late', label: `Late scan · ${clock12(scan.at)}`, cls: 'bg-amber-50 text-amber-700 border-amber-200' }
+      : { state: 'scanned', label: `Scanned · ${clock12(scan.at)}`, cls: GREEN };
   }
-}
-
-function ScanAvailabilityBadge({
-  sess, now, todayName, occupancy, requests, msId, releasedToday,
-}: {
-  sess: SessionData;
-  now: Date;
-  todayName: string;
-  occupancy: Record<number, RoomOccupancy>;
-  requests: Record<number, string>;
-  msId: number;
-  releasedToday: boolean;
-}) {
-  const status = getScanStatus(sess, now, todayName, occupancy, requests, msId, releasedToday);
-  const cfg = badgeConfig(status);
-  if (!cfg) return null;
-  return (
-    <span className={`inline-flex items-center gap-1.5 text-[13px] font-semibold px-2.5 py-1 rounded-md border ${cfg.classes} ${cfg.pulse ? 'animate-pulse' : ''}`}>
-      {cfg.icon}
-      {cfg.label}
-    </span>
-  );
+  const start = minutesOf(sess.start_time);
+  const end = minutesOf(sess.end_time);
+  if (nowMins < start - SCAN_EARLY_MIN) return { state: 'opens', label: `Scan opens ${minus12(sess.start_time, SCAN_EARLY_MIN)}`, cls: 'bg-[#EFF6FF] text-[#1D5BD6] border-[#BFDBFE]' };
+  if (nowMins > end) return { state: 'not-scanned', label: 'Not scanned', cls: GREY };
+  const occ = occupancy[sess.room_id];
+  if (occ?.is_self) return { state: 'scanned', label: 'Scanned', cls: GREEN };
+  if (requests[msId] === 'Pending Confirmation') return { state: 'waiting', label: 'Waiting for scan', cls: 'bg-amber-50 text-amber-700 border-amber-200', pulse: true };
+  if (occ) return { state: 'in-use-other', label: 'Room in use', cls: 'bg-red-50 text-red-700 border-red-200' };
+  return { state: 'scan-now', label: 'Scan now', cls: GREEN, pulse: true };
 }
 
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
@@ -231,6 +214,7 @@ export default function ScheduleClient() {
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [occupancy, setOccupancy] = useState<Record<number, RoomOccupancy>>({});
   const [requests, setRequests] = useState<Record<number, string>>({});
+  const [todayScans, setTodayScans] = useState<Record<string, TodayScan>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [now, setNow] = useState(new Date());
@@ -256,6 +240,7 @@ export default function ScheduleClient() {
         setSchedules(d.schedules || []);
         setOccupancy(d.room_occupancy ?? {});
         setRequests(d.room_requests ?? {});
+        setTodayScans(d.today_scans ?? {});
         if (rel) {
           setReleases(Array.isArray(rel.releases) ? rel.releases : []);
           setReleaseToday(String(rel.today ?? ''));
@@ -275,6 +260,8 @@ export default function ScheduleClient() {
   useRealtime(['schedule', 'workload', 'rooms', 'occupancy', 'room-requests', 'term'], () => load(true), { enabled: !loading });
   // Fallback for time-based changes (the current class, live room status)
   useVisibilityAwareInterval(() => load(true), 60_000);
+  // The class details' scan status and Scan QR Code button follow the clock
+  useVisibilityAwareInterval(() => setNow(new Date()), 30_000);
 
   // Refresh button: the schedule reloads behind the skeleton, then fades back in
   const refreshAll = useCallback(async () => {
@@ -326,7 +313,16 @@ export default function ScheduleClient() {
   const openMeetings = openMsId == null ? [] : meetings.filter(m => m.event.msId === openMsId);
   const openClass = openMeetings[0]?.sched ?? null;
   const openRooms = [...new Set(openMeetings.map(m => m.sess.room_name).filter((r): r is string => !!r))];
-  const openToday = openMeetings.filter(m => m.event.day === todayName);
+  const openToday = openMeetings
+    .filter(m => m.event.day === todayName)
+    .sort((a, b) => a.event.startMin - b.event.startMin)
+    .map(m => ({
+      m,
+      row: todayRow(m.sess, nowMin, occupancy, requests, m.event.msId, releasedToday(m.event.msId, m.sess),
+        todayScans[`${m.event.msId}|${m.sess.start_time.slice(0, 5)}`]),
+    }));
+  // A class time open for scanning now (and not scanned yet): straight to the QR scanner
+  const canScanNow = openToday.some(t => t.row.state === 'scan-now' || t.row.state === 'waiting');
   const openReleases = openMsId == null ? [] : releases.filter(r => r.master_schedule_id === openMsId && r.date !== releaseToday);
 
   return (
@@ -465,7 +461,8 @@ export default function ScheduleClient() {
         icon={CalendarDays}
         size="sm"
         footer={
-          <div className="flex justify-end">
+          // A class time open for scanning now: the scanner is one tap away, always in sight
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2.5">
             <button
               type="button"
               onClick={() => setOpenMsId(null)}
@@ -473,6 +470,17 @@ export default function ScheduleClient() {
             >
               Close
             </button>
+            {canScanNow && (
+              <motion.div whileTap={reduceMotion ? undefined : { scale: 0.98 }}>
+                <Link
+                  href="/instructor/scan"
+                  className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#1D5BD6] px-6 text-base font-bold hover:bg-[#164BB5] transition-colors"
+                  style={{ color: '#FFFFFF' }}
+                >
+                  <QrCode className="w-5 h-5" aria-hidden /> Scan QR Code
+                </Link>
+              </motion.div>
+            )}
           </div>
         }
       >
@@ -498,6 +506,32 @@ export default function ScheduleClient() {
               )}
             </div>
 
+            {openToday.length > 0 && (
+              <div>
+                <h3 className="text-[15px] font-bold text-[color:var(--foreground)] mb-2">Today</h3>
+                {/* One row per class time today: its time and part, then its scan status */}
+                <ul className="rounded-xl border border-[color:var(--border)] overflow-hidden divide-y divide-[color:var(--border)]">
+                  {openToday.map(({ m, row }) => (
+                    <li key={m.event.key} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5 sm:gap-3 px-4 py-3">
+                      <span className="min-w-0 leading-snug">
+                        <span className="block text-[15px] font-bold text-[color:var(--foreground)] tabular-nums">
+                          {clockRange12(m.event.startMin, m.event.endMin)}
+                        </span>
+                        {m.event.part && (
+                          <span className="block text-[14px] text-[color:var(--foreground-muted)]">
+                            {m.event.part === 'lab' ? 'Laboratory' : 'Lecture'}
+                          </span>
+                        )}
+                      </span>
+                      <span className={`self-start sm:self-auto inline-flex items-center text-[14px] font-semibold px-2.5 py-1 rounded-md border whitespace-nowrap ${row.cls} ${row.pulse && !reduceMotion ? 'animate-pulse' : ''}`}>
+                        {row.label}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             <div>
               <h3 className="text-[15px] font-bold text-[color:var(--foreground)] mb-2">Class times</h3>
               <ul className="rounded-xl border border-[color:var(--border)] overflow-hidden divide-y divide-[color:var(--border)]">
@@ -514,27 +548,6 @@ export default function ScheduleClient() {
                 ))}
               </ul>
             </div>
-
-            {openToday.length > 0 && (
-              <div>
-                <h3 className="text-[15px] font-bold text-[color:var(--foreground)] mb-2">Today</h3>
-                <div className="flex flex-wrap gap-2">
-                  {openToday.map(m => (
-                    <ScanAvailabilityBadge
-                      key={m.event.key}
-                      sess={m.sess}
-                      now={now}
-                      todayName={todayName}
-                      occupancy={occupancy}
-                      requests={requests}
-                      msId={m.event.msId}
-                      releasedToday={releasedToday(m.event.msId, m.sess)}
-                    />
-                  ))}
-                </div>
-                <p className="mt-2 text-[14px] text-[color:var(--foreground-muted)]">QR scanning opens 15 minutes before class starts.</p>
-              </div>
-            )}
 
             {openReleases.length > 0 && (
               <div className="flex flex-wrap gap-2">

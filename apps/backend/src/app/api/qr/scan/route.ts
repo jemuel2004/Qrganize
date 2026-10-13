@@ -36,7 +36,9 @@ import {
     Rejected       : scan_time > scheduled_end  (class already over)
 
   Room occupancy expiry always uses SCHEDULED end time (never scan time):
-    expires_at = today (Manila) + scheduled_end + INTERVAL '30 minutes'
+    expires_at = today (Manila) + scheduled_end + INTERVAL '30 minutes', but
+    the hold ends at scheduled_end itself (expireStaleOccupancy / holdEndSql):
+    no running over, the room is free the moment the class ends (2026-10-13)
 
   Using a room that isn't your class's own (services/borrowedRoom.ts — the
   user's rules, 2026-10-13): a room freed today (Free My Room, or no scan
@@ -52,9 +54,9 @@ import {
   left, and a faculty already holding another room (whose time hasn't ended)
   can't take a second one (2026-10-13).
 
-  Back-to-back classes: once a class has ended, its faculty's check-in (the
-  30-minute tail) gives way to a scan that gets the room — the next class
-  never waits for it.
+  Back-to-back classes: once a class has ended its hold ends too; a hold not
+  yet closed by the expiry job gives way to a scan that gets the room — the
+  next class never waits for it.
 
   Room Request (separate flow, today only — @shared/roomRequestWindow):
     Submit request for one class time today → from 15 min before the class the

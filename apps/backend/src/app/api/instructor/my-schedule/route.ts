@@ -2,6 +2,8 @@
 import { getAuthUser } from '@/auth/auth';
 import { query } from '@/database/db';
 import { getActiveAcademicPeriod } from '@/services/activeAcademicPeriod';
+import { expireStaleOccupancy } from '@/services/ensureRoomOccupancy';
+import { manilaCalendarDateString } from '@/services/appTimezone';
 
 /**
  * GET /api/instructor/my-schedule?semester=X&academic_year=Y
@@ -121,7 +123,8 @@ export async function GET(req: NextRequest) {
     }
     const roomIds = [...roomIdSet];
 
-    /* Current room occupancy */
+    /* Current room occupancy (a hold whose class has ended is closed first) */
+    await expireStaleOccupancy();
     const occupancyMap: Record<number, { status: string; is_self: boolean }> = {};
     if (roomIds.length > 0) {
       const occRes = await query(`
@@ -153,6 +156,24 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    /* Today's QR scans per class time ("<class id>|HH:MM" of its start) — the class details
+       say Scanned / Late scan instead of only that the scan time is over */
+    const scanMap: Record<string, { status: 'Valid' | 'Late'; at: string }> = {};
+    const scanRes = await query(`
+      SELECT master_schedule_id, to_char(scheduled_start, 'HH24:MI') AS start, status, to_char(scan_time, 'HH24:MI') AS at
+      FROM   qr_scan_logs
+      WHERE  faculty_id = $1
+        AND  scan_date  = $2::date
+        AND  status IN ('Valid', 'Late')
+        AND  master_schedule_id IS NOT NULL
+        AND  scheduled_start IS NOT NULL
+      ORDER  BY scan_time
+    `, [facultyId, manilaCalendarDateString()]);
+    for (const row of scanRes.rows) {
+      const key = `${row.master_schedule_id}|${row.start}`;
+      if (!(key in scanMap)) scanMap[key] = { status: row.status, at: row.at };
+    }
+
     /* Distinct academic years for period selector */
     const yearsRes = await query(`
       SELECT DISTINCT b.academic_year
@@ -169,6 +190,7 @@ export async function GET(req: NextRequest) {
       schedules,
       room_occupancy: occupancyMap,
       room_requests:  requestMap,
+      today_scans:    scanMap,
       academic_years: yearsRes.rows.map(r => r.academic_year),
     });
   } catch (error) {

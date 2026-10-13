@@ -12,6 +12,7 @@ import { ArrowRight, Bell, CalendarClock, CheckCheck, ChevronDown, ClipboardList
 import type { LucideIcon } from 'lucide-react';
 import { useNotifications, AppNotification, type NotificationRole } from '@/context/NotificationContext';
 import { useScrollLock } from '@/hooks/useScrollLock';
+import { useHeaderDrop } from '@/components/ui/headerDrop';
 import {
   NOTIFICATION_TABS,
   emptyFilterMessage,
@@ -202,6 +203,7 @@ export default function NotificationBell({ theme = 'light' }: NotificationBellPr
   const [ripple, setRipple] = useState(false);
   const [filter, setFilter] = useState<NotificationFilter>('all');
   const ref = useRef<HTMLDivElement>(null);
+  const drop = useHeaderDrop(ref, open);
 
   useEffect(() => {
     function handleMouse(e: MouseEvent) {
@@ -413,8 +415,10 @@ export default function NotificationBell({ theme = 'light' }: NotificationBellPr
             aria-label="Notifications panel"
             // The scroll lock lets this panel (and only it) scroll
             data-scroll-portal
-            className="qr-nav-menu fixed z-[60] left-3 right-3 top-14 max-h-[min(74vh,36rem)]
-              md:absolute md:left-auto md:right-0 md:top-12 md:w-[32rem] md:max-w-[calc(100vw-1.5rem)]
+            style={{ '--drop-fixed': `${drop.fixedTop}px`, '--drop-abs': `${drop.belowAnchor}px` } as React.CSSProperties}
+            // Just below the header bar, never over it (phones: fixed to the screen; larger: under the bell)
+            className="qr-nav-menu fixed z-[60] left-3 right-3 top-[var(--drop-fixed)] max-h-[min(74dvh,36rem)]
+              md:absolute md:left-auto md:right-0 md:top-[var(--drop-abs)] md:w-[32rem] md:max-w-[calc(100vw-1.5rem)]
               bg-white border border-[#E2E8F0] rounded-2xl overflow-hidden flex flex-col origin-top-right
               shadow-[0_20px_48px_-12px_rgba(11,42,91,0.28)]"
             variants={reduceMotion ? undefined : panelVariants}

@@ -32,8 +32,8 @@ QRganize has two apps, each with its own env file.
 
 ```env
 DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/qr_ganized
-JWT_SECRET=instructor_workload_secret_key_2025
-NEXTAUTH_SECRET=instructor_workload_secret_key_2025
+JWT_SECRET=change-me-to-a-long-random-string
+NEXTAUTH_SECRET=change-me-to-a-long-random-string
 GOOGLE_CLIENT_ID=your-google-client-id
 NEXT_PUBLIC_GOOGLE_CLIENT_ID=your-google-client-id
 TRUST_PROXY=true

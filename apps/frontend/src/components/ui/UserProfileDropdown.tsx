@@ -10,11 +10,12 @@ import {
 } from 'framer-motion';
 import {
   User, KeyRound, LogOut, ChevronDown, X,
-  ShieldCheck, UserCog,
+  ShieldCheck,
 } from 'lucide-react';
 import InstructorAvatar from '@/components/ui/InstructorAvatar';
 import { roleLabel as getRoleLabel } from '@/lib/roleAccess';
 import { releaseReminderDevice } from '@/lib/classReminders';
+import { useHeaderDrop } from '@/components/ui/headerDrop';
 import {
   dropdownVariants,
   NAV_DURATION,
@@ -90,8 +91,8 @@ function menuItems(role: string): MenuItem[] {
     );
   } else if (role === 'instructor') {
     base.push(
-      { icon: User,       label: 'My Profile',      href: '/instructor/profile' },
-      { icon: UserCog,    label: 'Edit Profile',     href: '/instructor/profile', divider: true },
+      // One way to the profile page (viewing and editing are the same page)
+      { icon: User,       label: 'My Profile',      href: '/instructor/profile', divider: true },
     );
   }
 
@@ -155,6 +156,7 @@ export default function UserProfileDropdown({ theme = 'light', compact = false }
   const [loggingOut, setLoggingOut] = useState(false);
   const [mounted,    setMounted]    = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const drop = useHeaderDrop(containerRef, open);
 
   useEffect(() => { setMounted(true); }, []);
 
@@ -313,8 +315,12 @@ export default function UserProfileDropdown({ theme = 'light', compact = false }
       <AnimatePresence>
         {open && (
           <motion.div
-            className="qr-nav-menu absolute right-0 top-[calc(100%+8px)] w-[17.5rem] max-w-[calc(100vw-1.5rem)] z-50
+            // Just below the header bar, never over it — phones: on the screen's right edge
+            // (like the notifications panel); larger screens: under the chip
+            className="qr-nav-menu fixed right-3 top-[var(--drop-fixed)] sm:absolute sm:right-0 sm:top-[var(--drop-abs)]
+              w-[18rem] max-w-[calc(100vw-1.5rem)] z-50
               bg-white border border-[#E5E7EB] rounded-2xl shadow-[0_12px_40px_rgba(15,23,42,0.16)] origin-top-right overflow-hidden"
+            style={{ '--drop-fixed': `${drop.fixedTop}px`, '--drop-abs': `${drop.belowAnchor}px` } as React.CSSProperties}
             role="menu"
             aria-label="User menu"
             variants={reduceMotion ? undefined : {
@@ -340,11 +346,11 @@ export default function UserProfileDropdown({ theme = 'light', compact = false }
               >
                 <Avatar user={user} size={64} ring={false} />
               </button>
-              <p className="text-[15px] font-bold text-[#0F172A] truncate">{displayName}</p>
+              <p className="text-[16px] font-bold text-[#0F172A] truncate">{displayName}</p>
               {user.email && (
-                <p className="text-[12px] text-[#64748B] truncate mt-0.5 px-2">{user.email}</p>
+                <p className="text-[13px] text-[#64748B] truncate mt-0.5 px-2">{user.email}</p>
               )}
-              <span className={`inline-flex items-center gap-1 mt-2.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide
+              <span className={`inline-flex items-center gap-1 mt-2.5 px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wide
                 ${user.role === 'admin'            ? 'bg-[#DBEAFE] text-[#164BB5]' :
                   user.role === 'department_chair' ? 'bg-[#E8EEF8] text-[#12408F]' :
                   user.role === 'program_chair'    ? 'bg-[#EDE9FE] text-[#7C3AED]' :
@@ -359,13 +365,12 @@ export default function UserProfileDropdown({ theme = 'light', compact = false }
                 const Icon = item.icon;
                 return (
                   <React.Fragment key={i}>
-                    {item.divider && <div className="my-1.5 mx-3 border-t border-[#F1F5F9]" />}
                     <button
                       type="button"
                       role="menuitem"
                       onClick={() => handleMenuClick(item)}
                       disabled={loggingOut && (item.action === 'logout' || item.action === 'logout-forget')}
-                      className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm font-medium
+                      className={`w-full flex items-center gap-3 px-4 py-3 text-[15px] font-medium
                         text-left transition-colors duration-150
                         ${item.danger
                           ? 'text-red-500 hover:bg-red-50'
@@ -373,9 +378,11 @@ export default function UserProfileDropdown({ theme = 'light', compact = false }
                         }
                         disabled:opacity-50 disabled:cursor-not-allowed`}
                     >
-                      <Icon className={`w-4 h-4 flex-shrink-0 ${item.danger ? 'text-red-400' : 'text-[#94A3B8]'}`} />
+                      <Icon className={`w-5 h-5 flex-shrink-0 ${item.danger ? 'text-red-400' : 'text-[#94A3B8]'}`} />
                       {item.danger && loggingOut ? 'Signing out…' : item.label}
                     </button>
+                    {/* A line after the group it ends (account pages · signing out) */}
+                    {item.divider && <div className="my-1.5 mx-3 border-t border-[#F1F5F9]" />}
                   </React.Fragment>
                 );
               })}
