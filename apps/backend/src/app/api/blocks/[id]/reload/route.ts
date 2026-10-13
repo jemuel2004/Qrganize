@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { isNstpSubject } from '@shared/nstp';
 import { query, transaction } from '@/database/db';
 import { parseId } from '@/database/ids';
 import { getAuthUser } from '@/auth/auth';
@@ -29,7 +30,7 @@ async function POST_handler(req: NextRequest, { params }: { params: Promise<{ id
     const version = blockCurriculumVersion(block.curriculum_version);
 
     const subjects = await query(
-      'SELECT id FROM curriculums WHERE program_id=$1 AND year_level=$2 AND semester=$3 AND curriculum_version=$4 AND is_active=true',
+      'SELECT id, subject_code FROM curriculums WHERE program_id=$1 AND year_level=$2 AND semester=$3 AND curriculum_version=$4 AND is_active=true',
       [block.program_id, block.year_level, block.semester, version]
     );
 
@@ -46,6 +47,8 @@ async function POST_handler(req: NextRequest, { params }: { params: Promise<{ id
         );
         if (bs.rows.length === 0) return false;
 
+        // NSTP: on the Class Program only — no class row (Settings → Day Combinations → NSTP)
+        if (isNstpSubject(subject.subject_code)) return true;
         await client.query(
           'INSERT INTO master_schedule (block_subject_id, status, academic_year, semester) VALUES ($1,\'Unassigned\',$2,$3)',
           [bs.rows[0].id, block.academic_year, block.semester]

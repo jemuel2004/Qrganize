@@ -353,7 +353,7 @@ export async function getAuthVersion(accountKind: AccountKind, accountId: number
 type LiveSession = {
   live: boolean;
   reason?: 'missing' | 'inactive' | 'version' | 'revoked';
-  /** Signed in on a default / common password — only the password change is allowed (auth/passwordChange.ts) */
+  /** Faculty signed in on a default / common password — only the password change is allowed (auth/passwordChange.ts) */
   mustChangePassword?: boolean;
 };
 
@@ -389,16 +389,17 @@ export async function evaluateSession(payload: Record<string, unknown>): Promise
       return { live: true, mustChangePassword: row.must_change_password === true };
     }
 
+    // Administrator / Chair accounts are never asked to change their password
     const result = await query(
-      `SELECT auth_version, is_active, must_change_password, ${REVOKED_SQL} FROM users WHERE id = $1`,
+      `SELECT auth_version, is_active, ${REVOKED_SQL} FROM users WHERE id = $1`,
       [accountId, jti]
     );
-    const row = result.rows[0] as { auth_version?: number; is_active?: boolean; revoked?: boolean; must_change_password?: boolean } | undefined;
+    const row = result.rows[0] as { auth_version?: number; is_active?: boolean; revoked?: boolean } | undefined;
     if (!row) return { live: false, reason: 'missing' };
     if (row.is_active === false) return { live: false, reason: 'inactive' };
     if (Number(row.auth_version ?? 1) !== jwtAv) return { live: false, reason: 'version' };
     if (row.revoked) return { live: false, reason: 'revoked' };
-    return { live: true, mustChangePassword: row.must_change_password === true };
+    return { live: true };
   } catch (err) {
     if ((err as { code?: string }).code === '42703') return { live: true };
     throw err;

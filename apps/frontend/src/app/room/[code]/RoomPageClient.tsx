@@ -17,6 +17,15 @@ import { presentScanResult, type ScanResult } from '@/lib/scanResult';
 interface RoomClass {
   ms_id: number; subject_code: string; subject_name: string; block: string;
   faculty_name: string | null; start_time: string; end_time: string; is_mine: boolean;
+  /** Its faculty made this room available for today — the class isn't meeting here */
+  released?: boolean;
+  /** Not checked in within 15 minutes of the start — anyone may use the room until the class ends */
+  unclaimed?: boolean;
+}
+/** A faculty member's room request for this room today (one class time) */
+interface RoomReservation {
+  faculty_name: string | null; subject_code: string | null; block: string;
+  start_time: string; end_time: string; status: string; is_mine: boolean;
 }
 interface RoomInfo {
   room: { id: number; room_name: string; room_type: string; building: string | null; capacity: number | null; qr_code_id: string };
@@ -24,6 +33,7 @@ interface RoomInfo {
     | { state: 'Available' }
     | { state: 'Occupied' | 'Pending'; faculty_name: string | null; is_mine: boolean; since: string | null; until: string | null };
   today: RoomClass[];
+  reservations?: RoomReservation[];
   now: string;
   day: string;
   viewer: { role: string; faculty_id: number | null };
@@ -123,10 +133,21 @@ export default function RoomPageClient({ code, role }: { code: string | null; ro
   }
 
   const nowMin = info ? toMin(info.now) : 0;
-  const current = info?.today.find(c => toMin(c.start_time) <= nowMin && nowMin < toMin(c.end_time)) ?? null;
-  const next = info?.today.find(c => toMin(c.start_time) > nowMin) ?? null;
+  // A class nobody checked in for is free to others (its own faculty may still check in late)
+  const freedFor = (c: RoomClass) => c.released || (c.unclaimed && !c.is_mine);
+  const current = info?.today.find(c => !freedFor(c) && toMin(c.start_time) <= nowMin && nowMin < toMin(c.end_time)) ?? null;
+  const next = info?.today.find(c => !c.released && toMin(c.start_time) > nowMin) ?? null;
+  // A class time whose faculty made the room available, or nobody checked in for: free for others until it ends
+  const freedNow = current ? null : info?.today.find(c => freedFor(c) && toMin(c.start_time) <= nowMin && nowMin < toMin(c.end_time)) ?? null;
   const isFaculty = role === 'instructor';
   const checkedInHere = info?.status.state === 'Occupied' && info.status.is_mine;
+  // Today in time order: the room's classes and the class times faculty reserved it for
+  const dayRows = info
+    ? [
+      ...info.today.map(c => ({ kind: 'class' as const, start: c.start_time, c })),
+      ...(info.reservations ?? []).map(r => ({ kind: 'reserved' as const, start: r.start_time, r })),
+    ].sort((a, b) => toMin(a.start) - toMin(b.start))
+    : [];
   const presented = result ? presentScanResult(result) : null;
 
   return (
@@ -197,9 +218,20 @@ export default function RoomPageClient({ code, role }: { code: string | null; ro
             </section>
 
             {/* ── Now / next ── */}
-            {(current || next) && (
+            {(current || freedNow || next) && (
               <section className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {current && <ClassCard label="Now" klass={current} highlight />}
+                {freedNow && (
+                  <div className="rounded-2xl border border-[#A7F3D0] bg-white p-4 shadow-sm">
+                    <p className="text-[13px] font-bold uppercase tracking-[0.08em] text-[#047857]">Now</p>
+                    <p className="mt-1 text-[17px] font-bold text-[#047857]">Free until {clock(freedNow.end_time)}</p>
+                    <p className="text-sm text-[#334155] break-words">
+                      {freedNow.released
+                        ? `${freedNow.faculty_name || 'Its faculty'} made this room available today (${freedNow.subject_code}).`
+                        : `${freedNow.subject_code} was not scanned, so anyone may use this room.`}
+                    </p>
+                  </div>
+                )}
                 {next && <ClassCard label="Next" klass={next} />}
               </section>
             )}
@@ -268,11 +300,30 @@ export default function RoomPageClient({ code, role }: { code: string | null; ro
               <h2 className="px-5 py-3 border-b border-[#EEF2F7] bg-[#F6F9FE] text-[13px] font-bold uppercase tracking-[0.08em] text-[#0B2A5B]">
                 Today · {info.day}
               </h2>
-              {info.today.length === 0 ? (
+              {dayRows.length === 0 ? (
                 <p className="px-5 py-8 text-center text-[15px] text-[#64748B]">No classes in this room today.</p>
               ) : (
                 <ul className="divide-y divide-[#EEF2F7]">
-                  {info.today.map(c => {
+                  {dayRows.map(row => {
+                    if (row.kind === 'reserved') {
+                      const r = row.r;
+                      return (
+                        <li key={`r-${r.start_time}-${r.subject_code}`} className={`flex items-start gap-3 px-5 py-3.5 bg-[#FFFBEB] ${toMin(r.end_time) <= nowMin ? 'opacity-60' : ''}`}>
+                          <span className="w-[92px] flex-shrink-0 text-sm font-semibold tabular-nums text-[#92400E]">
+                            {clock(r.start_time)}<span className="block text-xs font-medium text-[#B45309]">to {clock(r.end_time)}</span>
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="flex flex-wrap items-center gap-2">
+                              {r.subject_code && <span className="text-[15px] font-bold text-[#0B2A5B]">{r.subject_code}</span>}
+                              {r.block && <span className="rounded-md bg-[#1E4FB8] px-2 py-0.5 text-[12px] font-bold" style={WHITE}>{r.block}</span>}
+                              <span className="rounded-full border border-[#FDE68A] bg-white px-2 py-0.5 text-[11px] font-bold text-[#B45309]">Reserved today</span>
+                            </span>
+                            <span className="block text-sm text-[#64748B]">{r.is_mine ? 'Your reservation' : r.faculty_name || 'Another faculty'}</span>
+                          </span>
+                        </li>
+                      );
+                    }
+                    const c = row.c;
                     const now = c === current;
                     const done = toMin(c.end_time) <= nowMin;
                     return (
@@ -286,6 +337,8 @@ export default function RoomPageClient({ code, role }: { code: string | null; ro
                             {c.block && <span className="rounded-md bg-[#1E4FB8] px-2 py-0.5 text-[12px] font-bold" style={WHITE}>{c.block}</span>}
                             {now && <span className="rounded-full bg-[#1D5BD6] px-2 py-0.5 text-[11px] font-bold" style={WHITE}>Now</span>}
                             {c.is_mine && <span className="rounded-full border border-[#A7F3D0] bg-[#ECFDF5] px-2 py-0.5 text-[11px] font-bold text-[#047857]">Your class</span>}
+                            {c.released && <span className="rounded-full border border-[#A7F3D0] bg-[#ECFDF5] px-2 py-0.5 text-[11px] font-bold text-[#047857]">Room available today</span>}
+                            {!c.released && c.unclaimed && !c.is_mine && <span className="rounded-full border border-[#A7F3D0] bg-[#ECFDF5] px-2 py-0.5 text-[11px] font-bold text-[#047857]">Free now</span>}
                           </span>
                           <span className="block text-sm text-[#334155] break-words">{c.subject_name}</span>
                           <span className="block text-sm text-[#64748B]">{c.faculty_name || 'No faculty yet'}</span>
@@ -323,7 +376,7 @@ function StatusPanel({ info }: { info: RoomInfo }) {
       <span className={`mt-1.5 h-3 w-3 flex-shrink-0 rounded-full ${occupied ? 'bg-[#1D5BD6]' : 'bg-[#F59E0B]'}`} />
       <span className="min-w-0">
         <span className={`block text-[17px] font-bold ${occupied ? 'text-[#0B2A5B]' : 'text-[#B45309]'}`}>
-          {occupied ? 'In use' : 'Reserved — waiting for check-in'}
+          {occupied ? 'In use' : 'Reserved — waiting for scan'}
         </span>
         <span className="block text-sm text-[#334155]">
           {s.is_mine ? 'By you' : s.faculty_name ? `By ${s.faculty_name}` : ''}

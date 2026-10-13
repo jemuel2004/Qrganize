@@ -1,4 +1,6 @@
 ﻿import { NextRequest, NextResponse } from 'next/server';
+import { parseId } from '@/database/ids';
+import { readJsonObject } from '@/services/requestInput';
 import { transaction } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { syncWorkloadMonitoringNotifications } from '@/services/workloadMonitoring';
@@ -10,7 +12,12 @@ async function POST_handler(req: NextRequest) {
     const auth = await getAuthUser(req) as { role?: string } | null;
     if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const { faculty_id, master_schedule_id } = await req.json();
+    const body = await readJsonObject(req);
+    const faculty_id = parseId(body?.faculty_id);
+    const master_schedule_id = parseId(body?.master_schedule_id);
+    if (!faculty_id || !master_schedule_id) {
+      return NextResponse.json({ error: 'Faculty and master schedule are required' }, { status: 400 });
+    }
 
     if (!(await canAccessMasterSchedule(auth, master_schedule_id))) {
       return NextResponse.json({ error: 'Schedule not found' }, { status: 404 });

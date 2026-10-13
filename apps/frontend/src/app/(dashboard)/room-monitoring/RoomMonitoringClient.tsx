@@ -4,8 +4,9 @@
  * Room Monitoring — "What is happening in every room right now?"
  *
  * A live board, one card per room: who is in it now (QR check-in), how much of
- * the class is left, the next class today, and rooms whose class started with
- * no check-in. Clicking a room opens its schedule: the class in it now and
+ * the class is left and the next class today. A class not checked in within 15
+ * minutes of its start frees its room for anyone until it ends, so that room
+ * shows as available. Clicking a room opens its schedule: the class in it now and
  * every class it holds, grouped by day combination (instructor, subject, block,
  * time). Refreshes quietly every 30 s. Built on /api/rooms/utilization (today,
  * daily; one room, upcoming) — the same data behind Room Utilization, which
@@ -14,7 +15,7 @@
 
 import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { AnimatePresence, motion, useDragControls, useReducedMotion } from 'framer-motion';
-import { BookOpen, ChevronRight, Clock, DoorOpen, Hourglass, Loader2, Monitor, Printer, User, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { BookOpen, ChevronRight, Clock, DoorOpen, Hourglass, Loader2, Monitor, Printer, User, CheckCircle2 } from 'lucide-react';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import Modal from '@/components/ui/Modal';
@@ -29,13 +30,14 @@ import { dayTone } from '@/lib/dayTones';
 import { useToast } from '@/context/ToastContext';
 import { printRoomSchedule, type RoomClass } from './roomSchedulePrint';
 import { WEEK_DAYS, daysKey, daysLabel, parseDays, sortDays, type WeekDay } from '@shared/dayCombination';
+import { SCAN_WITHIN_MIN, shiftTime } from '@shared/roomRequestWindow';
 import {
   fmt12, RefreshButton, RoomIcon, useUtilization,
   type UtilRoom, type UtilRow,
 } from '../room-utilization/shared';
 
 /** Live state of a room at this moment */
-type LiveStatus = 'In use' | 'Waiting' | 'No check-in' | 'Free';
+type LiveStatus = 'In use' | 'Waiting' | 'Free';
 
 /* Room identity follows the system-wide room-type colours (Room Management,
    Scheduling): Lecture = blue + book, Laboratory = amber + monitor. */
@@ -46,12 +48,11 @@ const TYPE_TONE = {
 const isLabRoom = (type: string | null | undefined) => type === 'Laboratory' || type === 'Computer Lab';
 
 /* Live status shows in the "Now" panel: busy rooms in solid navy, Waiting in
-   slate, red only for No check-in. Free rooms use their room-type tint. */
+   slate. Free rooms use their room-type tint. */
 const LIVE_TONE: Record<LiveStatus, { bar: string; soft: string; text: string; label: string; dark?: boolean }> = {
-  'In use':      { bar: '#0B2A5B', soft: 'linear-gradient(135deg, #0B2A5B 0%, #1E4FB8 100%)', text: '#FFFFFF', label: 'In use', dark: true },
-  Waiting:       { bar: '#64748B', soft: '#EEF2F7', text: '#334155', label: 'Waiting for check-in' },
-  'No check-in': { bar: '#DC2626', soft: '#FEF2F2', text: '#B91C1C', label: 'No check-in' },
-  Free:          { bar: '#9DB8E8', soft: '#F2F6FD', text: '#1D5BD6', label: 'Available' },
+  'In use': { bar: '#0B2A5B', soft: 'linear-gradient(135deg, #0B2A5B 0%, #1E4FB8 100%)', text: '#FFFFFF', label: 'In use', dark: true },
+  Waiting:  { bar: '#64748B', soft: '#EEF2F7', text: '#334155', label: 'Waiting for scan' },
+  Free:     { bar: '#9DB8E8', soft: '#F2F6FD', text: '#1D5BD6', label: 'Available' },
 };
 
 const toMin = (hm: string | null) => {
@@ -63,7 +64,11 @@ const toMin = (hm: string | null) => {
 interface RoomNow {
   room: UtilRoom;
   status: LiveStatus;
+  /** The class meeting in the room now */
   current: UtilRow | null;
+  /** The class time now doesn't hold the room — released by its faculty, or not checked in
+   *  within 15 minutes — so the room is free to anyone (or used by someone who walked in) */
+  freed: UtilRow | null;
   next: UtilRow | null;
   progress: number;      // 0..1 of the current class elapsed
   minutesLeft: number;
@@ -73,18 +78,19 @@ function roomNow(room: UtilRoom, rows: UtilRow[], nowMin: number): RoomNow {
   const mine = rows
     .filter(r => r.room_id === room.id && r.start)
     .sort((a, b) => toMin(a.start) - toMin(b.start));
-  const current = mine.find(r => toMin(r.start) <= nowMin && nowMin < toMin(r.end)) ?? null;
+  const inClass = mine.find(r => toMin(r.start) <= nowMin && nowMin < toMin(r.end)) ?? null;
   const next = mine.find(r => toMin(r.start) > nowMin) ?? null;
+  const freed = inClass && (inClass.free_now || inClass.status === 'Not Checked') ? inClass : null;
+  const current = freed ? null : inClass;
 
   let status: LiveStatus = 'Free';
   if (room.live_status === 'Occupied' || current?.status === 'Occupied') status = 'In use';
   else if (room.live_status === 'Pending' || current?.status === 'Pending') status = 'Waiting';
-  else if (current?.status === 'Not Checked') status = 'No check-in';
 
   const s = toMin(current?.start ?? null);
   const e = toMin(current?.end ?? null);
   const progress = current && e > s ? Math.min(1, Math.max(0, (nowMin - s) / (e - s))) : 0;
-  return { room, status, current, next, progress, minutesLeft: current ? Math.max(0, e - nowMin) : 0 };
+  return { room, status, current, freed, next, progress, minutesLeft: current ? Math.max(0, e - nowMin) : 0 };
 }
 
 /** "Lab-1" → "Laboratory-1", "Lec 2" → "Lecture 2"; other names unchanged. */
@@ -173,23 +179,30 @@ function NowPanel({ info }: { info: RoomNow }) {
               />
             </div>
             <div className="mt-1 text-xs font-semibold" style={{ color: tone.dark ? ink.body : tone.text }}>
-              {info.status === 'No check-in'
-                ? 'Class started — instructor has not scanned the room QR'
-                : info.status === 'Waiting'
-                  ? 'Class started — waiting for the instructor to scan'
-                  : fmtLeft(info.minutesLeft)}
+              {info.status === 'Waiting' && cls.start
+                // No scan by then and the room is free to anyone until the class ends
+                ? `Waiting for the instructor to scan — free to all at ${fmt12(shiftTime(cls.start, SCAN_WITHIN_MIN))}`
+                : fmtLeft(info.minutesLeft)}
             </div>
           </div>
         </>
       ) : info.status === 'In use' ? (
         <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: tone.text }}>
           <CheckCircle2 className="w-4 h-4" />
-          In use{room.live_faculty ? ` by ${room.live_faculty}` : ''} (no class scheduled now)
+          {/* Walked in during a freed class time: theirs until that class time ends */}
+          In use{room.live_faculty ? ` by ${room.live_faculty}` : ''}{info.freed ? ` until ${fmt12(info.freed.end)}` : ' (no class scheduled now)'}
         </div>
       ) : (
-        <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: tone.text }}>
-          <DoorOpen className="w-4 h-4" /> Free right now
-        </div>
+        <>
+          <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: tone.text }}>
+            <DoorOpen className="w-4 h-4" /> Free right now
+          </div>
+          {info.freed && (
+            <div className="mt-1 text-xs font-semibold text-[#475569]">
+              {info.freed.subject_code} {info.freed.free_now === 'released' ? 'freed by its faculty' : 'not scanned'} — free until {fmt12(info.freed.end)}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -220,9 +233,7 @@ function RoomCard({ info, index, onOpen }: { info: RoomNow; index: number; onOpe
       whileHover={reduceMotion ? undefined : { y: -3, transition: { duration: 0.2, ease: EASE_OUT } }}
       whileTap={reduceMotion ? undefined : { scale: 0.985, transition: { duration: 0.12 } }}
       className={`group relative rounded-2xl border bg-white overflow-hidden cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[#1D5BD6]/40 shadow-[0_1px_2px_rgba(15,23,42,0.05)] hover:shadow-[0_14px_28px_-16px_rgba(11,42,91,0.45)] transition-shadow ${
-        info.status === 'No check-in' ? 'qr-flag-pulse border-red-300'
-          : info.status === 'In use' ? 'border-[#9DB8E8]'
-          : 'border-[#E2E8F0] hover:border-[#BFD3F5]'
+        info.status === 'In use' ? 'border-[#9DB8E8]' : 'border-[#E2E8F0] hover:border-[#BFD3F5]'
       }`}
     >
       <div className="h-1.5" style={{ backgroundColor: type.bar }} />
@@ -577,8 +588,7 @@ function RoomScheduleModal({ info, onClose }: { info: RoomNow; onClose: () => vo
 
 /* ─── Page ──────────────────────────────────────────────────────────────── */
 
-/** No separate No check-in filter — those rooms show first under All, with a written warning above. */
-type Filter = 'all' | Exclude<LiveStatus, 'No check-in'>;
+type Filter = 'all' | LiveStatus;
 
 export default function RoomMonitoringClient() {
   const { data, error, reload } = useUtilization('', 'daily', undefined, 30_000);
@@ -623,14 +633,13 @@ export default function RoomMonitoringClient() {
       .some(v => (v ?? '').toLowerCase().includes(q));
   });
   const count = (s: LiveStatus) => searched.filter(r => r.status === s).length;
-  // Problems first, then in use, then free; by name within each
-  const ORDER: Record<LiveStatus, number> = { 'No check-in': 0, Waiting: 1, 'In use': 2, Free: 3 };
+  // Waiting first, then in use, then free; by name within each
+  const ORDER: Record<LiveStatus, number> = { Waiting: 0, 'In use': 1, Free: 2 };
   const shown = searched
     .filter(r => filter === 'all' || r.status === filter)
     .sort((a, b) => ORDER[a.status] - ORDER[b.status]
       || a.room.room_name.localeCompare(b.room.room_name, undefined, { numeric: true }));
 
-  const noCheckIn = count('No check-in');
 
   return (
     <div className="p-4 sm:p-6 max-w-7xl mx-auto w-full min-w-0">
@@ -669,28 +678,6 @@ export default function RoomMonitoringClient() {
           <SearchInput value={search} onChange={setSearch} placeholder="Search room, subject, faculty…" />
         </div>
       </div>
-
-      {/* Written warning, not only colour */}
-      <AnimatePresence initial={false}>
-        {!showSkeleton && noCheckIn > 0 && (
-          <motion.div
-            role="alert"
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-            className="overflow-hidden"
-          >
-            <div className="mb-5 flex items-start gap-3 rounded-xl border-2 border-red-300 border-l-[6px] border-l-red-600 bg-red-50 px-4 py-3">
-              <AlertTriangle className="w-5 h-5 flex-shrink-0 text-red-600 mt-0.5" />
-              <p className="text-sm text-red-800">
-                <strong>{noCheckIn} room{noCheckIn !== 1 ? 's have' : ' has'} a class in progress with no check-in.</strong>{' '}
-                The instructor has not scanned the room QR code — they may be absent or in a different room.
-              </p>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* Counts come from the same data — placeholder until it arrives, not 0 */}
       {showSkeleton ? (

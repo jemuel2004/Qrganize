@@ -7,9 +7,10 @@ import { useSchoolYear } from '@/context/SchoolYearContext';
 import { useRealtime } from '@/context/RealtimeContext';
 import { fetchDayCombinations, useDayCombinations } from '@/lib/dayCombinations';
 import { blockCurriculumVersion, curriculumVersionLabel } from '@shared/curriculumVersion';
+import { clockRange12 } from '@shared/clock12';
 import {
-  DEFAULT_COORDINATORS, EMPTY_SIGNATORY, downloadClassProgramExcel, expandToDisplayRows, fetchClassProgram, fmt12, fmtNum,
-  formatCourseLabel, formatTimeRange, groupByDay, isAM, programKey,
+  DEFAULT_COORDINATORS, EMPTY_SIGNATORY, downloadClassProgramExcel, expandToDisplayRows, fetchClassProgram, fmtNum,
+  formatCourseLabel, formatTimeRange, groupByDay, isAM, pendingStatus, programKey,
   type BlockDetail, type DayGroup, type DisplayRow, type RawSchedule, type Signatory,
 } from './classProgramReport';
 import BackButton from '@/components/ui/BackButton';
@@ -30,6 +31,7 @@ import {
   semesterHeading,
 } from '@/lib/nemsuOfficialPrintChrome';
 import { useLivePrograms } from '@/hooks/useLivePrograms';
+import { runExport } from '@/components/ui/ExportProgress';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -469,18 +471,20 @@ export default function ClassProgramPage() {
     let block = blockDetail;
     let rows = schedules;
     const query = docQuery.current;
-    try {
-      const fresh = await fetchClassProgram({ blockId: selectedBlockId, programId: filterProgram, yearLevel: filterYearLevel, semester: globalSemester });
-      block = fresh.block;
-      rows = fresh.schedules;
-      if (docQuery.current === query) { setBlockDetail(fresh.block); setSchedules(fresh.schedules); }
-    } catch { /* offline: what is on screen */ }
-    const combos = (await fetchDayCombinations(globalSemester, globalYear, { fresh: true })).combinations.filter(c => c.is_active);
-    await downloadClassProgramExcel({
-      block,
-      schedules: rows,
-      combos: combos.length > 0 ? combos : dayCombos,
-      settings: { campusName, campusAddress, campusTel, campusWebsite, preparedBy, recommendedBy, notedBy, approvedBy },
+    await runExport({ kind: 'excel', detail: formatCourseLabel(blockDetail) }, async () => {
+      try {
+        const fresh = await fetchClassProgram({ blockId: selectedBlockId, programId: filterProgram, yearLevel: filterYearLevel, semester: globalSemester });
+        block = fresh.block;
+        rows = fresh.schedules;
+        if (docQuery.current === query) { setBlockDetail(fresh.block); setSchedules(fresh.schedules); }
+      } catch { /* offline: what is on screen */ }
+      const combos = (await fetchDayCombinations(globalSemester, globalYear, { fresh: true })).combinations.filter(c => c.is_active);
+      await downloadClassProgramExcel({
+        block,
+        schedules: rows,
+        combos: combos.length > 0 ? combos : dayCombos,
+        settings: { campusName, campusAddress, campusTel, campusWebsite, preparedBy, recommendedBy, notedBy, approvedBy },
+      });
     });
   }
 
@@ -869,7 +873,7 @@ export default function ClassProgramPage() {
                       <td className="t-inst">
                         {row.faculty_name ?? <span className="no-room">Not assigned</span>}
                       </td>
-                      <td className="t-status">{row.faculty_name ? 'Assigned' : 'Unscheduled'}</td>
+                      <td className="t-status">{pendingStatus(row)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -958,7 +962,7 @@ export default function ClassProgramPage() {
 function ClassRow({ row, course }: { row: DisplayRow; course: string }) {
   return (
     <tr>
-      <td className="t-time">{formatTimeRange(row.start_time, row.end_time)}</td>
+      <td className="t-time"><TimeCell label={formatTimeRange(row.start_time, row.end_time)} /></td>
       <td className="t-code">{row.subject_code}</td>
       <td className="t-desc" style={{ textAlign: 'left' }}>{row.subject_name}</td>
       <td className="t-course">{course}</td>
@@ -966,7 +970,8 @@ function ClassRow({ row, course }: { row: DisplayRow; course: string }) {
       <td className="t-hours">{fmtNum(row.row_hours)}</td>
       <td className="t-inst">{row.faculty_name ?? ''}</td>
       <td className="t-room">
-        {row.room_name ? row.room_name : <span className="no-room">No room assigned</span>}
+        {/* NSTP needs no room (Settings → Day Combinations → NSTP) */}
+        {row.nstp ? '—' : row.room_name ? row.room_name : <span className="no-room">No room assigned</span>}
       </td>
     </tr>
   );
@@ -974,14 +979,17 @@ function ClassRow({ row, course }: { row: DisplayRow; course: string }) {
 
 // ─── Phone / tablet cards ─────────────────────────────────────────────────────
 
-/** "07:00", "08:30" → "7:00 – 8:30 AM"; "11:30", "13:00" → "11:30 AM – 1:00 PM" */
+/** "07:00", "08:30" → "7:00 AM – 8:30 AM" */
 function cardTime(start: string | null, end: string | null): string {
   if (!start) return 'No time yet';
-  const mer = (t: string) => (isAM(t) ? 'AM' : 'PM');
-  if (!end) return `${fmt12(start)} ${mer(start)}`;
-  return mer(start) === mer(end)
-    ? `${fmt12(start)} – ${fmt12(end)} ${mer(end)}`
-    : `${fmt12(start)} ${mer(start)} – ${fmt12(end)} ${mer(end)}`;
+  return clockRange12(start, end);
+}
+
+/** TIME/DAY cell: wraps only after the dash, so "AM" / "PM" never breaks away from its time (as on the workload form) */
+function TimeCell({ label }: { label: string }) {
+  const m = label.match(/^(.+?–)(.+)$/);
+  if (!m) return <span className="t-time-a">{label}</span>;
+  return <><span className="t-time-a">{m[1]}</span><wbr /><span className="t-time-b">{m[2]}</span></>;
 }
 
 /** Units · Hours · Room — the small boxes at the bottom of a card */

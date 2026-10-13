@@ -112,6 +112,32 @@ export function computeRegularLoadStatus(currentLoad: number, limit: number, per
   return 'Has remaining load';
 }
 
+/**
+ * Regular Load never goes past its limit. A Permanent subject that doesn't fit
+ * is split: Regular is filled up to the published cap (18 − deloading) and the
+ * rest goes to Overload — the Laboratory first, then the Lecture. E.g. 3 units
+ * of room and a Lecture 2 + Laboratory 2.25 subject: Lecture 2 + Laboratory 1
+ * stay Regular, Laboratory 1.25 goes to Overload. Work units throughout.
+ * Returns null when the whole subject fits in the Regular Load.
+ */
+export function regularOverflowSplit(opts: {
+  /** Regular units already assigned */
+  currentRegular: number;
+  /** The exact Regular cap (published + grace − deloading) */
+  limit: number;
+  /** The subject's Lecture, in work units */
+  lecValue: number;
+  /** The subject's Laboratory, in work units (hours × 0.75) */
+  labValue: number;
+}): { regular: number; lec: number; lab: number; moved: number } | null {
+  const value = round2(opts.lecValue + opts.labValue);
+  if (value <= round2(opts.limit - opts.currentRegular) + 0.001) return null;
+  const regular = Math.min(value, Math.max(0, round2(shownUnitsCap(opts.limit) - opts.currentRegular)));
+  const moved = round2(value - regular);
+  const lab = round2(Math.min(Math.max(0, opts.labValue), moved));
+  return { regular, lec: round2(moved - lab), lab, moved };
+}
+
 /** Only Permanent faculty may carry Overload or Praise Load; Contractual faculty carry Regular Load only. */
 export function canHaveOverloadOrPraise(employmentStatus: unknown): boolean {
   return employmentStatus === 'Permanent';

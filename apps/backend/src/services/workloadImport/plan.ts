@@ -1,5 +1,6 @@
 import type { WeekDay } from '@shared/dayCombination';
 import { subjectTitleSimilarity } from '@shared/subjectCode';
+import { isNstpSubject } from '@shared/nstp';
 import {
   classifySheet, classifyStatus, codeKey, editDistance, nameWord, parseCourse, parsePersonName,
   roomKey, samePerson, titleCaseName, yearLevelLabel,
@@ -350,6 +351,14 @@ export function buildImportPlan(allSheets: WorkloadSheet[], catalog: ImportCatal
       for (const row of ps.sheet.rows) {
         if (row.kind !== 'class') continue;
         const what = `${row.code || '(no code)'} ${row.course || '(no course)'}`;
+        // NSTP is on the Class Program only (Settings → Day Combinations → NSTP): no workload,
+        // and it takes no part in the room / conflict checks either
+        if (isNstpSubject(row.code)) {
+          issue({ level: 'skipped', topic: 'Subject', faculty: person.label, source: srcOf(row),
+            message: `${person.label}: ${what} — NSTP is set in Settings → Day Combinations (Class Program only), not on a faculty workload; not imported.` },
+            `nstp|${person.key}|${codeKey(row.code)}`);
+          continue;
+        }
         if (!scoped || !ps.role) {
           addExternal(row, `${person.label}: ${what}${scoped ? '' : ' (not imported)'}`, scoped ? person.key : undefined);
           continue;

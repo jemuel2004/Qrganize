@@ -4,7 +4,11 @@
  */
 
 import { daysKey, parseDays, type WeekDay } from '@shared/dayCombination';
-import { DEFAULT_FOOTER_CONFIG, NEMSU_OFFICIAL_DEPT, formatAy, semesterHeading } from '@/lib/nemsuOfficialPrintChrome';
+import { clock12, clockRange12 } from '@shared/clock12';
+import {
+  DEFAULT_FOOTER_CONFIG, NEMSU_OFFICIAL_DEPT, escapePrintHtml as esc, footerHtml, formatAy, officialPrintDocumentCss,
+  officialPrintHeaderHtml, officialPrintPagedHtml, semesterHeading,
+} from '@/lib/nemsuOfficialPrintChrome';
 
 export interface SessionData { day: string; start_time: string; end_time: string; session_hours: number; }
 export interface RawSchedule {
@@ -22,6 +26,8 @@ export interface RawSchedule {
   faculty_name: string | null;
   room_name: string | null;
   sessions: SessionData[] | null;
+  /** NSTP: every Saturday from Settings → Day Combinations → NSTP — typed handler, no room needed */
+  nstp?: boolean;
 }
 export interface BlockDetail {
   id: number; block_name: string; year_level: string; semester: string;
@@ -36,6 +42,8 @@ export interface DisplayRow {
   faculty_name: string | null; room_name: string | null;
   start_time: string | null; end_time: string | null;
   day_pattern: string;
+  /** NSTP (Settings → Day Combinations → NSTP): no room needed */
+  nstp: boolean;
 }
 export interface DayGroup { pattern: string; label: string; order: number; rows: DisplayRow[]; }
 export interface Signatory { name: string; designation: string; }
@@ -92,19 +100,15 @@ export function isAM(t: string | null): boolean {
   return parseInt(t.split(':')[0], 10) < 12;
 }
 
+/** "13:30" → "1:30 PM" */
 export function fmt12(t: string): string {
-  const [hStr, mStr] = t.split(':');
-  let h = parseInt(hStr, 10);
-  const m = parseInt(mStr, 10);
-  if (h > 12) h -= 12;
-  if (h === 0) h = 12;
-  return m === 0 ? `${h}:00` : `${h}:${m.toString().padStart(2, '0')}`;
+  return clock12(t);
 }
 
+/** "07:00", "08:30" → "7:00 AM–8:30 AM" — the printed form's TIME/DAY cell (as on the workload form) */
 export function formatTimeRange(start: string | null, end: string | null): string {
   if (!start) return '';
-  if (!end) return fmt12(start);
-  return `${fmt12(start)}-${fmt12(end)}`;
+  return clockRange12(start, end, '–');
 }
 
 /**
@@ -122,6 +126,7 @@ export function expandToDisplayRows(schedules: RawSchedule[]): DisplayRow[] {
       subject_name: s.subject_name,
       faculty_name: s.faculty_name,
       room_name:    s.room_name,
+      nstp:         s.nstp === true,
     };
     const units = parseFloat(String(s.units)) || 0;
     const sessions = (s.sessions ?? []).filter(x => x.day && x.start_time);
@@ -203,6 +208,17 @@ export function fmtNum(n: number): string {
   return n.toFixed(n % 1 === 0 ? 0 : 1);
 }
 
+/** Room No. cell: NSTP needs no room (a dash), other classes show theirs */
+export function roomLabel(r: Pick<DisplayRow, 'room_name' | 'nstp'>): string {
+  return r.nstp ? '—' : (r.room_name || 'No room assigned');
+}
+
+/** Status of a row still under Pending / Unscheduled */
+export function pendingStatus(r: Pick<DisplayRow, 'faculty_name' | 'nstp'>): string {
+  if (r.nstp) return 'Set time in Settings';
+  return r.faculty_name ? 'Assigned' : 'Unscheduled';
+}
+
 /** Course label for print rows — same convention as Faculty Workload Course column. */
 export function formatCourseLabel(block: BlockDetail): string {
   const yearNum = (String(block.year_level).match(/\d+/) ?? [''])[0] || block.year_level;
@@ -277,7 +293,7 @@ export async function downloadClassProgramExcel(opts: {
     units: r.is_continuation ? '' as const : r.row_units,
     hours: r.row_hours,
     instructor: r.faculty_name || '',
-    room: r.room_name || 'No room assigned',
+    room: roomLabel(r),
   });
   // Seal for the header and the footer marks — the file still downloads without them
   const png = (path: string) => fetch(path).then(r => (r.ok ? r.arrayBuffer() : null)).catch(() => null);
@@ -304,7 +320,7 @@ export async function downloadClassProgramExcel(opts: {
       units: r.row_units,
       hours: r.row_hours,
       instructor: r.faculty_name || 'Not assigned',
-      status: r.faculty_name ? 'Assigned' : 'Unscheduled',
+      status: pendingStatus(r),
     })),
     totalUnits: scheduledRows.reduce((s, r) => s + r.row_units, 0),
     totalHours: scheduledRows.reduce((s, r) => s + r.row_hours, 0),
@@ -331,6 +347,160 @@ export async function downloadClassProgramExcel(opts: {
   a.download = `ClassProgram_${block.program_code}_Block${block.block_name}_${block.semester.replace(/\s+/g, '_')}.xlsx`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ─── Print — the Class Program's paper form as its own document ──────────────
+
+/** "7:00 AM–8:30 AM" may wrap only after the dash (as on the page's TIME/DAY cell) */
+function timeCellHtml(label: string): string {
+  const m = label.match(/^(.+?–)(.+)$/);
+  return m ? `<span class="t-time-a">${esc(m[1])}</span><wbr><span class="t-time-b">${esc(m[2])}</span>` : esc(label);
+}
+
+/**
+ * The printed Class Program as a standalone HTML document — the same paper form
+ * as the Class Program page (header on every page, A.M. / P.M. rows per day
+ * group, totals, Pending / Unscheduled, signatories, footer). Reports prints it
+ * in place (lib/openPrintHtmlDocument: printHtmlInPlace) without opening the page.
+ */
+export function buildClassProgramPrintHtml(opts: {
+  block: BlockDetail;
+  schedules: RawSchedule[];
+  combos?: readonly { days: readonly WeekDay[] }[];
+  settings: ClassProgramDocSettings;
+  origin: string;
+}): string {
+  const { block, settings, origin } = opts;
+  const displayRows = expandToDisplayRows(opts.schedules);
+  const scheduledRows = displayRows.filter(r => r.day_pattern !== 'TBA');
+  const unscheduledRows = displayRows.filter(r => r.day_pattern === 'TBA');
+  const dayGroups = groupByDay(scheduledRows, opts.combos ?? []);
+  const totalUnits = scheduledRows.reduce((s, r) => s + r.row_units, 0);
+  const totalHours = scheduledRows.reduce((s, r) => s + r.row_hours, 0);
+  const course = formatCourseLabel(block);
+
+  const row = (r: DisplayRow) => `<tr>
+  <td class="t-time">${timeCellHtml(formatTimeRange(r.start_time, r.end_time))}</td>
+  <td class="t-code">${esc(r.subject_code)}</td>
+  <td class="t-desc" style="text-align:left">${esc(r.subject_name)}</td>
+  <td class="t-course">${esc(course)}</td>
+  <td class="t-units">${r.is_continuation ? '' : fmtNum(r.row_units)}</td>
+  <td class="t-hours">${fmtNum(r.row_hours)}</td>
+  <td class="t-inst">${esc(r.faculty_name ?? '')}</td>
+  <td class="t-room">${r.nstp ? '—' : r.room_name ? esc(r.room_name) : '<span class="no-room">No room assigned</span>'}</td>
+</tr>`;
+  const emptyRow = '<tr class="dr-empty"><td colspan="8"></td></tr>';
+
+  const schedule = dayGroups.length > 0 ? `
+<table class="wl">
+  <colgroup>
+    <col class="t-time"><col class="t-code"><col style="width:24%"><col class="t-course">
+    <col class="t-units"><col class="t-hours"><col class="t-inst"><col class="t-room">
+  </colgroup>
+  <thead><tr>
+    <th>TIME/DAY</th><th>Subject<br>Code</th><th>Description</th><th>Course</th>
+    <th>Units</th><th>No. of<br>Hours</th><th>Instructor/Professor</th><th>Room No.</th>
+  </tr></thead>
+  <tbody>
+    ${dayGroups.map((g: DayGroup) => {
+      const am = g.rows.filter(r => isAM(r.start_time));
+      const pm = g.rows.filter(r => !isAM(r.start_time));
+      return `<tr class="sec-hdr"><td>A.M.</td><td colspan="7">${esc(g.label)}</td></tr>
+    ${am.length ? am.map(row).join('') : emptyRow}
+    <tr class="sec-hdr"><td>P.M.</td><td colspan="7" style="font-style:italic;text-align:center">Lunch Break</td></tr>
+    ${pm.length ? pm.map(row).join('') : emptyRow}`;
+    }).join('')}
+    <tr class="tr-total">
+      <td colspan="4" class="c-right">Total Number of Units</td>
+      <td class="c-center">${fmtNum(totalUnits)}</td>
+      <td class="c-center">${fmtNum(totalHours)}</td>
+      <td colspan="2"></td>
+    </tr>
+  </tbody>
+</table>` : '<p style="text-align:center;padding:16pt 0;font-size:8.5pt;color:#555">No subjects have been scheduled yet.</p>';
+
+  const pending = unscheduledRows.length > 0 ? `
+<table class="wl" style="margin-top:8px">
+  <thead>
+    <tr class="sec-hdr"><td colspan="6">Pending / Unscheduled Subjects</td></tr>
+    <tr>
+      <th style="width:10%">Subject<br>Code</th><th style="width:32%">Description</th><th style="width:7%">Units</th>
+      <th style="width:7%">Hours</th><th style="width:32%">Instructor/Professor</th><th style="width:12%">Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    ${unscheduledRows.map(r => `<tr>
+      <td class="t-code">${esc(r.subject_code)}</td>
+      <td class="t-desc" style="text-align:left">${esc(r.subject_name)}</td>
+      <td class="t-units">${fmtNum(r.row_units)}</td>
+      <td class="t-hours">${fmtNum(r.row_hours)}</td>
+      <td class="t-inst">${r.faculty_name ? esc(r.faculty_name) : '<span class="no-room">Not assigned</span>'}</td>
+      <td class="t-status">${esc(pendingStatus(r))}</td>
+    </tr>`).join('')}
+  </tbody>
+</table>` : '';
+
+  const signer = (s: Signatory) => `<div class="nm">${s.name ? esc(s.name) : '&nbsp;'}</div>${s.designation ? `<div class="tt">${esc(s.designation)}</div>` : ''}`;
+  const signatures = `
+<table class="sig"><tbody>
+  <tr>
+    <td style="width:50%;padding-right:20px" class="lbl">Prepared by:</td>
+    <td style="width:50%;padding-left:20px" class="lbl">Recommending Approval:</td>
+  </tr>
+  <tr class="sp"><td></td><td></td></tr>
+  <tr>
+    <td style="padding:0 20px 0 0;text-align:left">${signer(settings.preparedBy)}</td>
+    <td style="padding:0 0 0 20px" class="blk">${signer(settings.recommendedBy)}</td>
+  </tr>
+  <tr><td colspan="2" class="lbl sec" style="text-align:center">Noted by:</td></tr>
+  <tr class="sp"><td colspan="2"></td></tr>
+  <tr><td colspan="2" class="blk" style="padding:0 25%">${signer(settings.notedBy)}</td></tr>
+  <tr><td colspan="2" class="lbl sec" style="text-align:center">Approved:</td></tr>
+  <tr class="sp"><td colspan="2"></td></tr>
+  <tr><td colspan="2" class="blk" style="padding:0 25%">${signer(settings.approvedBy)}</td></tr>
+</tbody></table>`;
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Class Program — ${esc(course)}</title>
+<style>
+${officialPrintDocumentCss()}
+/* "BSIT 1A" stays on one line, as on the Class Program page */
+.wl td.t-course { white-space: nowrap; }
+thead { display: table-header-group; }
+tfoot { display: table-footer-group; }
+.wl tbody tr { page-break-inside: avoid; }
+</style>
+</head>
+<body>
+<div class="page">
+${officialPrintPagedHtml(officialPrintHeaderHtml({
+    logoSrc: `${origin}/nemlogo/NEMSU-logo.png`,
+    department: (block.department || '').trim() || NEMSU_OFFICIAL_DEPT,
+    title: 'CLASS PROGRAM',
+    semesterHeading: semesterHeading(block.semester),
+    academicYear: block.academic_year,
+  }), `
+<div class="info">
+  <div class="info-left" style="flex:1 1 auto">
+    <div class="hf"><span class="i-lbl">Course/Year/Section:</span><span class="i-val"><strong>${esc(block.program_code)} ${esc(block.year_level)} — Block ${esc(block.block_name)}</strong></span></div>
+    <div class="hf"><span class="i-lbl">Program:</span><span class="i-val">${esc(block.program_name || block.program_code)}</span></div>
+  </div>
+</div>
+${schedule}
+${pending}
+${signatures}`)}
+</div>
+${footerHtml({
+    address: settings.campusAddress || DEFAULT_FOOTER_CONFIG.address,
+    phone: settings.campusTel || DEFAULT_FOOTER_CONFIG.phone,
+    website: settings.campusWebsite || DEFAULT_FOOTER_CONFIG.website,
+    logoOrigin: origin,
+  })}
+</body>
+</html>`;
 }
 
 /** Load a block's class program from the API (same request as the Class Program page) */

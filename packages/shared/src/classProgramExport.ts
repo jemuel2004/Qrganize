@@ -47,7 +47,7 @@ export interface ClassProgramExportInput {
 const FONT = 'Arial';
 const LAST_COL = 8;
 /** TIME/DAY · Code · Description · Course · Units · Hours · Instructor · Room (print proportions) */
-const COL_WIDTHS = [17, 11, 31, 12, 8, 9.5, 26, 15.5];
+const COL_WIDTHS = [19, 11, 31, 11, 8, 8.5, 26, 15.5];
 const HEADERS = ['TIME/DAY', 'Subject\nCode', 'Description', 'Course', 'Units', 'No. of\nHours', 'Instructor/Professor', 'Room No.'];
 /** Left / right signature halves */
 const LEFT_HALF: [number, number] = [1, 4];

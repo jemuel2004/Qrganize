@@ -229,6 +229,19 @@ function openPrintableRoute(path: string, preOpened: Window | null): boolean {
 }
 
 /**
+ * Print a finished document right where the user is — a hidden frame on this
+ * page opens the print dialog, no new tab or window. Falls back to the usual
+ * window / printable route where frames can't print (some in-app browsers).
+ */
+export async function printHtmlInPlace(html: string): Promise<OpenPrintHtmlResult> {
+  if (supportsWindowPrint() && !isRestrictedEmbeddedBrowser()) {
+    const r = await printViaIframe(html);
+    if (r.ok) return { ...r, offerPrintableFallback: false };
+  }
+  return openPrintHtmlDocument(html);
+}
+
+/**
  * Open a blank print shell immediately (call first inside the click handler).
  */
 export function openBlankPrintWindow(

@@ -26,6 +26,9 @@ const PUBLIC_API = new Set([
   'DELETE:/api/auth/verify-email-google',
   'GET:/api/settings/logo',
   'GET:/api/health',
+  // Outside scheduler: checks its own CRON_SECRET (off when unset)
+  'GET:/api/cron/class-reminders',
+  'POST:/api/cron/class-reminders',
 ]);
 
 /**

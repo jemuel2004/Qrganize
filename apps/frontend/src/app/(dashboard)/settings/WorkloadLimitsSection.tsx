@@ -13,7 +13,8 @@ import { useToast } from '@/context/ToastContext';
 import { useRealtime } from '@/context/RealtimeContext';
 import { setWorkloadPolicyCache } from '@/hooks/useWorkloadPolicy';
 import { Skeleton } from '@/components/ui/skeletons';
-import SaveSuccessOverlay, { useSaveSuccess } from '@/components/ui/SaveSuccessOverlay';
+import { useSaveSuccess } from '@/components/ui/SaveSuccessOverlay';
+import SettingsSaveCheck from './SettingsSaveCheck';
 import {
   DEFAULT_WORKLOAD_POLICY, LOAD_GRACE_UNITS, WORKLOAD_POLICY_LIMITS,
   normalizeWorkloadPolicy, parseWorkloadPolicy, sameWorkloadPolicy,
@@ -44,7 +45,10 @@ const FIELDS: { field: WorkloadPolicyField; title: string; hint: string; step: n
   },
 ];
 
-export default function WorkloadLimitsSection() {
+export default function WorkloadLimitsSection({ onClose }: {
+  /** Closes the Settings window — after a save, once the check has played */
+  onClose?: () => void;
+}) {
   const toast = useToast();
   const reduceMotion = useReducedMotion();
   const [saved, setSaved] = useState<WorkloadPolicy | null>(null);
@@ -53,6 +57,8 @@ export default function WorkloadLimitsSection() {
   const [error, setError] = useState<{ field?: WorkloadPolicyField; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const success = useSaveSuccess();
+  /** The field that just got focus from a click — its number stays selected on mouse-up */
+  const selectOnClick = useRef<HTMLInputElement | null>(null);
 
   const parsed = parseWorkloadPolicy(form);
   const dirty = !!saved && (!parsed.ok || !sameWorkloadPolicy(parsed.policy, saved));
@@ -101,8 +107,9 @@ export default function WorkloadLimitsSection() {
       setSaved(policy);
       setForm(toForm(policy));
       setWorkloadPolicyCache(policy); // this tab's pages show the new limits at once
-      // The check draws itself first, then the toast says what it means
-      success.play(() => toast.success('Workload limits saved — every faculty load now uses them.'));
+      // The window steps aside and the check plays on its own, then the window closes
+      // and the toast says what it means
+      success.play(() => { onClose?.(); toast.success('Workload limits saved — every faculty load now uses them.'); }, { keep: !!onClose });
     } catch {
       setError({ message: 'Connection error. Please try again.' });
     } finally {
@@ -132,7 +139,7 @@ export default function WorkloadLimitsSection() {
 
   return (
     <div className="relative space-y-5">
-      {success.shown && <SaveSuccessOverlay title="Workload limits saved" />}
+      {success.shown && <SettingsSaveCheck title="Workload limits saved" />}
 
       <div className="space-y-3">
         {FIELDS.map(({ field, title, hint, step }) => {
@@ -152,19 +159,29 @@ export default function WorkloadLimitsSection() {
                 </span>
               </span>
               <span className="flex items-center gap-2 flex-shrink-0">
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  min={min}
-                  max={max}
-                  step={step}
-                  value={form[field]}
-                  onChange={e => setField(field, e.target.value)}
-                  aria-invalid={invalid || undefined}
-                  className={`h-12 w-28 rounded-xl border px-3 text-right text-lg font-bold tabular-nums text-[#0B2A5B] bg-white outline-none focus:ring-2 focus:ring-[#1D5BD6]/30 ${
-                    invalid ? 'border-red-400' : 'border-[#CBD5E1] focus:border-[#1D5BD6]'
-                  }`}
-                />
+                {/* The box (border + focus ring) is drawn here, not on the input — light mode
+                    strips an input's own border while it is focused, which made it vanish */}
+                <span className={`flex h-12 w-28 rounded-xl border bg-white transition-colors focus-within:ring-2 focus-within:ring-[#1D5BD6]/30 ${
+                  invalid ? 'border-red-400' : 'border-[#CBD5E1] focus-within:border-[#1D5BD6]'
+                }`}>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min={min}
+                    max={max}
+                    step={step}
+                    value={form[field]}
+                    onChange={e => setField(field, e.target.value)}
+                    // Clicking anywhere in the box selects the number (typing replaces it), so
+                    // it is plain the field is active — a lone caret hid against the digits.
+                    // A second click places the caret to change one digit.
+                    onFocus={e => { selectOnClick.current = e.currentTarget; e.currentTarget.select(); }}
+                    onMouseUp={e => { if (selectOnClick.current === e.currentTarget) { e.preventDefault(); selectOnClick.current = null; } }}
+                    onBlur={() => { selectOnClick.current = null; }}
+                    aria-invalid={invalid || undefined}
+                    className="w-full min-w-0 rounded-xl border-0 bg-transparent px-3 text-right text-lg font-bold tabular-nums text-[#0B2A5B] caret-[#1D5BD6] selection:bg-[#BFD3F5] selection:text-[#0B2A5B] outline-none focus:border-0! focus:shadow-none!"
+                  />
+                </span>
                 <span className="w-12 text-sm font-semibold text-[#475569]">{unit}</span>
               </span>
             </label>
@@ -189,14 +206,6 @@ export default function WorkloadLimitsSection() {
           <RotateCcw className="w-4 h-4" /> Use defaults
         </button>
         <div className="flex gap-3">
-          <button
-            type="button"
-            disabled={!dirty || saving}
-            onClick={() => { setForm(toForm(saved)); setError(null); }}
-            className="h-11 px-5 rounded-xl text-sm font-semibold border border-[#D6E0EF] text-[#0B2A5B] bg-white hover:bg-[#F8FAFC] disabled:opacity-40 transition-colors"
-          >
-            Discard
-          </button>
           <motion.button
             type="button"
             whileTap={reduceMotion ? undefined : { scale: 0.97 }}

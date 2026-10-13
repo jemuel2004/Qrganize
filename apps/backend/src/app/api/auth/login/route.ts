@@ -168,8 +168,6 @@ async function POST_handler(req: NextRequest) {
         return NextResponse.json({ error: WRONG_PASSWORD }, { status: 401 });
       }
       upgradeOldHash('users', Number(user.id), String(password), String(user.password_hash));
-      // A default / common password must be changed before anything else (auth/passwordChange.ts)
-      await recordPasswordStrength('user', Number(user.id), String(password), user.username as string);
 
       const actualRole = user.role as string;
       if (!['admin', 'department_chair', 'program_chair'].includes(actualRole)) {
@@ -304,7 +302,8 @@ async function POST_handler(req: NextRequest) {
         return NextResponse.json({ error: WRONG_PASSWORD }, { status: 401 });
       }
       upgradeOldHash('instructor_accounts', Number(row.account_id), String(password), String(row.password_hash));
-      await recordPasswordStrength('instructor', Number(row.account_id), String(password), row.username as string);
+      // A default / common faculty password must be changed before anything else (auth/passwordChange.ts)
+      await recordPasswordStrength(Number(row.account_id), String(password), row.username as string);
 
       if (!row.account_active || !row.faculty_active) {
         return NextResponse.json(

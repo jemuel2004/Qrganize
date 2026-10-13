@@ -5,7 +5,10 @@ export interface NavChild {
   label: string;
 }
 
-export type NavBadgeKey = 'workload' | 'scheduleClasses' | 'masterSchedule' | 'facultySchedule';
+export type NavBadgeKey = 'workload' | 'scheduleClasses' | 'masterSchedule' | 'facultySchedule' | 'roomRequests';
+
+/** Count per badge key — a red badge shows when > 0 */
+export type NavBadgeCounts = Record<NavBadgeKey, number>;
 
 export interface NavItem {
   href: string;
@@ -49,7 +52,7 @@ export const ALL_NAV_SECTIONS: NavSection[] = [
     label: 'Scheduling',
     items: [
       { href: '/workload', label: 'Faculty Workload', badgeKey: 'workload' },
-      { href: '/scheduling', label: 'Schedule Classes', badgeKey: 'scheduleClasses' },
+      { href: '/scheduling', label: 'Class Assignment', badgeKey: 'scheduleClasses' },
       { href: '/program/class-program', label: 'Class Program' },
       { href: '/master-schedule', label: 'Master Schedule', badgeKey: 'masterSchedule' },
       { href: '/faculty-schedules', label: 'Faculty Schedule', badgeKey: 'facultySchedule' },
@@ -61,7 +64,7 @@ export const ALL_NAV_SECTIONS: NavSection[] = [
     items: [
       { href: '/room-monitoring', label: 'Room Monitoring' },
       { href: '/room-utilization', label: 'Room Utilization' },
-      { href: '/room-requests', label: 'Room Requests' },
+      { href: '/room-requests', label: 'Room Requests', badgeKey: 'roomRequests' },
       { href: '/rooms', label: 'Room Management' },
       { href: '/qr-generator', label: 'QR Generator' },
     ],
@@ -99,7 +102,7 @@ const DEPARTMENT_CHAIR_HIDDEN = CHAIR_HIDDEN;
 const PROGRAM_CHAIR_ACCOUNT_SECTION: NavSection = {
   id: 'account',
   label: 'Account',
-  items: [{ href: '/dept-chair/account', label: 'My Account' }],
+  items: [{ href: '/dept-chair/account', label: 'Settings' }],
 };
 
 const DEPARTMENT_CHAIR_ACCOUNT_SECTION: NavSection = {

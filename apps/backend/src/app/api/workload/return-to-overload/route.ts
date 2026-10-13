@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { parseId } from '@/database/ids';
+import { parseIdList, readJsonObject } from '@/services/requestInput';
 import { query, transaction } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { syncWorkloadMonitoringNotifications } from '@/services/workloadMonitoring';
@@ -19,16 +21,12 @@ async function POST_handler(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const body = await req.json();
-    const faculty_id = Number(body.faculty_id);
-    const rawIds: unknown[] = Array.isArray(body.master_schedule_ids)
+    const body = await readJsonObject(req);
+    if (!body) return NextResponse.json({ error: 'Faculty and at least one Praise Load subject are required.' }, { status: 400 });
+    const faculty_id = parseId(body.faculty_id);
+    let master_schedule_ids = parseIdList(Array.isArray(body.master_schedule_ids)
       ? body.master_schedule_ids
-      : body.master_schedule_id != null
-        ? [body.master_schedule_id]
-        : [];
-    let master_schedule_ids = [...new Set(
-      rawIds.map(n => Number(n)).filter(n => Number.isInteger(n) && n > 0)
-    )];
+      : body.master_schedule_id != null ? [body.master_schedule_id] : []);
 
     if (!faculty_id || master_schedule_ids.length === 0) {
       return NextResponse.json({ error: 'Faculty and at least one Praise Load subject are required.' }, { status: 400 });

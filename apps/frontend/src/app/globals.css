@@ -33,7 +33,51 @@
   [aria-disabled="true"] {
     cursor: not-allowed;
   }
+  /* Text boxes: our own text pointer — a navy beam with a white edge. The Windows
+     one inverts what is under it, and on some screens Chrome draws it faint or not
+     at all, so the pointer seemed to vanish inside a box (user, 2026-10-12). */
+  textarea:not(:disabled),
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]):not([type="color"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]):not([type="hidden"]):not(:disabled),
+  [contenteditable="true"] {
+    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='24' viewBox='0 0 16 24'%3E%3Cpath d='M4.5 2.5h7M4.5 21.5h7M8 2.5v19' fill='none' stroke='%23fff' stroke-width='4' stroke-linecap='round'/%3E%3Cpath d='M4.5 2.5h7M4.5 21.5h7M8 2.5v19' fill='none' stroke='%230B2A5B' stroke-width='1.75' stroke-linecap='round'/%3E%3C/svg%3E") 8 12, text;
+  }
 }
+
+/* ── Icons (lucide-react): one balanced line weight at every size ─────
+   lucide draws a 2-unit line on a 24-unit grid, so the line grows and shrinks
+   with the icon: a 14px icon got a faint 1.2px line and a 32px tile icon a
+   heavy 2.7px one. These rules keep each size crisp and in proportion
+   (stroke-width in the icon's own units = wanted px × 24 / size), a little
+   firmer on the small ones so they read clearly. Only icons left at lucide's
+   default weight change — an icon given its own strokeWidth (e.g. a bold
+   tick) keeps it. Colours are never touched (the line stays currentColor).
+   Sizes from the `size` prop first, then the w-* / size-* classes (they win). */
+svg.lucide { flex-shrink: 0; }
+svg.lucide[stroke-width="2"][width="12"] { stroke-width: 2.5; }
+svg.lucide[stroke-width="2"][width="14"] { stroke-width: 2.314; }
+svg.lucide[stroke-width="2"][width="16"] { stroke-width: 2.25; }
+svg.lucide[stroke-width="2"][width="18"] { stroke-width: 2.2; }
+svg.lucide[stroke-width="2"][width="20"] { stroke-width: 2.1; }
+svg.lucide[stroke-width="2"][width="28"] { stroke-width: 1.8; }
+svg.lucide[stroke-width="2"][width="32"] { stroke-width: 1.65; }
+svg.lucide[stroke-width="2"][width="36"] { stroke-width: 1.533; }
+svg.lucide[stroke-width="2"][width="40"] { stroke-width: 1.41; }
+svg.lucide[stroke-width="2"][width="48"] { stroke-width: 1.25; }
+svg.lucide[stroke-width="2"][width="56"] { stroke-width: 1.114; }
+svg.lucide[stroke-width="2"][width="64"] { stroke-width: 0.975; }
+svg.lucide[stroke-width="2"]:is(.w-3, .size-3) { stroke-width: 2.5; }
+svg.lucide[stroke-width="2"]:is(.w-3\.5, .size-3\.5) { stroke-width: 2.314; }
+svg.lucide[stroke-width="2"]:is(.w-4, .size-4) { stroke-width: 2.25; }
+svg.lucide[stroke-width="2"]:is(.w-4\.5, .size-4\.5, .w-\[18px\], .size-\[18px\]) { stroke-width: 2.2; }
+svg.lucide[stroke-width="2"]:is(.w-5, .size-5) { stroke-width: 2.1; }
+svg.lucide[stroke-width="2"]:is(.w-6, .size-6) { stroke-width: 2; }
+svg.lucide[stroke-width="2"]:is(.w-7, .size-7) { stroke-width: 1.8; }
+svg.lucide[stroke-width="2"]:is(.w-8, .size-8) { stroke-width: 1.65; }
+svg.lucide[stroke-width="2"]:is(.w-9, .size-9) { stroke-width: 1.533; }
+svg.lucide[stroke-width="2"]:is(.w-10, .size-10) { stroke-width: 1.41; }
+svg.lucide[stroke-width="2"]:is(.w-12, .size-12) { stroke-width: 1.25; }
+svg.lucide[stroke-width="2"]:is(.w-14, .size-14) { stroke-width: 1.114; }
+svg.lucide[stroke-width="2"]:is(.w-16, .size-16) { stroke-width: 0.975; }
 
 /* ── Toast notification animation ───────────────── */
 @keyframes toast-in {

@@ -154,7 +154,8 @@ export async function proxy(req: NextRequest) {
 
 export const config = {
   matcher: [
-    // Pages only — API calls and uploaded files go straight to the backend.
-    '/((?!api/|uploads/|_next/|favicon\\.ico|nemlogo).*)',
+    // Pages only — API calls and uploaded files go straight to the backend;
+    // the service worker, the app manifest and its icons are public files.
+    '/((?!api/|uploads/|_next/|favicon\\.ico|nemlogo|icons/|sw\\.js|manifest\\.webmanifest).*)',
   ],
 };

@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import InstructorAvatar from '@/components/ui/InstructorAvatar';
 import { roleLabel as getRoleLabel } from '@/lib/roleAccess';
+import { releaseReminderDevice } from '@/lib/classReminders';
 import {
   dropdownVariants,
   NAV_DURATION,
@@ -199,6 +200,8 @@ export default function UserProfileDropdown({ theme = 'light', compact = false }
   const handleLogout = useCallback(async (forgetDevice = false) => {
     setLoggingOut(true);
     setOpen(false);
+    // This device stops getting the account's class reminders (needs the session, so first)
+    await releaseReminderDevice();
     await fetch('/api/auth/logout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

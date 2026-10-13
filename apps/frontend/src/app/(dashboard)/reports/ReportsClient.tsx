@@ -5,8 +5,8 @@
  * documents. Every report reuses the code of its own page, so the output is
  * identical wherever it is produced:
  *   • Faculty Workload Form — same menu as Faculty Schedules.
- *   • Class Program — runs the Class Program page itself in a hidden frame
- *     (its printed form and saved signatories live there).
+ *   • Class Program — the Class Program page's own paper form and saved
+ *     signatories (classProgramReport), printed right here (no new tab).
  *   • Curriculum — same print / Excel helpers as Curriculum Setup.
  *   • Room QR Codes — same print cards as QR Generator, plus Excel.
  */
@@ -16,7 +16,7 @@ import Link from 'next/link';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import {
   ArrowRight, BookOpen, CalendarDays, CalendarRange, Check, ChevronDown, FileSpreadsheet, FileText,
-  Loader2, Printer, QrCode, Search,
+  Loader2, Printer, QrCode, Search, X,
 } from 'lucide-react';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
@@ -34,8 +34,10 @@ import { CURRICULUM_VERSIONS, DEFAULT_CURRICULUM_VERSION, curriculumVersionLabel
 import WorkloadPrintMenu from '@/components/WorkloadPrintMenu';
 import { downloadCurriculumExcel, fetchCurriculumGroups, groupCurriculums, printCurriculum, type CurriculumRowLike } from '../program/curriculum/curriculumReport';
 import { downloadQrExcel, printRooms, type RoomQR } from '../qr-generator/qrReport';
-import { downloadClassProgramExcel, fetchClassProgram, loadClassProgramDocSettings } from '../program/class-program/classProgramReport';
+import { buildClassProgramPrintHtml, downloadClassProgramExcel, fetchClassProgram, loadClassProgramDocSettings } from '../program/class-program/classProgramReport';
 import { fetchDayCombinations } from '@/lib/dayCombinations';
+import { printHtmlInPlace } from '@/lib/openPrintHtmlDocument';
+import { runExport } from '@/components/ui/ExportProgress';
 
 interface FacultyOption { id: number; name: string; employment_status: string; position: string }
 interface ProgramOption { id: number; code: string; name: string }
@@ -48,9 +50,10 @@ const yearNum = (yearLevel: string) => yearLevel.match(/\d+/)?.[0] ?? yearLevel;
 /** Program choices for the big dropdown: code, full name under it */
 const programOptions = (programs: ProgramOption[]) => programs.map(p => ({ value: String(p.id), label: p.code, hint: p.name }));
 
-/** Searchable faculty picker — grouped Permanent / Contractual, A–Z within each */
+/** Searchable faculty picker — grouped Permanent / Contractual, A–Z within each.
+ *  The picked faculty can be removed: the × in the box, or picking the same name again. */
 function FacultyPicker({ faculty, value, onChange }: {
-  faculty: FacultyOption[]; value: number | null; onChange: (id: number) => void;
+  faculty: FacultyOption[]; value: number | null; onChange: (id: number | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
@@ -72,28 +75,59 @@ function FacultyPicker({ faculty, value, onChange }: {
   const firstMatch = groups[0]?.items[0] ?? null;
 
   function pick(id: number) {
-    onChange(id);
+    // Picking the faculty already picked unselects them
+    onChange(id === value ? null : id);
     setOpen(false);
     setQ('');
+  }
+  function clear() {
+    onChange(null);
+    setOpen(false);
+    setQ('');
+    triggerRef.current?.focus();
   }
 
   return (
     <>
-      <button
-        ref={triggerRef}
-        type="button"
-        onClick={e => { setPanelWidth(e.currentTarget.offsetWidth); setOpen(o => !o); }}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        className={`w-full h-12 px-4 rounded-xl border bg-white flex items-center gap-2 text-left transition-colors ${
-          open ? 'border-[#1D5BD6] ring-2 ring-[#1D5BD6]/15' : 'border-[#D6E0EF] hover:border-[#9DB8E8]'
-        }`}
-      >
-        <span className={`flex-1 truncate text-[15px] ${selected ? 'font-semibold text-[#0B2A5B]' : 'text-[#64748B]'}`}>
-          {selected ? selected.name : 'Select faculty…'}
-        </span>
-        <ChevronDown className={`w-4 h-4 text-[#64748B] transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
+      <div className="relative">
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={e => { setPanelWidth(e.currentTarget.offsetWidth); setOpen(o => !o); }}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          className={`w-full h-12 pl-4 ${selected ? 'pr-[5.25rem]' : 'pr-11'} rounded-xl border bg-white flex items-center gap-2 text-left transition-colors ${
+            open ? 'border-[#1D5BD6] ring-2 ring-[#1D5BD6]/15' : 'border-[#D6E0EF] hover:border-[#9DB8E8]'
+          }`}
+        >
+          <span className={`flex-1 truncate text-[15px] ${selected ? 'font-semibold text-[#0B2A5B]' : 'text-[#64748B]'}`}>
+            {selected ? selected.name : 'Select faculty…'}
+          </span>
+        </button>
+        {/* Remove the picked faculty — beside the arrow, inside the box */}
+        <AnimatePresence initial={false}>
+          {selected && (
+            <motion.button
+              key="clear"
+              type="button"
+              onClick={clear}
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.8 }}
+              transition={{ duration: 0.18, ease: EASE }}
+              aria-label={`Remove ${selected.name}`}
+              title="Remove"
+              className="absolute right-10 top-1/2 -translate-y-1/2 w-9 h-9 rounded-lg flex items-center justify-center text-[#64748B] hover:text-[#B91C1C] hover:bg-[#FEF2F2] transition-colors"
+            >
+              <X className="w-[18px] h-[18px]" aria-hidden />
+            </motion.button>
+          )}
+        </AnimatePresence>
+        <ChevronDown
+          aria-hidden
+          className={`pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[#64748B] transition-transform ${open ? 'rotate-180' : ''}`}
+        />
+      </div>
 
       <AnchoredPopover
         open={open}
@@ -136,6 +170,7 @@ function FacultyPicker({ faculty, value, onChange }: {
                       type="button"
                       role="option"
                       aria-selected={on}
+                      title={on ? 'Click again to unselect' : undefined}
                       onClick={() => pick(f.id)}
                       className={`w-full px-4 py-2 flex items-center gap-3 text-left transition-colors ${on ? 'bg-[#EFF6FF]' : 'hover:bg-[#F8FAFC]'}`}
                     >
@@ -159,7 +194,27 @@ function FacultyPicker({ faculty, value, onChange }: {
 const EASE = [0.4, 0, 0.2, 1] as const;
 
 const CARD = 'rounded-2xl border border-[#E3E9F3] bg-white shadow-[0_1px_3px_rgba(11,42,91,0.06)]';
-const LABEL = 'block text-xs font-semibold text-[#64748B] mb-1.5';
+const LABEL = 'block text-sm font-semibold text-[#475569] mb-1.5';
+/** Each report's colour — the same colour tiles as Settings */
+const TONE = { workload: '#1D5BD6', classProgram: '#0284C7', curriculum: '#4F46E5', qr: '#12408F' } as const;
+const WHITE = { color: '#FFFFFF' } as const;
+
+/** Tinted card face + soft corner circle (Settings tile look) */
+const tileFace = (tone: string, ready: boolean, angle = 160) => ({
+  background: `linear-gradient(${angle}deg, ${tone}17 0%, #FFFFFF 45%)`,
+  borderColor: ready ? `${tone}80` : `${tone}2E`,
+});
+function TileCircle({ tone }: { tone: string }) {
+  return <span aria-hidden className="pointer-events-none absolute -right-10 -top-10 w-36 h-36 rounded-full" style={{ backgroundColor: `${tone}0F` }} />;
+}
+function TileIcon({ tone, icon: Icon }: { tone: string; icon: typeof Printer }) {
+  return (
+    <span className="relative w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-[0_8px_18px_-8px_rgba(11,42,91,0.45)]"
+      style={{ background: `linear-gradient(135deg, ${tone} 0%, #0B2A5B 140%)` }}>
+      <Icon className="w-6 h-6" style={WHITE} aria-hidden />
+    </span>
+  );
+}
 const POPUP_BLOCKED = 'Pop-up blocked. Allow pop-ups for this site and try again.';
 
 /* ─── Shared pieces ─────────────────────────────────────────────────────── */
@@ -182,7 +237,7 @@ function ExportButtons({ busy, done = null, disabled, onExcel, onPrint }: {
   busy: Busy; done?: Busy; disabled: boolean; onExcel: () => void; onPrint: () => void;
 }) {
   const reduceMotion = useReducedMotion();
-  const base = 'flex-1 inline-flex items-center justify-center gap-1.5 h-10 px-3 rounded-lg border text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
+  const base = 'flex-1 inline-flex items-center justify-center gap-2 h-11 px-3 rounded-xl border text-base font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
   const icon = (kind: Exclude<Busy, null>, Idle: typeof Printer) => (
     <AnimatePresence mode="wait" initial={false}>
       <motion.span
@@ -201,65 +256,65 @@ function ExportButtons({ busy, done = null, disabled, onExcel, onPrint }: {
   return (
     <div className="flex gap-2">
       <motion.button type="button" onClick={onExcel} disabled={disabled || busy !== null} {...(disabled ? {} : press)}
-        className={`${base} bg-[#E9F5EE] border-[#B7DFC6] text-[#107C41] hover:enabled:bg-[#D5EDDF] hover:enabled:border-[#107C41]`}>
+        className={`${base} bg-[#E9F5EE] border-[#B7DFC6] text-[#107C41] hover:enabled:bg-[#D5EDDF] hover:enabled:border-[#107C41] [html:not(.light)_&]:bg-[#123524]! [html:not(.light)_&]:border-[#1F5E3A]! [html:not(.light)_&]:text-[#86EFAC]!`}>
         {icon('excel', FileSpreadsheet)} {done === 'excel' ? 'Done' : 'Excel'}
       </motion.button>
       <motion.button type="button" onClick={onPrint} disabled={disabled || busy !== null} {...(disabled ? {} : press)}
-        className={`${base} bg-[#EFF6FF] border-[#BFDBFE] text-[#1D5BD6] hover:enabled:bg-[#DBEAFE] hover:enabled:border-[#1D5BD6]`}>
+        className={`${base} bg-[#EFF6FF] border-[#BFDBFE] text-[#1D5BD6] hover:enabled:bg-[#DBEAFE] hover:enabled:border-[#1D5BD6] [html:not(.light)_&]:bg-[#13284D]! [html:not(.light)_&]:border-[#24467F]! [html:not(.light)_&]:text-[#93C5FD]!`}>
         {icon('print', Printer)} {done === 'print' ? 'Done' : 'Print'}
       </motion.button>
     </div>
   );
 }
 
-/** One report card: icon, title, its selections, then Excel / Print.
- *  `summary` (the finished selection) highlights the card as ready. */
-function ReportCard({ icon: Icon, title, text, href, children, actions, note, summary }: {
-  icon: typeof Printer; title: string; text: string; href: string;
+/** One report card: icon, title, its selections, then Excel / Print. The
+ *  summary (the finished selection) has a kept place, so the buttons line up
+ *  across the cards; a ready card takes a stronger border in its colour. */
+function ReportCard({ icon, tone, title, text, href, children, actions, note, summary }: {
+  icon: typeof Printer; tone: string; title: string; text: string; href: string;
   children?: ReactNode; actions: ReactNode; note?: string; summary?: string | null;
 }) {
   const reduceMotion = useReducedMotion();
   const ready = !!summary;
   return (
     <motion.section
-      whileHover={reduceMotion ? undefined : { y: -3 }}
+      whileHover={reduceMotion ? undefined : { y: -3, boxShadow: `0 18px 36px -20px ${tone}99` }}
       transition={{ duration: 0.25, ease: EASE }}
-      className={`${CARD} p-5 h-full flex flex-col transition-[border-color,box-shadow] duration-300 ${
-        ready ? '!border-[#9DB8E8] shadow-[0_12px_28px_-20px_rgba(29,91,214,0.6)]' : 'hover:border-[#C7D5EC] hover:shadow-[0_10px_24px_-20px_rgba(11,42,91,0.45)]'
-      }`}
+      className="qr-stat-tint relative overflow-hidden rounded-2xl border p-5 h-full flex flex-col transition-[border-color] duration-300"
+      style={tileFace(tone, ready)}
     >
-      <div className="flex items-start gap-3">
-        <span className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors duration-300"
-          style={ready ? { backgroundColor: '#1D5BD6', color: '#FFFFFF' } : { backgroundColor: '#EFF6FF', color: '#1D5BD6' }}>
-          <Icon className="w-5 h-5" />
-        </span>
+      <TileCircle tone={tone} />
+      <div className="relative flex items-start gap-3.5">
+        <TileIcon tone={tone} icon={icon} />
         <div className="min-w-0 flex-1">
-          <h3 className="text-base font-bold text-[#0B2A5B]">{title}</h3>
-          <p className="text-sm text-[#64748B] mt-0.5">{text}</p>
+          <h3 className="text-[17px] font-bold leading-tight text-[#0B2A5B]">{title}</h3>
+          <p className="text-sm text-[#64748B] mt-1">{text}</p>
         </div>
       </div>
-      <div className="mt-4 space-y-3 flex-1">{children}</div>
-      <AnimatePresence initial={false}>
-        {summary && (
-          <motion.p
-            key="summary"
-            initial={reduceMotion ? false : { opacity: 0, height: 0, marginTop: 0 }}
-            animate={{ opacity: 1, height: 'auto', marginTop: 16 }}
-            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, height: 0, marginTop: 0 }}
-            transition={{ duration: 0.25, ease: EASE }}
-            className="overflow-hidden"
-          >
-            <span className="flex items-center gap-2 rounded-lg bg-[#F4F7FC] border border-[#E3E9F3] px-3 py-2 text-sm font-semibold text-[#0B2A5B]">
-              <Check className="w-4 h-4 text-[#1D5BD6] flex-shrink-0" />
+      <div className="relative mt-5 space-y-3 flex-1">{children}</div>
+      {/* One fixed height in every card, so Excel / Print line up across the row */}
+      <div className="relative mt-4 h-[46px]">
+        <AnimatePresence initial={false}>
+          {summary && (
+            <motion.p
+              key="summary"
+              initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 4 }}
+              transition={{ duration: 0.25, ease: EASE }}
+              className="h-full flex items-center gap-2 rounded-xl border px-3 text-sm font-semibold text-[#0B2A5B]"
+              style={{ backgroundColor: `${tone}0D`, borderColor: `${tone}33` }}
+            >
+              <Check className="w-4 h-4 flex-shrink-0 [html:not(.light)_&]:text-[#93C5FD]!" style={{ color: tone }} />
               <span className="truncate">{summary}</span>
-            </span>
-          </motion.p>
-        )}
-      </AnimatePresence>
-      <div className="mt-4">{actions}</div>
-      <div className="mt-3 pt-3 border-t border-[#F1F5F9] flex items-center justify-between gap-2">
-        <span className="text-xs text-[#94A3B8] truncate">{note}</span>
-        <Link href={href} className="group inline-flex items-center gap-1 text-sm font-semibold text-[#1D5BD6] flex-shrink-0">
+            </motion.p>
+          )}
+        </AnimatePresence>
+      </div>
+      <div className="relative mt-3">{actions}</div>
+      <div className="relative mt-4 pt-3 border-t border-[#E9EEF6] [html:not(.light)_&]:border-white/10 flex items-center justify-between gap-3">
+        <span className="text-sm text-[#64748B] min-w-0 truncate" title={note}>{note}</span>
+        <Link href={href} className="group inline-flex items-center gap-1 text-sm font-semibold flex-shrink-0 [html:not(.light)_&]:text-[#93C5FD]!" style={{ color: tone }}>
           Open page <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
         </Link>
       </div>
@@ -290,9 +345,9 @@ function usePrograms(): { programs: ProgramOption[]; loading: boolean } {
 /* ─── Class Program ─────────────────────────────────────────────────────── */
 
 /**
- * Excel: built right here with the Class Program page's own builder, data and
- * saved signatories (classProgramReport). Print: the printed form is the Class
- * Program page itself, so it opens in a new tab and prints automatically.
+ * Excel and Print are both built right here with the Class Program page's own
+ * builders, data and saved signatories (classProgramReport) — Print opens the
+ * print dialog on this page, without going to the Class Program page.
  */
 function ClassProgramReport({ programs, semester, schoolYear }: {
   programs: ProgramOption[]; semester: string; schoolYear: string;
@@ -336,19 +391,22 @@ function ClassProgramReport({ programs, semester, schoolYear }: {
       .catch(() => {});
   }, { enabled: !blocksLoading });
 
+  /** The block's class program as the database has it now */
+  async function load() {
+    const [{ block: detail, schedules }, { combinations }] = await Promise.all([
+      fetchClassProgram({ blockId: block, programId: program, yearLevel: year, semester }),
+      fetchDayCombinations(semester, schoolYear, { fresh: true }),
+    ]);
+    return { detail, schedules, combos: combinations.filter(c => c.is_active), settings: loadClassProgramDocSettings(detail.program_code) };
+  }
+
   async function onExcel() {
     if (!program || !year || !block || !semester) return;
     setBusy('excel');
     try {
-      const [{ block: detail, schedules }, { combinations }] = await Promise.all([
-        fetchClassProgram({ blockId: block, programId: program, yearLevel: year, semester }),
-        fetchDayCombinations(semester, schoolYear, { fresh: true }),
-      ]);
-      await downloadClassProgramExcel({
-        block: detail,
-        schedules,
-        combos: combinations.filter(c => c.is_active),
-        settings: loadClassProgramDocSettings(detail.program_code),
+      await runExport({ kind: 'excel', detail: summary ?? 'Class Program' }, async () => {
+        const d = await load();
+        await downloadClassProgramExcel({ block: d.detail, schedules: d.schedules, combos: d.combos, settings: d.settings });
       });
       flashDone('excel');
       toast.success('Class Program downloaded as Excel.');
@@ -359,21 +417,35 @@ function ClassProgramReport({ programs, semester, schoolYear }: {
     }
   }
 
-  function onPrint() {
-    if (!program || !year || !block) return;
-    // The Class Program page opens with this block and prints automatically
-    const win = window.open(`/program/class-program?${new URLSearchParams({ program, year, block, action: 'print' })}`, '_blank');
-    if (win) flashDone('print');
-    else toast.error(POPUP_BLOCKED);
+  async function onPrint() {
+    if (!program || !year || !block || !semester) return;
+    setBusy('print');
+    try {
+      // The paper form, printed from this page (no new tab)
+      const html = await runExport({ kind: 'print', detail: summary ?? 'Class Program' }, async () => {
+        const d = await load();
+        return buildClassProgramPrintHtml({
+          block: d.detail, schedules: d.schedules, combos: d.combos, settings: d.settings, origin: window.location.origin,
+        });
+      });
+      const result = await printHtmlInPlace(html);
+      if (result.ok) flashDone('print');
+      else toast.error('Printing is not available in this browser. Try Chrome or Edge.');
+    } catch (e) {
+      toast.error(e instanceof Error && e.message ? e.message : 'Could not prepare the class program.');
+    } finally {
+      setBusy(null);
+    }
   }
 
   return (
     <ReportCard
       icon={CalendarRange}
+      tone={TONE.classProgram}
       title="Class Program"
       text="Official class schedule per block."
       href="/program/class-program"
-      note="Signatories are set on the Class Program page."
+      note="Signatories are set on its page."
       summary={summary}
       actions={<ExportButtons busy={busy} done={done} disabled={!block} onExcel={onExcel} onPrint={onPrint} />}
     >
@@ -455,9 +527,11 @@ function CurriculumReport({ programs }: { programs: ProgramOption[] }) {
     if (!prog || count === 0) return;
     setBusy('excel');
     try {
-      // Read from the database at this moment, not the list loaded when the program was picked
-      const fresh = await fetchCurriculumGroups({ programId: program, version });
-      await downloadCurriculumExcel({ programName: prog.name, programCode: prog.code, version, groups: fresh });
+      await runExport({ kind: 'excel', detail: `${prog.code} · ${curriculumVersionLabel(version)}` }, async () => {
+        // Read from the database at this moment, not the list loaded when the program was picked
+        const fresh = await fetchCurriculumGroups({ programId: program, version });
+        await downloadCurriculumExcel({ programName: prog.name, programCode: prog.code, version, groups: fresh });
+      });
       flashDone('excel');
       toast.success('Curriculum downloaded as Excel.');
     } catch (e) {
@@ -475,6 +549,7 @@ function CurriculumReport({ programs }: { programs: ProgramOption[] }) {
   return (
     <ReportCard
       icon={BookOpen}
+      tone={TONE.curriculum}
       title="Curriculum"
       text="A program’s curriculum by version."
       href="/program/curriculum"
@@ -525,15 +600,18 @@ function RoomQrReport({ rooms }: { rooms: RoomQR[] }) {
   async function onExcel() {
     setBusy('excel');
     try {
-      // The rooms and QR codes as the database has them now
-      const latest = await fetch('/api/rooms/qr-codes', { cache: 'no-store' })
-        .then(r => (r.ok ? r.json() : null))
-        .then(d => (Array.isArray(d?.rooms) ? d.rooms as RoomQR[] : null))
-        .catch(() => null);
-      const rows = latest
-        ? latest.filter(r => (type === 'All' || (type === 'Laboratory' ? isLab(r.room_type) : !isLab(r.room_type))) && r.generated && r.qr_data_url)
-        : ready;
-      if (await downloadQrExcel(rows, title)) {
+      const saved = await runExport({ kind: 'excel', detail: title }, async () => {
+        // The rooms and QR codes as the database has them now
+        const latest = await fetch('/api/rooms/qr-codes', { cache: 'no-store' })
+          .then(r => (r.ok ? r.json() : null))
+          .then(d => (Array.isArray(d?.rooms) ? d.rooms as RoomQR[] : null))
+          .catch(() => null);
+        const rows = latest
+          ? latest.filter(r => (type === 'All' || (type === 'Laboratory' ? isLab(r.room_type) : !isLab(r.room_type))) && r.generated && r.qr_data_url)
+          : ready;
+        return downloadQrExcel(rows, title);
+      });
+      if (saved) {
         flashDone('excel');
         toast.success('Room QR codes downloaded as Excel.');
       }
@@ -551,6 +629,7 @@ function RoomQrReport({ rooms }: { rooms: RoomQR[] }) {
   return (
     <ReportCard
       icon={QrCode}
+      tone={TONE.qr}
       title="Room QR Codes"
       text="QR codes to post at each room."
       href="/qr-generator"
@@ -645,18 +724,19 @@ export default function ReportsClient() {
       </div>
 
       {/* Faculty Workload Form */}
-      <motion.section {...rise(0)} className={`${CARD} p-5 sm:p-6 transition-[border-color,box-shadow] duration-300 ${
-        picked ? '!border-[#9DB8E8] shadow-[0_12px_28px_-20px_rgba(29,91,214,0.6)]' : ''
-      }`}>
-        <div className="flex flex-col lg:flex-row lg:items-center gap-5 lg:gap-8">
+      <motion.section {...rise(0)}
+        className={`qr-stat-tint relative overflow-hidden rounded-2xl border p-5 sm:p-6 transition-[border-color,box-shadow] duration-300 ${
+          picked ? 'shadow-[0_14px_32px_-22px_rgba(29,91,214,0.7)]' : ''
+        }`}
+        style={tileFace(TONE.workload, !!picked, 115)}
+      >
+        <TileCircle tone={TONE.workload} />
+        <div className="relative flex flex-col lg:flex-row lg:items-center gap-5 lg:gap-8">
           <div className="flex items-start gap-3.5 min-w-0 lg:flex-1">
-            <span className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors duration-300"
-              style={picked ? { backgroundColor: '#1D5BD6', color: '#FFFFFF' } : { backgroundColor: '#EFF6FF', color: '#1D5BD6' }}>
-              <FileText className="w-5 h-5" />
-            </span>
+            <TileIcon tone={TONE.workload} icon={FileText} />
             <div className="min-w-0">
-              <h2 className="text-lg font-bold text-[#0B2A5B]">Faculty Workload Form</h2>
-              <p className="text-sm text-[#64748B] mt-0.5">Actual Load, Regular Load, Overload or Praise Load · Print or Excel</p>
+              <h2 className="text-lg font-bold leading-tight text-[#0B2A5B]">Faculty Workload Form</h2>
+              <p className="text-sm text-[#64748B] mt-1">Actual Load, Regular Load, Overload or Praise Load · Print or Excel</p>
             </div>
           </div>
 
@@ -675,7 +755,7 @@ export default function ReportsClient() {
                   </span>
                 </>
               ) : (
-                <span className="text-sm text-[#94A3B8]">
+                <span className="text-sm text-[#64748B]">
                   {termReady ? 'Choose a faculty member to print or download.' : 'Set the active school year and semester in Settings first.'}
                 </span>
               )}
@@ -706,7 +786,7 @@ function ReportsSkeleton() {
       <div className={`${CARD} p-5 sm:p-6`}>
         <div className="flex flex-col lg:flex-row lg:items-center gap-5 lg:gap-8">
           <div className="flex items-start gap-3.5 lg:flex-1">
-            <Skeleton className="w-11 h-11 rounded-xl flex-shrink-0" />
+            <Skeleton className="w-12 h-12 rounded-2xl flex-shrink-0" />
             <div className="flex-1 space-y-2">
               <Skeleton className="h-5 w-48 rounded" />
               <Skeleton className="h-3.5 w-64 max-w-full rounded" />
@@ -722,13 +802,13 @@ function ReportsSkeleton() {
         {Array.from({ length: 3 }, (_, i) => (
           <div key={i} className={`${CARD} p-5 flex flex-col`}>
             <div className="flex items-start gap-3">
-              <Skeleton className="w-11 h-11 rounded-xl flex-shrink-0" />
+              <Skeleton className="w-12 h-12 rounded-2xl flex-shrink-0" />
               <div className="flex-1 space-y-2">
                 <Skeleton className="h-4 w-32 rounded" />
                 <Skeleton className="h-3.5 w-44 max-w-full rounded" />
               </div>
             </div>
-            <div className="mt-4 space-y-3">
+            <div className="mt-5 space-y-3">
               {Array.from({ length: 2 }, (_, f) => (
                 <div key={f} className="space-y-1.5">
                   <Skeleton className="h-3 w-20 rounded" />
@@ -736,7 +816,8 @@ function ReportsSkeleton() {
                 </div>
               ))}
             </div>
-            <div className="mt-4 flex gap-2">
+            <Skeleton className="mt-4 h-[46px] w-full rounded-xl" />
+            <div className="mt-3 flex gap-2">
               <Skeleton className="h-11 flex-1 rounded-xl" />
               <Skeleton className="h-11 flex-1 rounded-xl" />
             </div>

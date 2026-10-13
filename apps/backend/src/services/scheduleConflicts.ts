@@ -24,7 +24,7 @@ export const WEEK_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'
 /** Academic day: sessions start at/after 7:00 AM and end by 6:00 PM (faculty are
  *  out by 6 PM); lunch 12:00–1:00 PM — no class may overlap it. Shared definition. */
 import {
-  SCHOOL_DAY_START_MIN, SCHOOL_DAY_END_MIN, LUNCH_START_MIN, LUNCH_END_MIN, minutesLabel,
+  SCHOOL_DAY_START_MIN, SCHOOL_DAY_END_MIN, LUNCH_START_MIN, LUNCH_END_MIN, LUNCH_LABEL, minutesLabel,
 } from '@shared/schoolDay';
 
 export const DAY_START_MIN = SCHOOL_DAY_START_MIN;
@@ -90,7 +90,7 @@ export function validateSessions(sessions: ConflictSessionInput[]): string | nul
       return `Session ${n}: classes must end by ${minutesLabel(DAY_END_MIN)} — faculty are out by then.`;
     }
     if (start < LUNCH_END_MIN && start + Math.round(h * 60) > LUNCH_START_MIN) {
-      return `Session ${n}: overlaps the lunch break (12:00–1:00 PM).`;
+      return `Session ${n}: overlaps the lunch break (${LUNCH_LABEL}).`;
     }
   }
   return null;

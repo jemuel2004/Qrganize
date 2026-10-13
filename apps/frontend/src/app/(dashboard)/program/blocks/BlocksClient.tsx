@@ -12,7 +12,7 @@ import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import TrashDropAnimation from '@/components/ui/TrashDropAnimation';
 import SelectBox from '@/components/ui/SelectBox';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
-import { CardSkeleton, ListSkeleton, Skeleton } from '@/components/ui/skeletons';
+import { ListSkeleton, Skeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import {
   Pencil, Trash2, Eye, BookOpen, CheckCircle,
@@ -661,10 +661,6 @@ export default function BlocksPage() {
   const allVisibleSelected = filtered.length > 0 && selectedVisible.length === filtered.length;
   // A different list → start a fresh selection
   useEffect(() => { setSelectedIds(new Set()); }, [programFilter, yearFilter, search, globalSemester, globalYear]);
-  const totalBlocks     = filtered.length;
-  const totalReady      = filtered.filter(b => b.subject_count > 0 && b.scheduled_count === b.subject_count).length;
-  const totalInProgress = filtered.filter(b => b.subject_count > 0 && b.scheduled_count < b.subject_count).length;
-  const totalNoSubjects = filtered.filter(b => b.subject_count === 0).length;
 
   const activeFilterCount = [yearFilter, search].filter(Boolean).length;
   const allFiltersSet     = !!(programFilter && yearFilter && globalSemester && globalYear);
@@ -909,39 +905,10 @@ export default function BlocksPage() {
         )}
       </FilterBar>
 
-      {/* Stats Row */}
-      {allFiltersSet && totalBlocks > 0 && !showListSkeleton && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-5">
-          <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 text-center">
-            <div className="text-2xl sm:text-3xl font-bold mb-1 text-[#0B2A5B]">{totalBlocks}</div>
-            <div className="text-sm text-[#64748B]">Total Blocks</div>
-          </div>
-          <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 text-center">
-            <div className="text-2xl sm:text-3xl font-bold mb-1 text-[#0B2A5B]">{totalReady}</div>
-            <div className="text-sm text-[#64748B]">Class Program Ready</div>
-          </div>
-          <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 text-center">
-            <div className="text-2xl sm:text-3xl font-bold mb-1 text-[#0B2A5B]">{totalInProgress}</div>
-            <div className="text-sm text-[#64748B]">In Progress</div>
-          </div>
-          <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 text-center">
-            <div className="text-2xl sm:text-3xl font-bold mb-1 text-[#0B2A5B]">{totalNoSubjects}</div>
-            <div className="text-sm text-[#64748B]">No Subjects Loaded</div>
-          </div>
-        </div>
-      )}
-
       <PageLoadTransition
         showSkeleton={showListSkeleton}
         skeleton={
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-              {Array.from({ length: 4 }, (_, i) => (
-                <CardSkeleton key={i} className="h-[88px]" />
-              ))}
-            </div>
-            <ListSkeleton rows={6} />
-          </div>
+          <ListSkeleton rows={6} />
         }
       >
 
@@ -1013,17 +980,17 @@ export default function BlocksPage() {
                     {group.yearLevel} &nbsp;·&nbsp; {group.semester} &nbsp;·&nbsp; {curriculumVersionLabel(group.curriculumVersion)}
                   </div>
                 </div>
-                <span className="self-start bg-white/20 text-white text-xs font-semibold px-3 py-1 rounded-full flex-shrink-0">
+                <span className="self-start bg-white/20 text-white text-sm font-semibold px-3 py-1 rounded-full flex-shrink-0">
                   {group.blocks.length} block{group.blocks.length !== 1 ? 's' : ''}
                 </span>
               </div>
 
               {/* Table on all viewports — horizontal scroll only inside this container */}
               <div className="overflow-x-auto overscroll-x-contain">
-                <table className="w-full text-sm min-w-[920px]">
+                <table className="w-full text-sm min-w-[960px]">
                   <thead>
                     <tr className="border-b border-[color:var(--table-row-line)] bg-[#F8FAFC]">
-                      <th className="pl-4 sm:pl-6 pr-1 py-2.5 w-10 text-left">
+                      <th className="pl-4 sm:pl-6 pr-1 py-3.5 w-10 text-left">
                         <SelectBox
                           checked={groupSelected === group.blocks.length}
                           indeterminate={groupSelected > 0}
@@ -1031,11 +998,11 @@ export default function BlocksPage() {
                           label={`Select all ${group.program} ${group.yearLevel} blocks`}
                         />
                       </th>
-                      <th className="text-left px-3 py-2.5 text-xs font-semibold uppercase tracking-wide whitespace-nowrap min-w-[11rem] text-[#64748B]">Block</th>
-                      <th className="text-left px-3 py-2.5 text-xs font-semibold uppercase tracking-wide whitespace-nowrap min-w-[6rem] text-[#64748B]">Students</th>
-                      <th className="text-left px-3 py-2.5 text-xs font-semibold uppercase tracking-wide whitespace-nowrap min-w-[16rem] text-[#64748B]">Subject Status</th>
-                      <th className="text-left px-3 py-2.5 text-xs font-semibold uppercase tracking-wide whitespace-nowrap min-w-[9rem] text-[#64748B]">Readiness</th>
-                      <th className="text-right px-4 sm:px-6 py-2.5 text-xs font-semibold uppercase tracking-wide whitespace-nowrap min-w-[14rem] text-[#64748B]">Actions</th>
+                      <th className="text-left px-3 py-3.5 text-sm font-semibold uppercase tracking-wide whitespace-nowrap min-w-[11rem] text-[#64748B]">Block</th>
+                      <th className="text-left px-3 py-3.5 text-sm font-semibold uppercase tracking-wide whitespace-nowrap min-w-[6rem] text-[#64748B]">Students</th>
+                      <th className="text-left px-3 py-3.5 text-sm font-semibold uppercase tracking-wide whitespace-nowrap min-w-[16rem] text-[#64748B]">Subject Status</th>
+                      <th className="text-left px-3 py-3.5 text-sm font-semibold uppercase tracking-wide whitespace-nowrap min-w-[9rem] text-[#64748B]">Readiness</th>
+                      <th className="text-right px-4 sm:px-6 py-3.5 text-sm font-semibold uppercase tracking-wide whitespace-nowrap min-w-[14rem] text-[#64748B]">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[color:var(--table-row-line)]">
@@ -1061,44 +1028,36 @@ export default function BlocksPage() {
                             />
                           </td>
                           <td className="px-3 py-4 align-middle whitespace-nowrap">
-                            <div className="flex items-center gap-3">
-                              <div className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-base flex-shrink-0 bg-[#EFF6FF]" style={{ color: '#1D5BD6' }}>
-                                {b.block_name}
-                              </div>
-                              <div>
-                                <div className="font-bold" style={{ color: '#0B2A5B' }}>Block {b.block_name}</div>
-                                <div className="text-xs" style={{ color: '#94A3B8' }}>{b.academic_year}</div>
-                              </div>
-                            </div>
+                            <div className="font-bold" style={{ color: '#0B2A5B' }}>Block {b.block_name}</div>
                           </td>
 
                           <td className="px-3 py-4 align-middle whitespace-nowrap">
                             <div className="flex items-center gap-1">
-                              <Users className="w-3.5 h-3.5 flex-shrink-0" style={{ color: '#94A3B8' }} />
-                              <span className="font-medium text-sm" style={{ color: '#64748B' }}>{b.number_of_students}</span>
+                              <Users className="w-4 h-4 flex-shrink-0" style={{ color: '#64748B' }} />
+                              <span className="font-semibold text-[#334155]">{b.number_of_students}</span>
                             </div>
                           </td>
 
                           <td className="px-3 py-4 align-middle">
                             {!hasSubjects ? (
-                              <span className="inline-flex items-center gap-1.5 bg-[#FFFBEB] text-amber-700 border border-[#FDE68A] text-xs font-semibold px-2.5 py-1 rounded-full whitespace-nowrap">
-                                <AlertTriangle className="w-3 h-3" /> No subjects loaded
+                              <span className="inline-flex items-center gap-1.5 bg-[#FFFBEB] text-amber-700 border border-[#FDE68A] text-sm font-semibold px-3 py-1 rounded-full whitespace-nowrap">
+                                <AlertTriangle className="w-4 h-4" /> No subjects loaded
                               </span>
                             ) : (
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="text-xs font-medium whitespace-nowrap" style={{ color: '#94A3B8' }}>{b.subject_count} subjects:</span>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-sm font-medium whitespace-nowrap" style={{ color: '#64748B' }}>{b.subject_count} subjects:</span>
                                 {b.scheduled_count > 0 && (
-                                  <span className="inline-flex items-center gap-1 bg-[#ECFDF5] text-emerald-700 border border-[#A7F3D0] text-xs font-semibold px-2 py-0.5 rounded-full whitespace-nowrap">
-                                    <CheckCircle className="w-3 h-3" /> {b.scheduled_count} Scheduled
+                                  <span className="inline-flex items-center gap-1 bg-[#ECFDF5] text-emerald-700 border border-[#A7F3D0] text-sm font-semibold px-2.5 py-1 rounded-full whitespace-nowrap">
+                                    <CheckCircle className="w-4 h-4" /> {b.scheduled_count} Scheduled
                                   </span>
                                 )}
                                 {b.assigned_count > 0 && (
-                                  <span className="inline-flex items-center gap-1 bg-[#EFF6FF] border border-[#BFDBFE] text-xs font-semibold px-2 py-0.5 rounded-full whitespace-nowrap" style={{ color: '#1D5BD6' }}>
-                                    <Users className="w-3 h-3" /> {b.assigned_count} Assigned
+                                  <span className="inline-flex items-center gap-1 bg-[#EFF6FF] border border-[#BFDBFE] text-sm font-semibold px-2.5 py-1 rounded-full whitespace-nowrap" style={{ color: '#1D5BD6' }}>
+                                    <Users className="w-4 h-4" /> {b.assigned_count} Assigned
                                   </span>
                                 )}
                                 {b.unassigned_count > 0 && (
-                                  <span className="inline-flex items-center gap-1 bg-slate-50 text-slate-500 border border-[#E2E8F0] text-xs font-semibold px-2 py-0.5 rounded-full whitespace-nowrap">
+                                  <span className="inline-flex items-center gap-1 bg-slate-50 text-slate-600 border border-[#E2E8F0] text-sm font-semibold px-2.5 py-1 rounded-full whitespace-nowrap">
                                     {b.unassigned_count} Unassigned
                                   </span>
                                 )}
@@ -1110,14 +1069,14 @@ export default function BlocksPage() {
                             {ready.next ? (
                               <Link
                                 href={ready.next}
-                                className={`inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full transition hover:opacity-80 ${readinessStyles[ready.color]}`}
+                                className={`inline-flex items-center gap-1 text-sm font-semibold px-3 py-1 rounded-full transition hover:opacity-80 ${readinessStyles[ready.color]}`}
                                 style={readinessColor ? { color: readinessColor } : {}}
                               >
-                                {ready.label} <ChevronRight className="w-3 h-3" />
+                                {ready.label} <ChevronRight className="w-4 h-4" />
                               </Link>
                             ) : (
                               <span
-                                className={`inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full ${readinessStyles[ready.color]}`}
+                                className={`inline-flex items-center gap-1 text-sm font-semibold px-3 py-1 rounded-full ${readinessStyles[ready.color]}`}
                                 style={readinessColor ? { color: readinessColor } : {}}
                               >
                                 {ready.label}
@@ -1171,9 +1130,6 @@ export default function BlocksPage() {
             );
           })}
 
-          <div className="text-xs text-right pr-1" style={{ color: '#94A3B8' }}>
-            Showing {filtered.length} block{filtered.length !== 1 ? 's' : ''} in {groups.length} group{groups.length !== 1 ? 's' : ''}
-          </div>
         </motion.div>
       )}
       </AnimatePresence>

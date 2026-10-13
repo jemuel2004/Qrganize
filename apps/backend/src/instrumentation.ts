@@ -18,12 +18,23 @@ export async function register() {
       console.error('[startup] Migration error (non-fatal):', err);
     }
 
-    // Accounts still on a well-known default password must change it (once per database, in the background)
+    // Faculty accounts still on a well-known default password must change it (once per database, in the background)
     setTimeout(() => {
       import('./auth/passwordChange')
         .then(m => m.scanForDefaultPasswordsOnce())
         .catch(err => console.warn('[startup] Default-password check skipped:', (err as Error).message));
     }, 15_000).unref?.();
+
+    // Class reminders on faculty devices (Web Push): the due ones go out every minute while the server is awake
+    import('./services/classPush')
+      .then(m => m.startClassPushTimer())
+      .catch(err => console.warn('[startup] Class reminder timer not started:', (err as Error).message));
+
+    // Live room pages: changes that come with time (a class starting or ending, 15 minutes without
+    // a scan, a freed time opening, the last 30 minutes) are announced on the minute they happen
+    import('./services/roomClock')
+      .then(m => m.startRoomClock())
+      .catch(err => console.warn('[startup] Room clock not started:', (err as Error).message));
 
     /*
      * Next.js 16 + Turbopack (dev): intermittent route-tree race can leave

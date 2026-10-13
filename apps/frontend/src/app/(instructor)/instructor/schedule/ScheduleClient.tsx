@@ -8,18 +8,20 @@ import { PageLoadTransition, revealProps } from '@/components/ui/PageLoadTransit
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import { RefreshButton } from '@/components/ui/RefreshButton';
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import { ChevronDown } from 'lucide-react';
-import { dayTone } from '@/lib/dayTones';
-import { WEEK_DAYS, daysCode, daysKey, daysLabel, parseDays, type WeekDay } from '@shared/dayCombination';
+import { motion, useReducedMotion } from 'framer-motion';
+import { WEEK_DAYS, daysLabel, normalizeDay, parseDays } from '@shared/dayCombination';
 import { blockCode } from '@shared/blockCode';
-import { Skeleton } from '@/components/ui/skeletons';
+import { clockRange12 } from '@shared/clock12';
 import { useToast } from '@/context/ToastContext';
+import Modal from '@/components/ui/Modal';
 import {
   CalendarDays, MapPin, Users, Clock,
   QrCode, CheckCircle2, AlertTriangle, XCircle, Timer,
-  Hourglass, ShieldCheck,
+  Hourglass, ShieldCheck, DoorOpen, Loader2,
 } from 'lucide-react';
+import ReleaseClassroomDialog from './ReleaseClassroomDialog';
+import WeekCalendar, { WeekCalendarSkeleton, minutesOf, type CalendarEvent, type CalendarFlag } from './WeekCalendar';
+import { RELEASE_STATE, releaseDateLabel, type RoomRelease } from '@/lib/roomRelease';
 
 interface SessionData {
   day: string;
@@ -27,6 +29,8 @@ interface SessionData {
   end_time: string;
   room_name: string | null;
   room_id: number | null;
+  /** 'lec' | 'lab' (missing on older servers) */
+  type?: string | null;
 }
 interface Schedule {
   master_schedule_id: number;
@@ -53,6 +57,7 @@ interface RoomOccupancy { status: string; is_self: boolean; }
 
 /* ── Scan Availability Logic ─────────────────────────────────────────────── */
 type ScanStatus =
+  | 'released'
   | 'no-room'
   | 'not-today'
   | 'not-yet'
@@ -70,9 +75,11 @@ function getScanStatus(
   occupancy: Record<number, RoomOccupancy>,
   requests: Record<number, string>,
   msId: number,
+  releasedToday = false,
 ): ScanStatus {
   if (!sess.room_id) return 'no-room';
   if (sess.day !== todayName) return 'not-today';
+  if (releasedToday) return 'released';
 
   const [sh, sm] = sess.start_time.split(':').map(Number);
   const [eh, em] = sess.end_time.split(':').map(Number);
@@ -108,28 +115,30 @@ interface BadgeConfig {
 function badgeConfig(status: ScanStatus): BadgeConfig | null {
   switch (status) {
     case 'not-today': return null;
+    case 'released':
+      return { label: 'Freed for others today', icon: <DoorOpen className="w-3.5 h-3.5" />, classes: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
     case 'no-room':
-      return { label: 'No Room Assigned', icon: <MapPin className="w-3 h-3" />, classes: 'bg-[#F8FAFC] text-[#64748B] border-[#E2E8F0]' };
+      return { label: 'No Room Assigned', icon: <MapPin className="w-3.5 h-3.5" />, classes: 'bg-[#F8FAFC] text-[#64748B] border-[#E2E8F0]' };
     case 'not-yet':
-      return { label: 'Not Yet Available', icon: <Hourglass className="w-3 h-3" />, classes: 'bg-[#EFF6FF] text-[#1D5BD6] border-[#BFDBFE]' };
+      return { label: 'Not Yet Available', icon: <Hourglass className="w-3.5 h-3.5" />, classes: 'bg-[#EFF6FF] text-[#1D5BD6] border-[#BFDBFE]' };
     case 'available':
-      return { label: 'Available to Scan', icon: <QrCode className="w-3 h-3" />, classes: 'bg-emerald-50 text-emerald-700 border-emerald-200', pulse: true };
+      return { label: 'Available to Scan', icon: <QrCode className="w-3.5 h-3.5" />, classes: 'bg-emerald-50 text-emerald-700 border-emerald-200', pulse: true };
     case 'in-use-self':
-      return { label: 'Scan Active — In Use', icon: <ShieldCheck className="w-3 h-3" />, classes: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+      return { label: 'Scan Active — In Use', icon: <ShieldCheck className="w-3.5 h-3.5" />, classes: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
     case 'in-use-other':
-      return { label: 'Room Already In Use', icon: <XCircle className="w-3 h-3" />, classes: 'bg-red-50 text-red-700 border-red-200' };
+      return { label: 'Room Already In Use', icon: <XCircle className="w-3.5 h-3.5" />, classes: 'bg-red-50 text-red-700 border-red-200' };
     case 'pending-confirmation':
-      return { label: 'Pending Confirmation', icon: <Timer className="w-3 h-3" />, classes: 'bg-amber-50 text-amber-700 border-amber-200', pulse: true };
+      return { label: 'Pending Confirmation', icon: <Timer className="w-3.5 h-3.5" />, classes: 'bg-amber-50 text-amber-700 border-amber-200', pulse: true };
     case 'approved':
-      return { label: 'Room Change Approved', icon: <CheckCircle2 className="w-3 h-3" />, classes: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+      return { label: 'Room Change Approved', icon: <CheckCircle2 className="w-3.5 h-3.5" />, classes: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
     case 'expired':
-      return { label: 'Scan Window Expired', icon: <AlertTriangle className="w-3 h-3" />, classes: 'bg-[#F8FAFC] text-[#64748B] border-[#E2E8F0]' };
+      return { label: 'Scan Window Expired', icon: <AlertTriangle className="w-3.5 h-3.5" />, classes: 'bg-[#F8FAFC] text-[#64748B] border-[#E2E8F0]' };
     default: return null;
   }
 }
 
 function ScanAvailabilityBadge({
-  sess, now, todayName, occupancy, requests, msId,
+  sess, now, todayName, occupancy, requests, msId, releasedToday,
 }: {
   sess: SessionData;
   now: Date;
@@ -137,12 +146,13 @@ function ScanAvailabilityBadge({
   occupancy: Record<number, RoomOccupancy>;
   requests: Record<number, string>;
   msId: number;
+  releasedToday: boolean;
 }) {
-  const status = getScanStatus(sess, now, todayName, occupancy, requests, msId);
+  const status = getScanStatus(sess, now, todayName, occupancy, requests, msId, releasedToday);
   const cfg = badgeConfig(status);
   if (!cfg) return null;
   return (
-    <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-md border ${cfg.classes} ${cfg.pulse ? 'animate-pulse' : ''}`}>
+    <span className={`inline-flex items-center gap-1.5 text-[13px] font-semibold px-2.5 py-1 rounded-md border ${cfg.classes} ${cfg.pulse ? 'animate-pulse' : ''}`}>
       {cfg.icon}
       {cfg.label}
     </span>
@@ -160,195 +170,60 @@ function fmt12(t: string): string {
   return `${h}:${m} ${ampm}`;
 }
 
-function typeLabel(lecH: number, labH: number): string {
-  if (lecH > 0 && labH > 0) return 'Lec + Lab';
-  if (labH > 0) return 'Lab';
-  return 'Lecture';
-}
+/** A meeting on the calendar, with what it came from (for the scan status and details) */
+interface Meeting { event: CalendarEvent; sess: SessionData; sched: Schedule }
 
-/** One meeting time of a class inside a day combination (e.g. 7:00–8:30 on Mon and Thu) */
-interface ComboSlot { start_time: string; end_time: string; sessions: SessionData[] }
-
-/** A class as it shows under one day combination */
-interface ComboClass {
-  key: string;
-  master_schedule_id: number;
-  subject_code: string;
-  subject_name: string;
-  block_name: string;
-  year_level: string;
-  program_code: string;
-  lecture_hours: number;
-  laboratory_hours: number;
-  slots: ComboSlot[];
-}
-
-/** A day combination this faculty teaches on — the same sets (MTh, TF, W…) as Scheduling */
-interface ComboGroup { key: string; days: WeekDay[]; code: string; label: string; classes: ComboClass[] }
-
-const dayIndex = (d: string) => WEEK_DAYS.indexOf(d as WeekDay);
-
-/**
- * Only the day combinations this faculty actually has. Each meeting time of a
- * class counts on the set of days it meets (Mon + Thu at 7:00 → MTh), so a
- * Lecture on TF and its Lab on W show under TF and W.
- */
-function buildCombos(schedules: Schedule[]): ComboGroup[] {
-  const groups = new Map<string, ComboGroup>();
+/** Every session of every class as a calendar meeting; a class listed twice (part moved to Overload) counts once */
+function buildMeetings(schedules: Schedule[]): Meeting[] {
   const seen = new Set<number>();
+  const out: Meeting[] = [];
   for (const s of schedules) {
-    // A class listed twice (e.g. part of it moved to Overload) meets only once
     if (seen.has(s.master_schedule_id)) continue;
     seen.add(s.master_schedule_id);
-    const byTime = new Map<string, SessionData[]>();
+    // "Lec" / "Lab" only matters for a subject that has both parts
+    const twoParts = (parseFloat(String(s.lecture_hours)) || 0) > 0 && (parseFloat(String(s.laboratory_hours)) || 0) > 0;
     for (const sess of s.sessions ?? []) {
-      if (!sess.day || !sess.start_time || !sess.end_time) continue;
-      const k = `${sess.start_time}|${sess.end_time}`;
-      byTime.set(k, [...(byTime.get(k) ?? []), sess]);
-    }
-    for (const [time, sessions] of byTime) {
-      const days = parseDays(sessions.map(x => x.day));
-      if (!days) continue;
-      const key = daysKey(days);
-      const group = groups.get(key) ?? { key, days, code: daysCode(days), label: daysLabel(days), classes: [] };
-      groups.set(key, group);
-      const [start_time, end_time] = time.split('|');
-      const slot = { start_time, end_time, sessions: [...sessions].sort((a, b) => dayIndex(a.day) - dayIndex(b.day)) };
-      const existing = group.classes.find(c => c.master_schedule_id === s.master_schedule_id);
-      if (existing) existing.slots.push(slot);
-      else group.classes.push({
-        key: `${s.master_schedule_id}-${key}`,
-        master_schedule_id: s.master_schedule_id,
-        subject_code: s.subject_code,
-        subject_name: s.subject_name,
-        block_name: s.block_name,
-        year_level: s.year_level,
-        program_code: s.program_code,
-        lecture_hours: s.lecture_hours,
-        laboratory_hours: s.laboratory_hours,
-        slots: [slot],
+      const day = normalizeDay(sess.day ?? '');
+      if (!day || !sess.start_time || !sess.end_time) continue;
+      out.push({
+        sess,
+        sched: s,
+        event: {
+          key: `${s.master_schedule_id}-${day}-${sess.start_time}`,
+          msId: s.master_schedule_id,
+          day,
+          startMin: minutesOf(sess.start_time),
+          endMin: minutesOf(sess.end_time),
+          subject_code: s.subject_code,
+          subject_name: s.subject_name,
+          blockLabel: [s.program_code, blockCode(s.year_level, s.block_name)].filter(Boolean).join(' '),
+          room_name: sess.room_name,
+          part: twoParts ? (sess.type === 'lab' ? 'lab' : sess.type === 'lec' ? 'lec' : null) : null,
+        },
       });
     }
   }
-  const first = (c: ComboClass) => c.slots.reduce((m, x) => (x.start_time < m ? x.start_time : m), '99');
-  for (const g of groups.values()) {
-    for (const c of g.classes) c.slots.sort((a, b) => a.start_time.localeCompare(b.start_time));
-    g.classes.sort((a, b) => first(a).localeCompare(first(b)) || a.subject_code.localeCompare(b.subject_code, undefined, { numeric: true }));
+  return out;
+}
+
+/** A class's meetings in the week, same time + part on several days as one line: "Mon / Thu · 8:30 AM – 10:00 AM" */
+function meetingLines(meetings: Meeting[]) {
+  const groups = new Map<string, Meeting[]>();
+  for (const m of meetings) {
+    const k = `${m.sess.start_time}|${m.sess.end_time}|${m.event.part ?? ''}|${m.sess.room_name ?? ''}`;
+    groups.set(k, [...(groups.get(k) ?? []), m]);
   }
-  // Week order (MTh, TF, W, …); combinations starting the same day: more days first
-  return [...groups.values()].sort((a, b) =>
-    dayIndex(a.days[0]) - dayIndex(b.days[0]) || b.days.length - a.days.length || a.key.localeCompare(b.key));
-}
-
-function ComboClassRow({
-  item,
-  todayName,
-  showScanBadges,
-  now,
-  occupancy,
-  requests,
-}: {
-  item: ComboClass;
-  todayName: string;
-  showScanBadges: boolean;
-  now: Date;
-  occupancy: Record<number, RoomOccupancy>;
-  requests: Record<number, string>;
-}) {
-  const lecH = parseFloat(String(item.lecture_hours)) || 0;
-  const labH = parseFloat(String(item.laboratory_hours)) || 0;
-  const sessions = item.slots.flatMap(x => x.sessions);
-  const rooms = [...new Set(sessions.map(x => x.room_name).filter((r): r is string => !!r))];
-  const todaySessions = showScanBadges ? sessions.filter(x => x.day === todayName) : [];
-
-  return (
-    <div className="bg-white rounded-2xl border border-[#E2E8F0] shadow-[0_1px_3px_rgba(0,0,0,0.06)] px-4 sm:px-5 py-4 transition-shadow duration-200 hover:shadow-[0_6px_16px_-8px_rgba(11,42,91,0.25)]">
-      <div className="flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-5">
-        <div className="flex flex-col gap-1 flex-shrink-0">
-          {item.slots.map(slot => (
-            <div key={`${slot.start_time}-${slot.end_time}`} className="flex items-center gap-2 text-sm font-semibold text-[#0B2A5B] tabular-nums">
-              <Clock className="w-4 h-4 text-[#1D5BD6] flex-shrink-0" />
-              {fmt12(slot.start_time)} – {fmt12(slot.end_time)}
-            </div>
-          ))}
-        </div>
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-bold text-[#0F172A] text-base">{item.subject_code}</span>
-            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md border bg-[#F8FAFC] text-[#475569] border-[#E2E8F0]">
-              {typeLabel(lecH, labH)}
-            </span>
-          </div>
-          <p className="text-sm text-[#0F172A] font-medium mt-0.5 break-words">{item.subject_name}</p>
-          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs text-[#475569]">
-            <span className="flex items-center gap-1.5">
-              <Users className="w-3 h-3 text-[#1D5BD6]" />
-              {[item.program_code, blockCode(item.year_level, item.block_name)].filter(Boolean).join(' ')}
-            </span>
-            {rooms.length > 0 ? (
-              <span className="flex items-center gap-1.5">
-                <MapPin className="w-3 h-3 text-[#1D5BD6]" />
-                {rooms.join(' / ')}
-              </span>
-            ) : (
-              <span className="flex items-center gap-1.5 text-[#B45309] font-medium">
-                <MapPin className="w-3 h-3" /> No room assigned
-              </span>
-            )}
-          </div>
-          {todaySessions.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {todaySessions.map(sess => (
-                <ScanAvailabilityBadge
-                  key={`${sess.start_time}-${sess.end_time}`}
-                  sess={sess}
-                  now={now}
-                  todayName={todayName}
-                  occupancy={occupancy}
-                  requests={requests}
-                  msId={item.master_schedule_id}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/** Columns for the combination buttons: up to 3 a row on phones, all in one row from tablets up */
-const comboCols = (n: number) => ({
-  ['--combo-cols' as string]: Math.min(Math.max(n, 1), 3),
-  ['--combo-cols-sm' as string]: Math.min(Math.max(n, 1), 7),
-});
-const COMBO_GRID = 'grid grid-cols-[repeat(var(--combo-cols),minmax(0,1fr))] sm:grid-cols-[repeat(var(--combo-cols-sm),minmax(0,1fr))] gap-x-2 gap-y-3 sm:gap-3 mb-5 pt-2';
-
-/** Same shape as the page — combination buttons, then the card (with its list when open) */
-function ScheduleSkeleton({ days, rows }: { days: number; rows: number }) {
-  return (
-    <div>
-      <div className={COMBO_GRID} style={comboCols(days)}>
-        {Array.from({ length: days }, (_, i) => <Skeleton key={i} className="h-12 rounded-xl" />)}
-      </div>
-      <div className="bg-white rounded-2xl border-2 border-[#E2E8F0] overflow-hidden mb-5">
-        <div className="p-5 lg:px-6 lg:py-6 flex items-center gap-3.5">
-          <Skeleton className="w-11 h-11 rounded-xl flex-shrink-0" />
-          <div className="flex-1 min-w-0 space-y-2">
-            <Skeleton className="h-3 w-28 rounded" />
-            <Skeleton className="h-6 w-10 rounded" />
-          </div>
-          <Skeleton className="h-4 w-24 rounded" />
-        </div>
-        {rows > 0 && (
-          <div className="border-t border-[#EEF2F8] p-4 space-y-3">
-            {Array.from({ length: rows }, (_, i) => <Skeleton key={i} className="h-[144px] sm:h-[110px] rounded-2xl" />)}
-          </div>
-        )}
-      </div>
-    </div>
-  );
+  return [...groups.values()]
+    .map(ms => ({
+      key: ms[0].event.key,
+      days: daysLabel(parseDays(ms.map(m => m.event.day)) ?? []),
+      firstDay: Math.min(...ms.map(m => WEEK_DAYS.indexOf(m.event.day))),
+      time: clockRange12(ms[0].event.startMin, ms[0].event.endMin),
+      start: ms[0].event.startMin,
+      part: ms[0].event.part,
+      room: ms[0].sess.room_name,
+    }))
+    .sort((x, y) => x.firstDay - y.firstDay || x.start - y.start);
 }
 
 /* ── Main Page Component ─────────────────────────────────────────────────── */
@@ -359,22 +234,32 @@ export default function ScheduleClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [now, setNow] = useState(new Date());
-  /** The picked day combination ('' = the one with today in it, else the first) */
-  const [selectedKey, setSelectedKey] = useState('');
-  // The class list stays folded until the card is clicked
-  const [listOpen, setListOpen] = useState(false);
+  /** The class whose details are open (from a block on the calendar) */
+  const [openMsId, setOpenMsId] = useState<number | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  /** Classrooms this faculty made available on a date (not ended yet) */
+  const [releases, setReleases] = useState<RoomRelease[]>([]);
+  const [releaseToday, setReleaseToday] = useState('');
+  const [releaseOpen, setReleaseOpen] = useState(false);
+  const [takingBack, setTakingBack] = useState<number | null>(null);
   const reduceMotion = useReducedMotion();
   const toast = useToast();
 
   const load = useCallback((silent = false): Promise<boolean> => {
     if (!silent) { setLoading(true); setError(''); }
-    return fetch('/api/instructor/my-schedule')
-      .then(r => r.ok ? r.json() : Promise.reject(r))
-      .then(d => {
+    return Promise.all([
+      fetch('/api/instructor/my-schedule').then(r => r.ok ? r.json() : Promise.reject(r)),
+      // The released classrooms list never blocks the schedule itself
+      fetch('/api/instructor/room-releases', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).catch(() => null),
+    ])
+      .then(([d, rel]) => {
         setSchedules(d.schedules || []);
         setOccupancy(d.room_occupancy ?? {});
         setRequests(d.room_requests ?? {});
+        if (rel) {
+          setReleases(Array.isArray(rel.releases) ? rel.releases : []);
+          setReleaseToday(String(rel.today ?? ''));
+        }
         setNow(new Date());
         setError('');
         return true;
@@ -402,24 +287,47 @@ export default function ScheduleClient() {
 
   const showSkeleton = useMinLoading((loading && schedules.length === 0 && !error) || refreshing, PAGE_SKELETON_MIN_MS);
 
+  // Take back a classroom made available (only before its class time starts)
+  const takeBack = useCallback(async (r: RoomRelease) => {
+    setTakingBack(r.id);
+    try {
+      const res = await fetch(`/api/instructor/room-releases/${r.id}`, { method: 'DELETE' });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { toast.error(d.error || 'Could not take the classroom back. Please try again.'); return; }
+      toast.success(`${r.room_name ?? 'Your classroom'} is yours again on ${releaseDateLabel(r.date)}.`);
+      await load(true);
+    } catch {
+      toast.error('Unable to reach the server. Please check your connection.');
+    } finally {
+      setTakingBack(null);
+    }
+  }, [load, toast]);
+
   const todayName = now.toLocaleDateString('en-US', { weekday: 'long' });
-  const combos = useMemo(() => buildCombos(schedules), [schedules]);
-  const hasToday = (c: ComboGroup) => c.days.includes(todayName as WeekDay);
-  // A combination that's gone after a live update falls back to today's (or the first)
-  const selected = combos.find(c => c.key === selectedKey) ?? combos.find(hasToday) ?? combos[0] ?? null;
-  const comboClasses = selected?.classes ?? [];
-  const tone = dayTone(selected?.days[0] ?? todayName);
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const meetings = useMemo(() => buildMeetings(schedules), [schedules]);
+  const events = useMemo(() => meetings.map(m => m.event), [meetings]);
+  const meetingByKey = useMemo(() => new Map(meetings.map(m => [m.event.key, m])), [meetings]);
+  /** Classroom made available today for this meeting */
+  const releasedToday = (msId: number, sess: SessionData) => releases.some(r =>
+    r.master_schedule_id === msId && r.date === releaseToday && r.day === sess.day && r.start_time === sess.start_time.slice(0, 5));
+  const statusOf = (m: Meeting) =>
+    getScanStatus(m.sess, now, todayName, occupancy, requests, m.event.msId, releasedToday(m.event.msId, m.sess));
+  /** Today's blocks say when to scan; the rest is in the details */
+  const flagOf = (e: CalendarEvent): CalendarFlag => {
+    const m = meetingByKey.get(e.key);
+    if (!m || e.day !== todayName) return null;
+    const st = statusOf(m);
+    return st === 'available' ? 'scan' : st === 'in-use-self' ? 'in-use' : st === 'released' ? 'released' : null;
+  };
+  const hasClassesToday = events.some(e => e.day === todayName);
 
-  const isViewingToday = !!selected && hasToday(selected);
-  const availableCount = isViewingToday
-    ? comboClasses.reduce((n, item) => n + item.slots.flatMap(x => x.sessions).filter(sess =>
-        sess.day === todayName
-        && getScanStatus(sess, now, todayName, occupancy, requests, item.master_schedule_id) === 'available').length, 0)
-    : 0;
-
-  const classCountLabel = isViewingToday
-    ? "Today's Classes"
-    : `${selected?.label ?? ''} Classes`;
+  /* Class details */
+  const openMeetings = openMsId == null ? [] : meetings.filter(m => m.event.msId === openMsId);
+  const openClass = openMeetings[0]?.sched ?? null;
+  const openRooms = [...new Set(openMeetings.map(m => m.sess.room_name).filter((r): r is string => !!r))];
+  const openToday = openMeetings.filter(m => m.event.day === todayName);
+  const openReleases = openMsId == null ? [] : releases.filter(r => r.master_schedule_id === openMsId && r.date !== releaseToday);
 
   return (
     <div className="min-h-full p-4 sm:p-6 lg:p-8">
@@ -431,7 +339,16 @@ export default function ScheduleClient() {
         <div className="mt-2 lg:mt-5 mb-4">
           <WatermarkTitle>My Schedule</WatermarkTitle>
         </div>
-        <div className="flex justify-end">
+        <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2.5">
+          {/* Away on official business: free the classroom for one date */}
+          <motion.button
+            type="button"
+            onClick={() => setReleaseOpen(true)}
+            whileTap={reduceMotion ? undefined : { scale: 0.97 }}
+            className="inline-flex items-center justify-center gap-2 h-11 px-5 rounded-xl border-2 border-[#1D5BD6] bg-white text-[15px] font-semibold text-[#1D5BD6] hover:bg-[#EFF6FF] transition-colors w-full sm:w-auto"
+          >
+            <DoorOpen className="w-5 h-5" /> Free My Room
+          </motion.button>
           <RefreshButton overlay={false} onRefresh={refreshAll} loading={refreshing || showSkeleton} />
         </div>
       </div>
@@ -444,140 +361,82 @@ export default function ScheduleClient() {
 
       <PageLoadTransition
         showSkeleton={showSkeleton}
-        skeleton={<ScheduleSkeleton days={Math.max(1, combos.length)} rows={listOpen ? comboClasses.length : 0} />}
+        skeleton={<WeekCalendarSkeleton />}
       >
-      {combos.length > 0 && selected ? (
-        <>
-          {/* The day combinations this faculty teaches on — the same sets as Scheduling (MTh, TF, W…) */}
-          <motion.div {...revealProps(0, reduceMotion)}>
-            <div className={COMBO_GRID} style={comboCols(combos.length)}>
-              {combos.map(c => {
-                const active = c.key === selected.key;
-                const isToday = hasToday(c);
-                const t = dayTone(c.days[0]);
-                const n = c.classes.length;
-                return (
-                  <motion.button
-                    key={c.key}
-                    type="button"
-                    onClick={() => { if (!active) { setSelectedKey(c.key); setListOpen(false); } }}
-                    whileTap={reduceMotion ? undefined : { scale: 0.96 }}
-                    whileHover={reduceMotion || active ? undefined : { y: -2 }}
-                    animate={{
-                      backgroundColor: active ? t.bar : t.bg,
-                      borderColor: active ? t.bar : t.border,
-                      color: active ? '#FFFFFF' : t.text,
-                    }}
-                    transition={{ duration: reduceMotion ? 0 : 0.25 }}
-                    aria-label={`${c.label}, ${n} class${n !== 1 ? 'es' : ''}${isToday ? ', today' : ''}`}
-                    aria-pressed={active}
-                    title={c.label}
-                    className="relative inline-flex items-center justify-center gap-1.5 sm:gap-2 px-2 sm:px-3 h-12 rounded-xl text-[15px] font-bold border-2 w-full min-w-0"
-                  >
-                    {/* Phones: the short code (MTh) so code + count always fit; wider screens: Mon / Thu */}
-                    <span className="sm:hidden truncate">{c.code}</span>
-                    <span className="hidden sm:inline truncate">{c.label}</span>
-                    <span
-                      className="min-w-6 h-6 px-1.5 rounded-full text-[12px] font-bold inline-flex items-center justify-center tabular-nums flex-shrink-0"
-                      style={active ? { backgroundColor: 'rgba(255,255,255,0.25)', color: '#FFFFFF' } : { backgroundColor: '#FFFFFF', color: t.text }}
-                    >
-                      {n}
-                    </span>
-                    {/* Sits on the top edge, so it never crowds the name or count */}
-                    {isToday && (
-                      <span
-                        className="absolute -top-2.5 left-1/2 -translate-x-1/2 px-1.5 py-px rounded-md text-[10px] font-bold uppercase tracking-wide leading-tight whitespace-nowrap border"
-                        style={{ backgroundColor: '#FFFFFF', color: t.text, borderColor: t.border }}
-                      >
-                        Today
-                      </span>
-                    )}
-                  </motion.button>
-                );
-              })}
+      {releases.length > 0 && (
+        <motion.section
+          {...revealProps(0, reduceMotion)}
+          aria-label="Rooms you freed"
+          className="bg-white rounded-2xl border border-[#E2E8F0] shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden mb-5"
+        >
+          <div className="flex items-center gap-3 px-4 sm:px-5 py-3.5 border-b border-[#EEF2F8]">
+            <span className="w-10 h-10 rounded-xl bg-[#ECFDF5] flex items-center justify-center flex-shrink-0">
+              <DoorOpen className="w-5 h-5 text-[#047857]" />
+            </span>
+            <div className="min-w-0">
+              <h2 className="text-[16px] font-bold text-[#0B2A5B] leading-tight">Rooms You Freed</h2>
+              <p className="text-[13px] text-[#64748B]">Only on these dates — your regular classroom stays yours.</p>
             </div>
-          </motion.div>
-
-          {/* One full-width card for every combination, so nothing jumps when it changes */}
-          <motion.div
-            {...revealProps(1, reduceMotion)}
-            className="bg-white rounded-2xl border-2 shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden mb-5 transition-colors duration-300"
-            style={{ borderColor: tone.border }}
-          >
-            <button
-              type="button"
-              onClick={() => comboClasses.length > 0 && setListOpen(o => !o)}
-              aria-expanded={listOpen}
-              className={`w-full p-4 sm:p-5 lg:px-6 lg:py-6 flex items-center gap-3 sm:gap-3.5 text-left transition-[background-color,transform] duration-200 ${comboClasses.length > 0 ? 'hover:bg-[#F8FAFC] active:scale-[0.995] cursor-pointer' : 'cursor-default'}`}
-            >
-              <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors duration-300" style={{ backgroundColor: tone.bg }}>
-                <CalendarDays className="w-5 h-5 transition-colors duration-300" style={{ color: tone.bar }} />
-              </div>
-              {/* Another combination picked: its numbers fade in where the old ones were */}
-              <AnimatePresence mode="wait" initial={false}>
-                <motion.div
-                  key={selected.key}
-                  initial={reduceMotion ? false : { opacity: 0, y: 4 }}
-                  animate={{ opacity: 1, y: 0, transition: { duration: 0.2, ease: [0.16, 1, 0.3, 1] } }}
-                  exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4, transition: { duration: 0.12 } }}
-                  className="flex-1 min-w-0 flex items-center gap-3"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-bold uppercase tracking-wide mb-1 leading-snug" style={{ color: tone.text }}>
-                      {classCountLabel}
-                    </div>
-                    <div className="flex items-center gap-2.5 flex-wrap">
-                      <span className="text-2xl font-bold tabular-nums leading-none text-[#0B2A5B]">
-                        {comboClasses.length}
-                      </span>
-                      {availableCount > 0 && (
-                        <span className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border text-[13px] font-semibold bg-emerald-50 text-emerald-700 border-emerald-200">
-                          <QrCode className="w-4 h-4" /> {availableCount} ready to scan
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <span className="inline-flex items-center gap-1.5 text-[14px] font-semibold flex-shrink-0" style={{ color: tone.text }}>
-                    {listOpen ? 'Hide' : 'View classes'}
-                    <motion.span animate={{ rotate: listOpen ? 180 : 0 }} transition={{ duration: reduceMotion ? 0 : 0.3 }}>
-                      <ChevronDown className="w-5 h-5" />
-                    </motion.span>
-                  </span>
-                </motion.div>
-              </AnimatePresence>
-            </button>
-            <AnimatePresence initial={false}>
-              {listOpen && comboClasses.length > 0 && (
-                <motion.div
-                  key="list"
-                  initial={reduceMotion ? false : { height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1, transition: { duration: 0.35, ease: [0.4, 0, 0.2, 1] } }}
-                  exit={reduceMotion ? { opacity: 0 } : { height: 0, opacity: 0, transition: { duration: 0.28, ease: [0.4, 0, 0.2, 1] } }}
-                  className="overflow-hidden"
-                >
-                  <div className="border-t border-[#EEF2F8] p-3 sm:p-4 space-y-3" style={{ backgroundColor: tone.col }}>
-                    {comboClasses.map(item => (
-                      <ComboClassRow
-                        key={item.key}
-                        item={item}
-                        todayName={todayName}
-                        showScanBadges={isViewingToday}
-                        now={now}
-                        occupancy={occupancy}
-                        requests={requests}
-                      />
-                    ))}
-                    {isViewingToday && (
-                      <p className="text-xs text-[#475569] text-center pt-1">
-                        QR scanning becomes available 15 minutes before class start.
+          </div>
+          <ul className="divide-y divide-[#EEF2F8]">
+            {releases.map(r => {
+              const st = RELEASE_STATE[r.state];
+              return (
+                <li key={r.id} className="px-4 sm:px-5 py-3.5 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[15px] font-bold text-[#0B2A5B]">
+                      {releaseDateLabel(r.date)}
+                      <span className="font-semibold tabular-nums text-[#334155]"> · {fmt12(r.start_time)} – {fmt12(r.end_time)}</span>
+                    </p>
+                    <p className="text-[14px] text-[#334155] break-words">
+                      <span className="font-semibold">{r.room_name ?? 'Classroom'}</span>
+                      {' · '}{r.subject_code} {[r.program_code, blockCode(r.year_level, r.block_name)].filter(Boolean).join(' ')}
+                    </p>
+                    {(r.reason || r.taken_by || r.reserved_by) && (
+                      <p className="text-[13px] text-[#64748B] break-words">
+                        {[
+                          r.reason,
+                          r.taken_by ? `Using it now: ${r.taken_by}` : r.state === 'reserved' && r.reserved_by ? `Reserved by ${r.reserved_by}` : null,
+                        ].filter(Boolean).join(' · ')}
                       </p>
                     )}
                   </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </motion.div>
-        </>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <span className={`inline-flex items-center text-[12px] font-semibold px-2.5 py-1 rounded-md border ${st.cls}`}>{st.label}</span>
+                    {r.state === 'upcoming' && (
+                      <button
+                        type="button"
+                        onClick={() => takeBack(r)}
+                        disabled={takingBack !== null}
+                        className="inline-flex items-center justify-center gap-1.5 h-9 px-3 rounded-lg border border-[#CBD5E1] text-[13px] font-semibold text-[#0B2A5B] hover:border-[#1D5BD6] hover:text-[#1D5BD6] transition-colors disabled:opacity-50"
+                      >
+                        {takingBack === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                        Take back
+                      </button>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </motion.section>
+      )}
+
+      {events.length > 0 ? (
+        <motion.div {...revealProps(0, reduceMotion)} className="mb-5">
+          <WeekCalendar
+            events={events}
+            todayName={todayName}
+            nowMin={nowMin}
+            flagOf={flagOf}
+            onOpen={e => setOpenMsId(e.msId)}
+          />
+          {hasClassesToday && (
+            <p className="mt-3 text-[14px] text-[#475569] text-center">
+              Tap a class for its details. QR scanning opens 15 minutes before class starts.
+            </p>
+          )}
+        </motion.div>
       ) : !error ? (
         <motion.div {...revealProps(0, reduceMotion)} className="bg-white border border-[#E2E8F0] rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.06)] px-6 py-12 flex flex-col items-center gap-4 text-center">
           <div className="w-14 h-14 rounded-2xl bg-[#EFF6FF] border border-[#BFDBFE] flex items-center justify-center">
@@ -597,6 +456,104 @@ export default function ScheduleClient() {
       ) : null}
       </PageLoadTransition>
       </div>
+
+      <Modal
+        open={openClass != null}
+        onClose={() => setOpenMsId(null)}
+        title={openClass?.subject_code ?? ''}
+        subtitle={openClass?.subject_name}
+        icon={CalendarDays}
+        size="sm"
+        footer={
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => setOpenMsId(null)}
+              className="min-h-12 px-6 rounded-xl text-base font-semibold bg-[var(--surface-elevated)] border border-[color:var(--border)] text-[color:var(--foreground-secondary)] hover:bg-[var(--background-secondary)] transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        }
+      >
+        {openClass && (
+          <div className="space-y-4">
+            {/* Block and room — two clear labels, like Room Monitoring */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-lg bg-[#1E4FB8] px-3 py-1.5 text-[15px] font-bold leading-none" style={{ color: '#FFFFFF' }}>
+                <Users className="w-4 h-4" aria-hidden />
+                <span className="sr-only">Block </span>
+                {[openClass.program_code, blockCode(openClass.year_level, openClass.block_name)].filter(Boolean).join(' ')}
+              </span>
+              {openRooms.length > 0 ? (
+                <span className="inline-flex items-center gap-1.5 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-3 py-1.5 text-[15px] leading-none text-[#0B2A5B]">
+                  <MapPin className="w-4 h-4 text-[#1D5BD6]" aria-hidden />
+                  <span className="font-medium text-[#475569]">Room</span>{' '}
+                  <span className="font-bold">{openRooms.join(' / ')}</span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] px-3 py-1.5 text-[15px] font-semibold leading-none text-[#B45309]">
+                  <MapPin className="w-4 h-4" aria-hidden /> No room assigned
+                </span>
+              )}
+            </div>
+
+            <div>
+              <h3 className="text-[15px] font-bold text-[color:var(--foreground)] mb-2">Class times</h3>
+              <ul className="rounded-xl border border-[color:var(--border)] overflow-hidden divide-y divide-[color:var(--border)]">
+                {meetingLines(openMeetings).map(l => (
+                  <li key={l.key} className="flex items-start gap-3 px-4 py-3">
+                    <Clock className="w-5 h-5 text-[#1D5BD6] flex-shrink-0 mt-0.5" aria-hidden />
+                    <span className="min-w-0 leading-snug">
+                      <span className="block text-[15px] font-bold text-[color:var(--foreground)] tabular-nums">{l.time}</span>
+                      <span className="block text-[14px] text-[color:var(--foreground-muted)]">
+                        {[l.days, l.part === 'lab' ? 'Laboratory' : l.part === 'lec' ? 'Lecture' : null, l.room].filter(Boolean).join(' · ')}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {openToday.length > 0 && (
+              <div>
+                <h3 className="text-[15px] font-bold text-[color:var(--foreground)] mb-2">Today</h3>
+                <div className="flex flex-wrap gap-2">
+                  {openToday.map(m => (
+                    <ScanAvailabilityBadge
+                      key={m.event.key}
+                      sess={m.sess}
+                      now={now}
+                      todayName={todayName}
+                      occupancy={occupancy}
+                      requests={requests}
+                      msId={m.event.msId}
+                      releasedToday={releasedToday(m.event.msId, m.sess)}
+                    />
+                  ))}
+                </div>
+                <p className="mt-2 text-[14px] text-[color:var(--foreground-muted)]">QR scanning opens 15 minutes before class starts.</p>
+              </div>
+            )}
+
+            {openReleases.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {openReleases.map(r => (
+                  <span key={r.id} className={`inline-flex items-center gap-1.5 text-[14px] font-semibold px-2.5 py-1 rounded-md border ${RELEASE_STATE.upcoming.cls}`}>
+                    <DoorOpen className="w-4 h-4" /> Free for others · {releaseDateLabel(r.date)}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      <ReleaseClassroomDialog
+        open={releaseOpen}
+        onClose={() => setReleaseOpen(false)}
+        onChanged={() => { void load(true); }}
+      />
     </div>
   );
 }

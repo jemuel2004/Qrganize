@@ -30,11 +30,17 @@ interface Reservation {
 interface RoomCounts { available: number; pending: number; occupied: number; total: number; }
 interface AvailableRoom {
   id: number; room_name: string; room_type: string; building: string | null; capacity: number | null;
+  /** Another faculty's class frees it today (Free My Room, or not checked in within 15 minutes) — only those can be requested */
+  freed_today?: boolean;
 }
 interface TodaySession {
   id: number; subject_code: string; subject_name: string;
   block_name: string; year_level: string; status: string;
   start_time: string; end_time: string; room_name: string | null;
+  /** The faculty made this class's room available for today */
+  room_released?: boolean;
+  /** Not checked in within 15 minutes of the start: the room is open to others until the class ends */
+  room_unclaimed?: boolean;
 }
 interface DashboardData {
   my_reservation:  Reservation | null;
@@ -90,7 +96,7 @@ function LiveClock() {
   const [time, setTime] = useState('');
   useEffect(() => {
     const update = () =>
-      setTime(new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: SCHOOL_TZ }));
+      setTime(new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true, timeZone: SCHOOL_TZ }));
     update();
     const t = setInterval(update, 1000);
     return () => clearInterval(t);
@@ -157,16 +163,19 @@ function RoomRow({ room }: { room: AvailableRoom }) {
           <TypeBadge type={room.room_type} />
         </div>
         <p className="text-sm text-slate-300 mt-1 truncate">
+          {room.freed_today && <span className="font-semibold text-[#6EE7B7]">Freed today · </span>}
           {meta || 'Capacity N/A'}
         </p>
       </div>
-      <Link
-        href={`/instructor/room-requests?room=${room.id}`}
-        draggable={false}
-        className="flex-shrink-0 h-10 min-w-[5.5rem] px-4 rounded-lg border border-[#1D5BD6]/35 text-[#1D5BD6] text-sm font-semibold hover:bg-[#1D5BD6]/10 active:scale-95 transition-all duration-200 inline-flex items-center justify-center"
-      >
-        Request
-      </Link>
+      {room.freed_today && (
+        <Link
+          href={`/instructor/room-requests?room=${room.id}`}
+          draggable={false}
+          className="flex-shrink-0 h-10 min-w-[5.5rem] px-4 rounded-lg border border-[#1D5BD6]/35 text-[#1D5BD6] text-sm font-semibold hover:bg-[#1D5BD6]/10 active:scale-95 transition-all duration-200 inline-flex items-center justify-center"
+        >
+          Request
+        </Link>
+      )}
     </div>
   );
 }
@@ -340,7 +349,7 @@ function DashHeader({
   const inner = (
     <>
       <div className="flex items-center gap-3 min-w-0">
-        <div className="w-10 h-10 rounded-lg bg-[#12408F]/15 flex items-center justify-center flex-shrink-0">
+        <div className="w-10 h-10 rounded-xl bg-[#12408F]/10 ring-1 ring-inset ring-[#12408F]/15 [html:not(.light)_&]:bg-[#1D5BD6]/20 [html:not(.light)_&]:ring-[#1D5BD6]/30 flex items-center justify-center flex-shrink-0">
           <Icon className="w-5 h-5 text-[#1D5BD6]" />
         </div>
         <h2 className="text-lg font-bold text-white leading-6 truncate">{title}</h2>
@@ -468,11 +477,11 @@ export default function InstructorDashboard() {
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setReserveErr(json.error || 'Failed to release room.');
+        setReserveErr(json.error || 'Could not free the room.');
         return;
       }
       setReleaseOpen(false);
-      toast.success(`${data.my_reservation.room_name} has been released.`);
+      toast.success(`${data.my_reservation.room_name} is now free for others.`);
       await load(true);
     } catch {
       setReserveErr('Connection error. Please try again.');
@@ -641,7 +650,7 @@ export default function InstructorDashboard() {
               <div className="text-left sm:text-right">
                 <p className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-1">Session started</p>
                 <p className="text-lg sm:text-xl font-black text-white">
-                  {new Date(data.my_reservation.occupied_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                  {new Date(data.my_reservation.occupied_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: SCHOOL_TZ })}
                 </p>
               </div>
             )}
@@ -659,7 +668,7 @@ export default function InstructorDashboard() {
                   disabled={releasing}
                   className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 border border-white/10 bg-white/5 hover:bg-red-500/10 hover:border-red-500/30 text-slate-200 hover:text-red-300 px-5 py-3 rounded-xl text-base font-semibold transition-all disabled:opacity-40 min-h-12"
                 >
-                  Release Room
+                  Free My Room
                 </button>
               )}
             </div>
@@ -667,7 +676,7 @@ export default function InstructorDashboard() {
         </motion.div>
       ) : data ? (
         <motion.div {...revealProps(0, reduceMotion)} className="bg-[#111827] border border-dashed border-white/10 rounded-2xl px-4 sm:px-6 py-4 flex flex-wrap sm:flex-nowrap items-center gap-4">
-          <div className="w-12 h-12 bg-white/5 rounded-xl flex items-center justify-center flex-shrink-0">
+          <div className="w-12 h-12 bg-white/5 border border-white/10 rounded-xl flex items-center justify-center flex-shrink-0">
             <DoorOpen className="w-6 h-6 text-slate-500" />
           </div>
           <div className="flex-1 min-w-0">
@@ -760,6 +769,16 @@ export default function InstructorDashboard() {
                           {blockCode(sess.year_level, sess.block_name)}
                           {sess.room_name ? ` · ${sess.room_name}` : ' · No room assigned'}
                         </p>
+                        {sess.room_released && (
+                          <span className="mt-1.5 inline-block text-[13px] font-semibold px-2 py-0.5 rounded-md border bg-[#ECFDF5] text-[#047857] border-[#A7F3D0]">
+                            Classroom made available to others today
+                          </span>
+                        )}
+                        {!sess.room_released && sess.room_unclaimed && (
+                          <span className="mt-1.5 inline-block text-[13px] font-semibold px-2 py-0.5 rounded-md border bg-amber-50 text-amber-700 border-amber-200">
+                            Not scanned — room open to others
+                          </span>
+                        )}
                       </div>
                     </div>
                   );
@@ -788,7 +807,7 @@ export default function InstructorDashboard() {
       <Modal
         open={releaseOpen}
         onClose={() => { if (!releasing) setReleaseOpen(false); }}
-        title="Release Room?"
+        title="Free My Room?"
         size="sm"
         footer={
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
@@ -806,15 +825,15 @@ export default function InstructorDashboard() {
               disabled={releasing}
               className="min-h-11 px-4 rounded-xl text-sm font-semibold bg-red-600 hover:bg-red-500 text-white disabled:opacity-40 inline-flex items-center justify-center gap-2"
             >
-              {releasing ? <><Loader2 className="w-4 h-4 animate-spin" /> Releasing…</> : 'Release Room'}
+              {releasing ? <><Loader2 className="w-4 h-4 animate-spin" /> Freeing…</> : 'Free My Room'}
             </button>
           </div>
         }
       >
         <p className="text-sm text-slate-300 leading-relaxed">
-          Are you sure you want to release{' '}
+          Are you sure you want to free{' '}
           <span className="font-semibold text-white">{data?.my_reservation?.room_name ?? 'this room'}</span>?
-          It will become available for other faculty.
+          Other faculty whose class has no room can use it for the rest of your class time today.
         </p>
       </Modal>
 

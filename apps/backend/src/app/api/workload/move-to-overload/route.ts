@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { parseId } from '@/database/ids';
+import { readJsonObject } from '@/services/requestInput';
 import { query, transaction } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { syncWorkloadMonitoringNotifications } from '@/services/workloadMonitoring';
@@ -26,8 +28,14 @@ async function POST_handler(req: NextRequest) {
 
     await ensureSchema();
 
-    const { faculty_id, master_schedule_id, split_regular, component, parts } = await req.json();
-    const overloadComponent: string = component || 'full';
+    const body = await readJsonObject(req);
+    const faculty_id = parseId(body?.faculty_id);
+    const master_schedule_id = parseId(body?.master_schedule_id);
+    const split_regular = body?.split_regular;
+    const parts = body?.parts;
+    // 'lec' / 'lab' / 'full', as the Workload page sends it (the column holds 10 characters)
+    const component = body?.component;
+    const overloadComponent: string = component === 'lec' || component === 'lab' ? component : 'full';
 
     if (!faculty_id || !master_schedule_id) {
       return NextResponse.json({ error: 'Faculty and master schedule are required' }, { status: 400 });

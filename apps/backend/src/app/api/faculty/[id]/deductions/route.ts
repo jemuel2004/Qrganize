@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { cleanText, readJsonObject } from '@/services/requestInput';
 import { query } from '@/database/db';
 import { parseId } from '@/database/ids';
 import { getAuthUser } from '@/auth/auth';
-import { formatLoadCap, maxDeductionUnits, shownUnitsCap } from '@shared/regularLoad';
+import { formatLoadCap, maxDeductionUnits, permanentRegularLoadLimit, shownUnitsCap } from '@shared/regularLoad';
 import { getWorkloadPolicy } from '@/services/workloadPolicy';
 import { canAccessProgram, isScopedChair } from '@/services/programScope';
 import { withAudit } from '@/services/audit';
@@ -53,8 +54,11 @@ export async function GET(
     const id = parseId((await params).id);
     if (id === null) return NextResponse.json({ error: 'Faculty not found.' }, { status: 404 });
     const { searchParams } = new URL(req.url);
-    const semester   = searchParams.get('semester')    || '';
-    const schoolYear = searchParams.get('school_year') || '';
+    const semester   = cleanText(searchParams.get('semester'), 40);
+    const schoolYear = cleanText(searchParams.get('school_year'), 40);
+    if (semester === null || schoolYear === null) {
+      return NextResponse.json({ error: 'Invalid term.' }, { status: 400 });
+    }
 
     const result = await query(
       `SELECT id, deduction_type, description, deducted_units
@@ -94,8 +98,10 @@ async function POST_handler(
     await ensureTable();
     const id = parseId((await params).id);
     if (id === null) return NextResponse.json({ error: 'Faculty not found.' }, { status: 404 });
-    const body = await req.json();
-    const { deductions, semester, school_year } = body;
+    const body = await readJsonObject(req);
+    const semester = cleanText(body?.semester, 40);
+    const school_year = cleanText(body?.school_year, 40);
+    const deductions = body?.deductions;
 
     if (!semester || !school_year) {
       return NextResponse.json(
@@ -104,12 +110,17 @@ async function POST_handler(
       );
     }
 
-    const entries: { type: string; description: string; units: number }[] =
-      Array.isArray(deductions) ? deductions : [];
+    if (deductions !== undefined && deductions !== null && !Array.isArray(deductions)) {
+      return NextResponse.json({ error: 'Invalid deductions.' }, { status: 400 });
+    }
 
     // Validate — empty entries = "None / no deduction" which is valid
-    for (const e of entries) {
-      if (!e.type?.trim()) {
+    const entries: { type: string; description: string; units: number }[] = [];
+    for (const raw of Array.isArray(deductions) ? deductions : []) {
+      const e = raw !== null && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+      const type = cleanText(e.type, 100);
+      const description = cleanText(e.description, 2000);
+      if (!type || description === null) {
         return NextResponse.json(
           { error: 'Each deduction must have a type.' },
           { status: 400 },
@@ -118,10 +129,11 @@ async function POST_handler(
       const u = parseFloat(String(e.units));
       if (isNaN(u) || u <= 0) {
         return NextResponse.json(
-          { error: `Units for "${e.type}" must be greater than 0.` },
+          { error: `Units for "${type}" must be greater than 0.` },
           { status: 400 },
         );
       }
+      entries.push({ type, description, units: u });
     }
 
     const totalDeduction = entries.reduce(
@@ -129,7 +141,8 @@ async function POST_handler(
       0,
     );
     // Deloading can take at most the whole Regular Load (Settings → Workload Limits)
-    const maxDeduction = maxDeductionUnits(await getWorkloadPolicy());
+    const policy = await getWorkloadPolicy();
+    const maxDeduction = maxDeductionUnits(policy);
     if (totalDeduction > maxDeduction) {
       return NextResponse.json(
         { error: `Total deduction cannot exceed ${formatLoadCap(shownUnitsCap(maxDeduction))} units.` },
@@ -150,6 +163,23 @@ async function POST_handler(
         { error: 'Load deductions only apply to Permanent faculty.' },
         { status: 400 },
       );
+    }
+
+    // The Regular Load never goes past its limit: deloading that would leave the subjects
+    // already in Regular Load over the new limit is refused until part of them moves to Overload.
+    const newLimit = permanentRegularLoadLimit(totalDeduction, policy);
+    const currentRegular = parseFloat(String((await query(
+      `SELECT COALESCE(SUM(units), 0) AS total FROM instructor_loads
+        WHERE faculty_id = $1 AND load_category = 'Regular' AND academic_year = $2 AND semester = $3`,
+      [id, school_year, semester],
+    )).rows[0]?.total ?? 0)) || 0;
+    if (currentRegular > newLimit + 0.001) {
+      return NextResponse.json({
+        error: `With ${formatLoadCap(totalDeduction)} units of deloading the Regular Load limit is ${formatLoadCap(shownUnitsCap(newLimit))} units, `
+          + `but ${currentRegular.toFixed(2)} units are already in Regular Load. Move at least ${(currentRegular - newLimit).toFixed(2)} units `
+          + 'to Overload (or remove a subject) first, then save the deloading.',
+        over_limit: true,
+      }, { status: 409 });
     }
 
     // Replace all deductions for this semester/year atomically

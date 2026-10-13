@@ -1,5 +1,5 @@
 import { needsOneRoomSql } from '@shared/subjectCategory';
-import { isLabRoomType } from '@shared/classroomDemand';
+import { isLabRoomType } from '@shared/roomPlanning';
 import { roomKey } from '@shared/workloadImport';
 import { daysKey, parseDays } from '@shared/dayCombination';
 import { findScheduleConflicts, timeToMinutes } from '@/services/scheduleConflicts';

@@ -11,14 +11,15 @@ import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { TableSkeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import {
-  Plus, Pencil, Trash2, Eye, EyeOff, UserCog, ShieldCheck,
+  Plus, Trash2, Eye, EyeOff, UserCog, ShieldCheck,
   ShieldX, KeyRound, User, X, AlertTriangle, CheckCircle2,
-  Upload, Camera, ChevronDown, MoreHorizontal,
+  Upload, Camera, ChevronDown,
 } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import AnchoredPopover from '@/components/ui/AnchoredPopover';
+import { RowEditButton, RowMoreMenu } from '@/components/ui/RowActions';
 import { SearchInput, FilterSelect } from '@/components/ui/SearchFilter';
 import CountFilterTabs from '@/components/ui/CountFilterTabs';
+import Pagination from '@/components/ui/Pagination';
 import SubjectMultiSelect, { type PrioritySubject } from '@/components/ui/SubjectMultiSelect';
 import { useLivePrograms } from '@/hooks/useLivePrograms';
 
@@ -74,6 +75,8 @@ const emptyForm = {
 type StatusTab = 'all' | 'active' | 'inactive';
 
 const EASE = [0.16, 1, 0.3, 1] as const;
+/** Accounts per page (same as Faculty Profiles) */
+const PAGE_SIZE = 10;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -96,10 +99,10 @@ function initials(name: string) {
 
 function StatusBadge({ active }: { active: boolean }) {
   return active
-    ? <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+    ? <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0" />Active
       </span>
-    : <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-500/20 text-slate-400 border border-slate-500/30">
+    : <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-semibold bg-slate-500/20 text-slate-400 border border-slate-500/30">
         <span className="w-1.5 h-1.5 rounded-full bg-slate-500 flex-shrink-0" />Inactive
       </span>;
 }
@@ -115,7 +118,8 @@ function Avatar({ account, size = 10 }: { account: InstructorAccount; size?: num
   }
   return (
     <div className={`w-${size} h-${size} rounded-full bg-[#1D5BD6]/20 border border-[#1D5BD6]/30 flex items-center justify-center flex-shrink-0 text-[#1D5BD6] font-bold`}
-      style={{ width: px, height: px, fontSize: px / 3.5 }}>
+      // Initials readable at every size (15px on the 40px row avatar)
+      style={{ width: px, height: px, fontSize: Math.round(px * 0.38) }}>
       {initials(account.name) || <User className="w-4 h-4" />}
     </div>
   );
@@ -212,7 +216,7 @@ function FormField({ label, id, type = 'text', value, onChange, placeholder, err
         className={`w-full bg-[#0b0f1a] border rounded-xl px-4 py-3 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-[#1D5BD6]/50 transition
           ${error ? 'border-red-500/60' : 'border-white/10 hover:border-white/20'}`}
       />
-      {hint && <p className="text-xs text-slate-500 mt-1">{hint}</p>}
+      {hint && <p className="text-sm text-slate-500 mt-1">{hint}</p>}
     </div>
   );
 }
@@ -268,7 +272,6 @@ export default function InstructorAccountsClient() {
 
 
   // Confirmation dialogs
-  const [formConfirmOpen, setFormConfirmOpen]       = useState(false);
   const [toggleConfirmTarget, setToggleConfirmTarget] = useState<InstructorAccount | null>(null);
   const [resetConfirmOpen, setResetConfirmOpen]     = useState(false);
 
@@ -299,6 +302,20 @@ export default function InstructorAccountsClient() {
     [accounts, filterStatus],
   );
   const filtersOn = !!search || filterStatus !== 'all' || !!filterPosition;
+
+  /* Pages — back to page 1 whenever the search, tab or position changes */
+  const [page, setPage] = useState(1);
+  useEffect(() => { setPage(1); }, [search, filterStatus, filterPosition]);
+  const pageCount = Math.max(1, Math.ceil(shown.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount);
+  const pageRows = shown.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const tableTopRef = useRef<HTMLDivElement>(null);
+  function goToPage(next: number) {
+    setPage(next);
+    // The new page starts at the top of the table, not where the pager was
+    const top = tableTopRef.current?.getBoundingClientRect().top ?? 0;
+    if (top < 80) tableTopRef.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+  }
 
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
 
@@ -390,11 +407,10 @@ export default function InstructorAccountsClient() {
     e.preventDefault();
     if (!validateForm()) return;
     setFormMsg('');
-    setFormConfirmOpen(true);
+    void executeSubmit();
   }
 
   async function executeSubmit() {
-    setFormConfirmOpen(false);
     setFormLoading(true);
     setFormMsg('');
 
@@ -672,17 +688,19 @@ export default function InstructorAccountsClient() {
             </AnimatePresence>
           </div>
 
-          <p className="text-xs text-slate-400" aria-live="polite">
-            {tableSkeletonVisible ? 'Loading…' : `Showing ${shown.length} of ${accounts.length} faculty account${accounts.length !== 1 ? 's' : ''}`}
+          <p className="text-sm text-slate-400" aria-live="polite">
+            {tableSkeletonVisible ? 'Loading…' : shown.length === accounts.length
+              ? `${accounts.length} faculty account${accounts.length !== 1 ? 's' : ''}`
+              : `${shown.length} of ${accounts.length} faculty accounts`}
           </p>
         </div>
 
         {/* ── Table ── */}
         <PageLoadTransition
           showSkeleton={tableSkeletonVisible}
-          skeleton={<TableSkeleton cols={7} rows={8} />}
+          skeleton={<TableSkeleton cols={6} rows={8} />}
         >
-        <div className="bg-[#111827] border border-white/10 rounded-2xl overflow-hidden">
+        <div ref={tableTopRef} className="bg-[#111827] border border-white/10 rounded-2xl overflow-hidden scroll-mt-24">
           {shown.length === 0 ? (
             <motion.div
               initial={reduceMotion ? false : { opacity: 0, y: 8 }}
@@ -702,18 +720,17 @@ export default function InstructorAccountsClient() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-white/10 bg-white/[0.02]">
-                    <th className="px-4 sm:px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Faculty</th>
-                    <th className="hidden md:table-cell px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Position</th>
-                    <th className="hidden md:table-cell px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Username</th>
-                    <th className="hidden lg:table-cell px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Email</th>
-                    <th className="hidden sm:table-cell px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Status</th>
-                    <th className="hidden lg:table-cell px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Created</th>
-                    <th className="hidden sm:table-cell px-5 py-4 text-right text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Actions</th>
+                    <th className="px-4 sm:px-5 py-4 text-left text-sm font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap">Faculty</th>
+                    <th className="hidden md:table-cell px-5 py-4 text-left text-sm font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap">Position</th>
+                    <th className="hidden lg:table-cell px-5 py-4 text-left text-sm font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap">Email</th>
+                    <th className="hidden sm:table-cell px-5 py-4 text-left text-sm font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap">Status</th>
+                    <th className="hidden xl:table-cell px-5 py-4 text-left text-sm font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap">Created</th>
+                    <th className="hidden sm:table-cell px-5 py-4 text-right text-sm font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/[0.05]">
                   <AnimatePresence initial={false}>
-                  {shown.map((a, i) => (
+                  {pageRows.map((a, i) => (
                     <motion.tr
                       key={a.faculty_id}
                       // The whole row opens Edit (Enter too); the action buttons keep their own clicks
@@ -742,14 +759,13 @@ export default function InstructorAccountsClient() {
                           <div className="min-w-0">
                             <p className="font-semibold text-white leading-tight break-words">{a.name}</p>
                             {a.specialization && (
-                              <p className="text-xs text-[#1D5BD6] mt-0.5">{a.specialization}</p>
+                              <p className="text-sm text-[#1D5BD6] mt-0.5">{a.specialization}</p>
                             )}
-                            {/* Phone/tablet: hidden columns fold in under the name */}
-                            <p className="text-xs text-slate-500 mt-0.5 break-words">
-                              {a.employee_id || '—'}
+                            {/* Employee ID · username (phones / tablets: the position too) */}
+                            <p className="text-sm text-slate-400 mt-0.5 break-words">
+                              {a.employee_id || '—'} · <span className="font-mono text-slate-300">{a.username}</span>
                               {a.position && <span className="md:hidden"> · {a.position}</span>}
                             </p>
-                            <p className="md:hidden text-xs text-slate-400 mt-0.5 font-mono break-words">{a.username}</p>
                             <div className="sm:hidden mt-1.5"><StatusBadge active={a.is_active} /></div>
                           </div>
                         </div>
@@ -760,14 +776,9 @@ export default function InstructorAccountsClient() {
                         <p className="text-slate-300 text-sm leading-snug max-w-[160px]">{a.position}</p>
                       </td>
 
-                      {/* Username */}
-                      <td className="hidden md:table-cell px-5 py-4">
-                        <p className="text-slate-200 font-mono text-sm">{a.username}</p>
-                      </td>
-
                       {/* Email */}
                       <td className="hidden lg:table-cell px-5 py-4">
-                        <p className="text-slate-400 text-sm">{a.email}</p>
+                        <p className="text-slate-300 text-sm whitespace-nowrap max-w-[260px] truncate" title={a.email}>{a.email}</p>
                       </td>
 
                       {/* Status */}
@@ -776,26 +787,16 @@ export default function InstructorAccountsClient() {
                       </td>
 
                       {/* Created */}
-                      <td className="hidden lg:table-cell px-5 py-4">
-                        <p className="text-slate-500 text-xs">{fmtDate(a.account_created_at)}</p>
-                        <p className="text-slate-600 text-xs mt-0.5">Updated {fmtDate(a.account_updated_at)}</p>
+                      <td className="hidden xl:table-cell px-5 py-4">
+                        <p className="text-slate-400 text-sm whitespace-nowrap" title={`Updated ${fmtDate(a.account_updated_at)}`}>{fmtDate(a.account_created_at)}</p>
                       </td>
 
                       {/* Actions — clicks here (and in the More menu) don't open the row */}
                       <td className="px-3 sm:px-5 py-4 max-sm:pl-[68px] max-sm:pr-4 max-sm:pt-3 cursor-default" onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
                         <div className="flex items-center justify-start sm:justify-end gap-2 sm:gap-1.5">
 
-                          {/* Edit */}
-                          <motion.button
-                            onClick={() => openEdit(a)}
-                            whileHover={reduceMotion ? undefined : { y: -1 }}
-                            whileTap={reduceMotion ? undefined : { scale: 0.95 }}
-                            transition={{ duration: 0.15, ease: EASE }}
-                            className="flex items-center gap-1.5 px-3.5 h-9 rounded-lg text-sm font-semibold bg-[#EFF6FF] hover:bg-[#DBEAFE] text-[#1D5BD6] border border-[#BFDBFE] hover:border-[#93C5FD] transition-colors"
-                            title="Edit account"
-                          >
-                            <Pencil className="w-3.5 h-3.5" /> Edit
-                          </motion.button>
+                          {/* Edit · More (shared with the chair account pages) */}
+                          <RowEditButton onClick={() => openEdit(a)} />
 
                           <RowMoreMenu
                             active={a.is_active}
@@ -814,6 +815,16 @@ export default function InstructorAccountsClient() {
               </table>
             </div>
           )}
+          <Pagination
+            className="px-4 sm:px-5 py-4 border-t border-white/10"
+            layoutId="faculty-accounts-page"
+            page={safePage}
+            pageCount={pageCount}
+            onChange={goToPage}
+            total={shown.length}
+            pageSize={PAGE_SIZE}
+            noun="faculty accounts"
+          />
         </div>
         </PageLoadTransition>
 
@@ -856,7 +867,7 @@ export default function InstructorAccountsClient() {
             {/* Profile picture (edit only) */}
             {editTarget && (
               <div className="bg-[#0d1424] border border-white/10 rounded-xl p-4">
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Profile Picture</p>
+                <p className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Profile Picture</p>
                 <div className="flex items-center gap-4">
                   <div className="relative">
                     <Avatar account={editTarget} size={16} />
@@ -872,18 +883,18 @@ export default function InstructorAccountsClient() {
                   </div>
                   <div>
                     <p className="text-sm font-medium text-white">{editTarget.name}</p>
-                    <p className="text-xs text-slate-500 mt-0.5">{editTarget.employee_id || 'No employee ID'}</p>
+                    <p className="text-sm text-slate-500 mt-0.5">{editTarget.employee_id || 'No employee ID'}</p>
                     <button
                       type="button"
                       onClick={() => picInputRef.current?.click()}
                       disabled={picUploading}
-                      className="mt-2 flex items-center gap-1.5 text-xs text-[#1D5BD6] hover:text-[#60A5FA] transition disabled:opacity-50"
+                      className="mt-2 flex items-center gap-1.5 text-sm text-[#1D5BD6] hover:text-[#60A5FA] transition disabled:opacity-50"
                     >
                       <Upload className="w-3 h-3" />
                       {picUploading ? 'Uploading…' : 'Upload new photo'}
                     </button>
-                    <p className="text-xs text-slate-600 mt-0.5">JPEG, PNG, WebP or GIF · Max 5 MB</p>
-                    {picError && <p className="text-xs text-red-400 mt-1">{picError}</p>}
+                    <p className="text-sm text-slate-600 mt-0.5">JPEG, PNG, WebP or GIF · Max 5 MB</p>
+                    {picError && <p className="text-sm text-red-400 mt-1">{picError}</p>}
                   </div>
                 </div>
                 <input
@@ -911,7 +922,7 @@ export default function InstructorAccountsClient() {
                     value={form.first_name} onChange={v => setField('first_name', v)}
                     placeholder="e.g. Maria" error={!!formErrors.first_name}
                   />
-                  {formErrors.first_name && <p className="text-xs text-red-400 mt-1">{formErrors.first_name}</p>}
+                  {formErrors.first_name && <p className="text-sm text-red-400 mt-1">{formErrors.first_name}</p>}
                 </div>
                 <div>
                   <FormField
@@ -926,7 +937,7 @@ export default function InstructorAccountsClient() {
                     value={form.last_name} onChange={v => setField('last_name', v)}
                     placeholder="e.g. Reyes" error={!!formErrors.last_name}
                   />
-                  {formErrors.last_name && <p className="text-xs text-red-400 mt-1">{formErrors.last_name}</p>}
+                  {formErrors.last_name && <p className="text-sm text-red-400 mt-1">{formErrors.last_name}</p>}
                 </div>
               </div>
             </div>
@@ -952,7 +963,7 @@ export default function InstructorAccountsClient() {
                     onChange={v => setField('position', v)}
                     error={!!formErrors.position}
                   />
-                  {formErrors.position && <p className="text-xs text-red-400 mt-1">{formErrors.position}</p>}
+                  {formErrors.position && <p className="text-sm text-red-400 mt-1">{formErrors.position}</p>}
                 </div>
                 <div>
                   <label className="block text-sm font-semibold text-slate-300 mb-2">
@@ -966,7 +977,7 @@ export default function InstructorAccountsClient() {
                     <option value="">No program</option>
                     {programs.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
                   </select>
-                  {formErrors.program_id && <p className="text-xs text-red-400 mt-1">{formErrors.program_id}</p>}
+                  {formErrors.program_id && <p className="text-sm text-red-400 mt-1">{formErrors.program_id}</p>}
                 </div>
               </div>
               <div className="mt-4">
@@ -1003,7 +1014,7 @@ export default function InstructorAccountsClient() {
                       placeholder="e.g. m.reyes" error={!!formErrors.username}
                       hint="Letters, numbers, and underscores only. No spaces."
                     />
-                    {formErrors.username && <p className="text-xs text-red-400 mt-1">{formErrors.username}</p>}
+                    {formErrors.username && <p className="text-sm text-red-400 mt-1">{formErrors.username}</p>}
                   </div>
                   <div>
                     <FormField
@@ -1011,7 +1022,7 @@ export default function InstructorAccountsClient() {
                       value={form.email} onChange={v => setField('email', v)}
                       placeholder="e.g. m.reyes@school.edu" error={!!formErrors.email}
                     />
-                    {formErrors.email && <p className="text-xs text-red-400 mt-1">{formErrors.email}</p>}
+                    {formErrors.email && <p className="text-sm text-red-400 mt-1">{formErrors.email}</p>}
                   </div>
                 </div>
 
@@ -1025,8 +1036,8 @@ export default function InstructorAccountsClient() {
                       placeholder={editTarget ? 'Leave blank to keep current password' : 'Min. 8 characters'}
                       error={!!formErrors.password}
                     />
-                    {formErrors.password && <p className="text-xs text-red-400 mt-1">{formErrors.password}</p>}
-                    <p className="text-xs text-slate-600 mt-1">Minimum 8 characters.</p>
+                    {formErrors.password && <p className="text-sm text-red-400 mt-1">{formErrors.password}</p>}
+                    <p className="text-sm text-slate-600 mt-1">Minimum 8 characters.</p>
                   </div>
                   <div>
                     <PasswordInput
@@ -1037,7 +1048,7 @@ export default function InstructorAccountsClient() {
                       placeholder="Re-enter password"
                       error={!!formErrors.confirmPassword}
                     />
-                    {formErrors.confirmPassword && <p className="text-xs text-red-400 mt-1">{formErrors.confirmPassword}</p>}
+                    {formErrors.confirmPassword && <p className="text-sm text-red-400 mt-1">{formErrors.confirmPassword}</p>}
                   </div>
                 </div>
               </div>
@@ -1114,8 +1125,8 @@ export default function InstructorAccountsClient() {
               <Avatar account={deleteTarget} size={10} />
               <div>
                 <p className="text-white font-semibold">{deleteTarget.name}</p>
-                <p className="text-slate-400 text-xs">{deleteTarget.username} · {deleteTarget.email}</p>
-                <p className="text-slate-500 text-xs">{deleteTarget.position}</p>
+                <p className="text-slate-400 text-sm">{deleteTarget.username} · {deleteTarget.email}</p>
+                <p className="text-slate-500 text-sm">{deleteTarget.position}</p>
               </div>
             </div>
 
@@ -1165,7 +1176,7 @@ export default function InstructorAccountsClient() {
               <Avatar account={resetTarget} size={10} />
               <div>
                 <p className="text-white font-semibold">{resetTarget.name}</p>
-                <p className="text-slate-400 text-xs">{resetTarget.username} · {resetTarget.email}</p>
+                <p className="text-slate-400 text-sm">{resetTarget.username} · {resetTarget.email}</p>
               </div>
             </div>
 
@@ -1225,79 +1236,6 @@ export default function InstructorAccountsClient() {
       </Modal>
 
       {/* ════════════════════════════════════════════════════════════════════
-          CONFIRM CREATE / SAVE MODAL
-      ════════════════════════════════════════════════════════════════════ */}
-      <Modal
-        open={formConfirmOpen}
-        onClose={() => !formLoading && setFormConfirmOpen(false)}
-        title={editTarget ? 'Confirm Save Changes' : 'Confirm Account Creation'}
-        size="sm"
-      >
-        <div className="space-y-5">
-
-          {/* Icon + message */}
-          <div className="flex items-start gap-4">
-            <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${editTarget ? 'bg-blue-500/20' : 'bg-emerald-500/20'}`}>
-              {editTarget
-                ? <Pencil className="w-5 h-5 text-blue-400" />
-                : <Plus className="w-5 h-5 text-emerald-400" />}
-            </div>
-            <div>
-              <p className="text-white font-bold text-base leading-snug">
-                {editTarget ? 'Save these changes?' : 'Create this faculty account?'}
-              </p>
-              <p className="text-slate-400 text-sm mt-1 leading-relaxed">
-                {editTarget
-                  ? `You are about to update the account details for ${editTarget.name}. Please review before confirming.`
-                  : 'Please review the details below before the account is created.'}
-              </p>
-            </div>
-          </div>
-
-          {/* Summary card */}
-          <div className="bg-[#0d1424] border border-white/10 rounded-xl divide-y divide-white/[0.06]">
-            {[
-              { label: 'Full Name', value: [form.first_name, form.middle_name, form.last_name].filter(Boolean).join(' ') || '—' },
-              { label: 'Position', value: form.position || '—' },
-              { label: 'Username', value: form.username || '—', mono: true },
-              { label: 'Email', value: form.email || '—' },
-              ...(form.password ? [{ label: 'Password', value: '••••••••' }] : []),
-            ].map(row => (
-              <div key={row.label} className="flex items-center justify-between px-4 py-2.5 text-sm">
-                <span className="text-slate-500 flex-shrink-0 w-24">{row.label}</span>
-                <span className={`text-white font-medium text-right truncate ml-2 ${'mono' in row && row.mono ? 'font-mono' : ''}`}>{row.value}</span>
-              </div>
-            ))}
-          </div>
-
-          <div className="flex gap-3 pt-1">
-            <button
-              type="button"
-              onClick={() => setFormConfirmOpen(false)}
-              disabled={formLoading}
-              className="flex-1 border border-white/10 text-slate-300 py-3 rounded-xl text-sm font-semibold hover:bg-white/5 transition disabled:opacity-50"
-            >
-              Go Back
-            </button>
-            <button
-              type="button"
-              onClick={executeSubmit}
-              disabled={formLoading}
-              className={`flex-1 text-white py-3 rounded-xl text-sm font-bold transition disabled:opacity-60 flex items-center justify-center gap-2 shadow-lg
-                ${editTarget ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/20' : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/20'}`}
-            >
-              {formLoading
-                ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Saving…</>
-                : editTarget
-                  ? <><CheckCircle2 className="w-4 h-4" /> Yes, Save Changes</>
-                  : <><CheckCircle2 className="w-4 h-4" /> Yes, Create Account</>}
-            </button>
-          </div>
-
-        </div>
-      </Modal>
-
-      {/* ════════════════════════════════════════════════════════════════════
           CONFIRM ACTIVATE / DEACTIVATE MODAL
       ════════════════════════════════════════════════════════════════════ */}
       <Modal
@@ -1333,8 +1271,8 @@ export default function InstructorAccountsClient() {
               <Avatar account={toggleConfirmTarget} size={10} />
               <div className="min-w-0">
                 <p className="text-white font-semibold truncate">{toggleConfirmTarget.name}</p>
-                <p className="text-slate-400 text-xs truncate">{toggleConfirmTarget.username} · {toggleConfirmTarget.email}</p>
-                <p className="text-slate-500 text-xs mt-0.5">{toggleConfirmTarget.position}</p>
+                <p className="text-slate-400 text-sm truncate">{toggleConfirmTarget.username} · {toggleConfirmTarget.email}</p>
+                <p className="text-slate-500 text-sm mt-0.5">{toggleConfirmTarget.position}</p>
               </div>
             </div>
 
@@ -1404,7 +1342,7 @@ export default function InstructorAccountsClient() {
               <Avatar account={resetTarget} size={10} />
               <div className="min-w-0">
                 <p className="text-white font-semibold truncate">{resetTarget.name}</p>
-                <p className="text-slate-400 text-xs truncate">{resetTarget.username} · {resetTarget.email}</p>
+                <p className="text-slate-400 text-sm truncate">{resetTarget.username} · {resetTarget.email}</p>
               </div>
             </div>
 
@@ -1439,72 +1377,5 @@ export default function InstructorAccountsClient() {
       </Modal>
 
     </div>
-  );
-}
-
-/* ── Row "More" menu: Reset PW · Deactivate/Activate · Delete ─────────────── */
-function RowMoreMenu({ active, toggling, onReset, onToggle, onDelete }: {
-  active: boolean;
-  toggling: boolean;
-  onReset: () => void;
-  onToggle: () => void;
-  onDelete: () => void;
-}) {
-  const reduceMotion = useReducedMotion();
-  const [open, setOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const close = useCallback(() => setOpen(false), []);
-  const pick = (fn: () => void) => () => { setOpen(false); fn(); };
-
-  const items = [
-    { key: 'reset', label: 'Reset password', Icon: KeyRound, color: '#1D5BD6', hover: 'hover:bg-[#EFF6FF]', onClick: onReset },
-    active
-      ? { key: 'toggle', label: 'Deactivate', Icon: ShieldX, color: '#B45309', hover: 'hover:bg-amber-50', onClick: onToggle }
-      : { key: 'toggle', label: 'Activate', Icon: ShieldCheck, color: '#047857', hover: 'hover:bg-emerald-50', onClick: onToggle },
-    { key: 'delete', label: 'Delete', Icon: Trash2, color: '#DC2626', hover: 'hover:bg-red-50', onClick: onDelete },
-  ];
-
-  return (
-    <>
-      <motion.button
-        ref={triggerRef}
-        type="button"
-        onClick={() => setOpen(v => !v)}
-        disabled={toggling}
-        whileTap={reduceMotion ? undefined : { scale: 0.95 }}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title="More actions"
-        className={`flex items-center gap-1.5 px-3.5 h-9 rounded-lg text-sm font-semibold border transition-colors disabled:opacity-50 ${
-          open ? 'bg-[#0B2A5B] border-[#0B2A5B]' : 'bg-white text-[#0B2A5B] border-[#C7D4EA] hover:bg-[#F4F7FC] hover:border-[#9DB8E8]'
-        }`}
-        style={open ? { color: '#FFFFFF' } : undefined}
-      >
-        {toggling
-          ? <div className="w-3.5 h-3.5 border border-current border-t-transparent rounded-full animate-spin" />
-          : <MoreHorizontal className="w-3.5 h-3.5" />}
-        More
-      </motion.button>
-      <AnchoredPopover open={open} onClose={close} anchorRef={triggerRef} panelRef={panelRef} width={190} maxHeight={220} label="More actions" align="end"
-        onKeyDown={e => { if (e.key === 'Escape') { setOpen(false); triggerRef.current?.focus(); } }}>
-        <div role="menu" className="p-1.5">
-          {items.map(({ key, label, Icon, color, hover, onClick }, i) => (
-            <motion.button
-              key={key}
-              type="button"
-              role="menuitem"
-              onClick={pick(onClick)}
-              initial={reduceMotion ? false : { opacity: 0, x: 6 }}
-              animate={{ opacity: 1, x: 0, transition: { duration: 0.2, delay: i * 0.04, ease: [0.4, 0, 0.2, 1] } }}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${hover} ${key === 'delete' ? 'mt-1 border-t border-[#F1F5F9] rounded-t-none pt-2.5' : ''}`}
-              style={{ color }}
-            >
-              <Icon className="w-4 h-4" /> {label}
-            </motion.button>
-          ))}
-        </div>
-      </AnchoredPopover>
-    </>
   );
 }

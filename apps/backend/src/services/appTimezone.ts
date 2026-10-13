@@ -39,6 +39,11 @@ export function manilaTodayAtSql(timeSql: string): string {
   return `(((NOW() AT TIME ZONE '${APP_TIMEZONE}')::date + ${timeSql}) AT TIME ZONE '${APP_TIMEZONE}')`;
 }
 
+/** SQL timestamptz for the Manila date <dateSql> at the Manila time <timeSql> */
+export function manilaDateAtSql(dateSql: string, timeSql: string): string {
+  return `((${dateSql} + ${timeSql}) AT TIME ZONE '${APP_TIMEZONE}')`;
+}
+
 /**
  * Half-open [start, end) range for a Manila calendar day.
  * Use with: timestamp >= start AND timestamp < end

@@ -11,10 +11,12 @@ import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { Skeleton, TableSkeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import {
-  Plus, Pencil, Trash2, Eye, EyeOff, Shield, KeyRound,
-  UserCheck, UserX, X, AlertTriangle, CheckCircle2,
+  Plus, Trash2, Eye, EyeOff, Shield, KeyRound,
+  ShieldCheck, ShieldX, X, AlertTriangle, CheckCircle2,
 } from 'lucide-react';
 import { SearchInput, FilterSelect } from '@/components/ui/SearchFilter';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { RowEditButton, RowMoreMenu } from '@/components/ui/RowActions';
 import { useLivePrograms } from '@/hooks/useLivePrograms';
 
 interface Program {
@@ -49,6 +51,8 @@ const EMPTY_FORM: AccountFormData = {
   username: '', email: '', password: '', confirm_password: '', program_id: '',
 };
 
+const EASE = [0.4, 0, 0.2, 1] as const;
+
 function fmtDate(d: string) {
   if (!d) return '—';
   return new Date(d).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
@@ -56,17 +60,17 @@ function fmtDate(d: string) {
 
 function StatusBadge({ active }: { active: boolean }) {
   return active
-    ? <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0" />Active
+    ? <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+        <span className="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0" />Active
       </span>
-    : <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-500/20 text-slate-400 border border-slate-500/30">
-        <span className="w-1.5 h-1.5 rounded-full bg-slate-500 flex-shrink-0" />Inactive
+    : <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-semibold bg-slate-500/20 text-slate-400 border border-slate-500/30">
+        <span className="w-2 h-2 rounded-full bg-slate-500 flex-shrink-0" />Inactive
       </span>;
 }
 
 function FieldLabel({ children, required }: { children: React.ReactNode; required?: boolean }) {
   return (
-    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1.5">
+    <label className="block text-sm font-semibold text-slate-300 mb-1.5">
       {children}{required ? <span className="text-red-400"> *</span> : null}
     </label>
   );
@@ -117,6 +121,7 @@ function BtnSpinner() {
 
 export default function DeptChairAccountsClient() {
   const toast = useToast();
+  const reduceMotion = useReducedMotion();
   const [accounts, setAccounts] = useState<DeptChairAccount[]>([]);
   const [programs, setPrograms] = useState<Program[]>([]);
   useLivePrograms(setPrograms);
@@ -130,6 +135,8 @@ export default function DeptChairAccountsClient() {
   const [confirmNewPwd, setConfirmNewPwd] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [togglingId, setTogglingId] = useState<number | null>(null);
+  /** Deactivate / Activate waits for "Are you sure?" (More → Deactivate) */
+  const [toggleTarget, setToggleTarget] = useState<DeptChairAccount | null>(null);
   const [formError, setFormError] = useState('');
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [showSaveSkeleton, setShowSaveSkeleton] = useState(false);
@@ -326,6 +333,7 @@ export default function DeptChairAccountsClient() {
   }
 
   async function toggleActive(acc: DeptChairAccount) {
+    setToggleTarget(null);
     setTogglingId(acc.id);
     try {
       const res = await fetch(`/api/dept-chair-accounts/${acc.id}`, {
@@ -339,7 +347,8 @@ export default function DeptChairAccountsClient() {
       }
       const d = await res.json();
       setAccounts(prev => prev.map(a => a.id === acc.id ? d.account : a));
-      toast.success(d.account.is_active ? `"${acc.username}" activated.` : `"${acc.username}" deactivated.`);
+      if (d.account.is_active) toast.success(`"${acc.username}" activated.`);
+      else toast.delete(`"${acc.username}" deactivated.`);
     } catch { toast.error('Connection error.'); }
     finally { setTogglingId(null); }
   }
@@ -427,7 +436,7 @@ export default function DeptChairAccountsClient() {
               </button>
             )}
           </div>
-          <p className="text-xs text-slate-400 mt-3">
+          <p className="text-sm text-slate-400 mt-3">
             {`${filtered.length} program chair account${filtered.length !== 1 ? 's' : ''} found`}
           </p>
         </div>
@@ -448,81 +457,92 @@ export default function DeptChairAccountsClient() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm min-w-[860px]">
+              <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-white/10 bg-white/[0.02]">
-                    <th className="px-4 sm:px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Username</th>
-                    <th className="hidden md:table-cell px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Email</th>
-                    <th className="hidden md:table-cell px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Program</th>
-                    <th className="hidden sm:table-cell px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Status</th>
-                    <th className="hidden lg:table-cell px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Created</th>
-                    <th className="px-5 py-4 text-right text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Actions</th>
+                    <th className="px-4 sm:px-5 py-4 text-left text-sm font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap">Username</th>
+                    <th className="hidden md:table-cell px-5 py-4 text-left text-sm font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap">Email</th>
+                    <th className="hidden md:table-cell px-5 py-4 text-left text-sm font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap">Program</th>
+                    <th className="hidden sm:table-cell px-5 py-4 text-left text-sm font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap">Status</th>
+                    <th className="hidden lg:table-cell px-5 py-4 text-left text-sm font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap">Created</th>
+                    <th className="hidden sm:table-cell px-5 py-4 text-right text-sm font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/[0.05]">
-                  {filtered.map(acc => {
-                    const busy = togglingId === acc.id;
-                    return (
-                      <tr key={acc.id} className={`transition-colors hover:bg-white/[0.03] ${!acc.is_active ? 'opacity-60' : ''}`}>
-                        <td className="px-4 sm:px-5 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-full bg-[#1D5BD6]/20 border border-[#1D5BD6]/30 flex items-center justify-center flex-shrink-0 text-[#1D5BD6] font-bold text-sm">
+                  <AnimatePresence initial={false}>
+                  {filtered.map((acc, i) => (
+                    <motion.tr
+                      key={acc.id}
+                      // The whole row opens Edit (Enter too); Edit / More keep their own clicks
+                      onClick={() => openEdit(acc)}
+                      onKeyDown={e => { if (e.key === 'Enter' && e.target === e.currentTarget) openEdit(acc); }}
+                      tabIndex={0}
+                      aria-label={`Edit ${acc.username}`}
+                      initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+                      animate={{
+                        opacity: acc.is_active ? 1 : 0.6, y: 0,
+                        transition: { duration: 0.28, ease: EASE, delay: reduceMotion ? 0 : Math.min(i, 10) * 0.025 },
+                      }}
+                      exit={reduceMotion ? { opacity: 0 } : { opacity: 0, transition: { duration: 0.15 } }}
+                      // Same as Faculty Accounts: hover tint + royal-blue edge; phones stack (Edit / More under the details)
+                      className="group cursor-pointer outline-none transition-[background-color,box-shadow] duration-200 hover:bg-white/[0.05] hover:shadow-[inset_4px_0_0_#1D5BD6] focus-visible:shadow-[inset_4px_0_0_#1D5BD6] max-sm:flex max-sm:flex-col"
+                    >
+                        {/* Username + Google */}
+                        <td className="px-4 sm:px-5 py-4 max-sm:pb-0">
+                          <div className="flex items-start sm:items-center gap-3">
+                            <div className="w-11 h-11 rounded-full bg-[#1D5BD6]/20 border border-[#1D5BD6]/30 flex items-center justify-center flex-shrink-0 text-[#1D5BD6] font-bold text-[15px] transition-transform duration-200 group-hover:scale-105">
                               {acc.username.slice(0, 2).toUpperCase()}
                             </div>
                             <div className="min-w-0">
-                              <p className="font-semibold text-white font-mono text-sm break-all">{acc.username}</p>
-                              {acc.google_verified ? (
-                                <p className="text-[10px] text-emerald-400 mt-0.5">Google: Verified</p>
-                              ) : (
-                                <p className="text-[10px] text-red-400 mt-0.5">Google: Not Verified</p>
-                              )}
+                              <p className="font-semibold text-white text-base break-all">{acc.username}</p>
+                              <p className={`inline-flex items-center gap-1.5 text-sm font-medium mt-0.5 ${acc.google_verified ? 'text-emerald-400' : 'text-red-400'}`}>
+                                <span className="w-1.5 h-1.5 rounded-full bg-current flex-shrink-0" />
+                                {acc.google_verified ? 'Google verified' : 'Google not verified'}
+                              </p>
                               {/* Phone: hidden columns fold in under the username */}
-                              <p className="md:hidden text-xs text-slate-400 mt-1 break-all">{acc.email} · {programLabel(acc)}</p>
+                              <p className="md:hidden text-sm text-slate-300 mt-1 break-all">{acc.email} · {programLabel(acc)}</p>
                               <div className="sm:hidden mt-1.5"><StatusBadge active={acc.is_active} /></div>
                             </div>
                           </div>
                         </td>
+
+                        {/* Email */}
                         <td className="hidden md:table-cell px-5 py-4">
-                          <p className="text-slate-400 text-sm whitespace-nowrap">{acc.email}</p>
+                          <p className="text-slate-300 text-sm break-all">{acc.email}</p>
                         </td>
+
+                        {/* Program */}
                         <td className="hidden md:table-cell px-5 py-4">
-                          <p className="text-slate-200 text-sm font-medium" title={acc.program_name ?? undefined}>
-                            {programLabel(acc)}
-                          </p>
+                          <p className="text-slate-200 text-sm font-semibold" title={acc.program_name ?? undefined}>{programLabel(acc)}</p>
                           {acc.program_name && (
-                            <p className="text-xs text-slate-500 mt-0.5 max-w-[180px] truncate">{acc.program_name}</p>
+                            <p className="text-sm text-slate-400 mt-0.5 max-w-[240px] truncate" title={acc.program_name}>{acc.program_name}</p>
                           )}
                         </td>
+
+                        {/* Status */}
                         <td className="hidden sm:table-cell px-5 py-4">
                           <StatusBadge active={acc.is_active} />
                         </td>
-                        <td className="hidden lg:table-cell px-5 py-4 text-slate-500 text-xs whitespace-nowrap">{fmtDate(acc.created_at)}</td>
-                        <td className="px-3 sm:px-5 py-4">
-                          <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
-                            <button type="button" onClick={() => openEdit(acc)} title="Edit account"
-                              className="p-2 rounded-lg text-slate-400 hover:text-[#1D5BD6] hover:bg-[#1D5BD6]/10 transition-colors min-h-10 min-w-10 inline-flex items-center justify-center">
-                              <Pencil className="w-4 h-4" />
-                            </button>
-                            <button type="button" onClick={() => openPassword(acc)} title="Reset password"
-                              className="p-2 rounded-lg text-slate-400 hover:text-amber-400 hover:bg-amber-500/10 transition-colors min-h-10 min-w-10 inline-flex items-center justify-center">
-                              <KeyRound className="w-4 h-4" />
-                            </button>
-                            <button type="button" onClick={() => toggleActive(acc)} disabled={busy}
-                              title={acc.is_active ? 'Deactivate' : 'Activate'}
-                              className="p-2 rounded-lg text-slate-400 hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors disabled:opacity-40 min-h-10 min-w-10 inline-flex items-center justify-center">
-                              {busy
-                                ? <div className="w-4 h-4 border-2 border-slate-500 border-t-slate-300 rounded-full animate-spin" />
-                                : acc.is_active ? <UserX className="w-4 h-4" /> : <UserCheck className="w-4 h-4" />}
-                            </button>
-                            <button type="button" onClick={() => openDelete(acc)} title="Delete account"
-                              className="p-2 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition-colors min-h-10 min-w-10 inline-flex items-center justify-center">
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+
+                        {/* Created */}
+                        <td className="hidden lg:table-cell px-5 py-4 text-slate-400 text-sm whitespace-nowrap">{fmtDate(acc.created_at)}</td>
+
+                        {/* Edit · More — clicks here (and in the More menu) don't open the row */}
+                        <td className="px-3 sm:px-5 py-4 max-sm:pl-[72px] max-sm:pr-4 max-sm:pt-3 cursor-default" onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
+                          <div className="flex items-center justify-start sm:justify-end gap-2 sm:gap-1.5">
+                            <RowEditButton onClick={() => openEdit(acc)} />
+                            <RowMoreMenu
+                              active={acc.is_active}
+                              toggling={togglingId === acc.id}
+                              onReset={() => openPassword(acc)}
+                              onToggle={() => setToggleTarget(acc)}
+                              onDelete={() => openDelete(acc)}
+                            />
                           </div>
                         </td>
-                      </tr>
-                    );
-                  })}
+                    </motion.tr>
+                  ))}
+                  </AnimatePresence>
                 </tbody>
               </table>
             </div>
@@ -581,7 +601,7 @@ export default function DeptChairAccountsClient() {
                 onChange={v => setForm(f => ({ ...f, email: v }))}
                 placeholder="e.g. departmentchair@phd.edu"
               />
-              <p className="text-xs text-slate-500 mt-1.5">
+              <p className="text-sm text-slate-400 mt-1.5">
                 Personal Gmail or university Google Workspace email. They verify Google themselves after login — OTP is not required until then.
               </p>
             </div>
@@ -687,7 +707,7 @@ export default function DeptChairAccountsClient() {
             <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
             <div>
               <p className="text-sm font-semibold text-red-300">Permanently delete &quot;{selected.username}&quot;?</p>
-              <p className="text-xs text-red-400/80 mt-1">This action cannot be undone. The account and associated data will be removed.</p>
+              <p className="text-sm text-red-400/80 mt-1">This action cannot be undone. The account and associated data will be removed.</p>
             </div>
           </div>
           <div className="flex gap-3">
@@ -698,6 +718,79 @@ export default function DeptChairAccountsClient() {
           </div>
         </Modal>
       )}
+
+      {/* Confirm Deactivate / Activate — More → Deactivate never acts on one click */}
+      <Modal
+        open={!!toggleTarget}
+        onClose={() => togglingId === null && setToggleTarget(null)}
+        title={toggleTarget?.is_active ? 'Confirm Deactivation' : 'Confirm Activation'}
+        size="sm"
+      >
+        {toggleTarget && (
+          <div className="space-y-5">
+            <div className="flex items-start gap-4">
+              <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${toggleTarget.is_active ? 'bg-amber-500/20' : 'bg-emerald-500/20'}`}>
+                {toggleTarget.is_active
+                  ? <ShieldX className="w-5 h-5 text-amber-400" />
+                  : <ShieldCheck className="w-5 h-5 text-emerald-400" />}
+              </div>
+              <div>
+                <p className="text-white font-bold text-base leading-snug">
+                  {toggleTarget.is_active ? 'Are you sure you want to deactivate this account?' : 'Are you sure you want to activate this account?'}
+                </p>
+                <p className="text-slate-400 text-sm mt-1 leading-relaxed">
+                  {toggleTarget.is_active
+                    ? `${toggleTarget.username} will no longer be able to sign in as Program Chair.`
+                    : `${toggleTarget.username} will be able to sign in as Program Chair again.`}
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-[#0d1424] border border-white/10 rounded-xl p-4 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-[#1D5BD6]/20 border border-[#1D5BD6]/30 flex items-center justify-center flex-shrink-0 text-[#1D5BD6] font-bold text-sm">
+                {toggleTarget.username.slice(0, 2).toUpperCase()}
+              </div>
+              <div className="min-w-0">
+                <p className="text-white font-semibold truncate">{toggleTarget.username}</p>
+                <p className="text-slate-400 text-sm truncate">{toggleTarget.email}</p>
+                {toggleTarget.program_code && <p className="text-slate-500 text-sm mt-0.5">{toggleTarget.program_code}{toggleTarget.program_name ? ` — ${toggleTarget.program_name}` : ''}</p>}
+              </div>
+            </div>
+
+            <div className={`rounded-xl px-4 py-3 text-sm flex items-center gap-2 ${toggleTarget.is_active ? 'bg-amber-500/10 border border-amber-500/20 text-amber-300' : 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300'}`}>
+              <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+              {toggleTarget.is_active
+                ? 'They cannot use the system until the account is activated again. Nothing is deleted.'
+                : 'They can sign in again right away.'}
+            </div>
+
+            <div className="flex gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => setToggleTarget(null)}
+                disabled={togglingId === toggleTarget.id}
+                className="flex-1 border border-white/10 text-slate-300 py-3 rounded-xl text-sm font-semibold hover:bg-white/5 transition disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleActive(toggleTarget)}
+                disabled={togglingId === toggleTarget.id}
+                className={`flex-1 text-white py-3 rounded-xl text-sm font-bold transition disabled:opacity-60 flex items-center justify-center gap-2 shadow-lg ${
+                  toggleTarget.is_active ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-500/20' : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/20'
+                }`}
+              >
+                {togglingId === toggleTarget.id
+                  ? <><BtnSpinner /> Processing…</>
+                  : toggleTarget.is_active
+                    ? <><ShieldX className="w-4 h-4" /> Yes, Deactivate</>
+                    : <><ShieldCheck className="w-4 h-4" /> Yes, Activate</>}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

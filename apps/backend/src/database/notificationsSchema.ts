@@ -23,9 +23,17 @@ export const CONDITION_TYPES = [
 export const CONDITION_TYPES_SQL = CONDITION_TYPES.map(t => `'${t}'`).join(', ');
 
 let tableReady = false;
+/** The DDL run in progress — calls that arrive meanwhile wait for it instead of racing it
+ *  (two CREATE … IF NOT EXISTS at once fail with 23505 on pg_class) */
+let creating: Promise<void> | null = null;
 
 export async function ensureNotificationsTable(): Promise<void> {
   if (tableReady) return;
+  creating ??= createNotificationsTable().finally(() => { creating = null; });
+  return creating;
+}
+
+async function createNotificationsTable(): Promise<void> {
   try {
     await query(`
       CREATE TABLE IF NOT EXISTS notifications (

@@ -4,16 +4,14 @@ import { ensureSystemSettingsTable } from '@/database/schema-guard';
 import { DEFAULT_PASSWORDS_TO_CHECK, weakPasswordReason } from '@/auth/passwordPolicy';
 
 /**
- * "Change your password on next sign-in" for accounts on a default or common
- * password. `must_change_password` is set when someone signs in with such a
- * password (and once at start-up for accounts still on a well-known default);
- * while it is set the API gate (proxy.ts) only lets the password change through
- * and the frontend sends every page to /change-password. Changing the password
- * clears it.
+ * "Change your password on next sign-in" for FACULTY accounts on a default or
+ * common password (Administrator / Chair accounts are never asked — the user's
+ * decision, 2026-10-08). `instructor_accounts.must_change_password` is set when a
+ * faculty member signs in with such a password (and once at start-up for faculty
+ * still on a well-known default); while it is set the API gate (proxy.ts) only
+ * lets the password change through and the frontend sends every page to
+ * /change-password. Changing the password clears it.
  */
-
-type AccountKind = 'user' | 'instructor';
-const TABLE: Record<AccountKind, 'users' | 'instructor_accounts'> = { user: 'users', instructor: 'instructor_accounts' };
 
 let columnsReady: Promise<void> | null = null;
 /** must_change_password on both account tables (added once per process, like otp_enabled) */
@@ -35,13 +33,13 @@ export function needsPasswordChange(password: string, username?: string | null):
   return password.length < 8 || weakPasswordReason(password, username ?? undefined) !== null;
 }
 
-/** At sign-in (the password is known then): mark the account when its password is weak, clear the mark when it is not. */
-export async function recordPasswordStrength(kind: AccountKind, id: number, password: string, username?: string | null): Promise<void> {
+/** At a faculty sign-in (the password is known then): mark the account when its password is weak, clear the mark when it is not. */
+export async function recordPasswordStrength(instructorAccountId: number, password: string, username?: string | null): Promise<void> {
   await ensurePasswordChangeColumns();
   const weak = needsPasswordChange(password, username);
   await query(
-    `UPDATE ${TABLE[kind]} SET must_change_password = $1 WHERE id = $2 AND must_change_password IS DISTINCT FROM $1`,
-    [weak, id],
+    `UPDATE instructor_accounts SET must_change_password = $1 WHERE id = $2 AND must_change_password IS DISTINCT FROM $1`,
+    [weak, instructorAccountId],
   );
 }
 
@@ -54,18 +52,18 @@ export function isRecentSignIn(payload: Record<string, unknown>): boolean {
   return Number.isFinite(iat) && Date.now() / 1000 - iat <= RECENT_SIGN_IN_SECONDS;
 }
 
-/** Whether this session's account still has to change its password */
+/** Whether this session's account still has to change its password (faculty only) */
 export async function mustChangePassword(payload: Record<string, unknown>): Promise<boolean> {
   const id = Number(payload.id);
-  if (!id) return false;
+  if (!id || payload.role !== 'instructor') return false;
   await ensurePasswordChangeColumns();
-  const kind: AccountKind = payload.role === 'instructor' ? 'instructor' : 'user';
-  const result = await query(`SELECT must_change_password FROM ${TABLE[kind]} WHERE id = $1`, [id]);
+  const result = await query(`SELECT must_change_password FROM instructor_accounts WHERE id = $1`, [id]);
   return result.rows[0]?.must_change_password === true;
 }
 
-/** Bumped when DEFAULT_PASSWORDS_TO_CHECK grows, so the start-up check runs again */
-const SCAN_VERSION = '1';
+/** Bumped when DEFAULT_PASSWORDS_TO_CHECK grows (or the rule changes), so the start-up check runs again.
+ *  2: faculty only — also clears the marks version 1 put on Administrator / Chair accounts. */
+const SCAN_VERSION = '2';
 
 /**
  * Once per database: accounts still on a well-known default password are
@@ -77,14 +75,13 @@ export async function scanForDefaultPasswordsOnce(): Promise<void> {
   const done = await query(`SELECT value FROM system_settings WHERE key = 'default_password_scan'`);
   if (done.rows[0]?.value === SCAN_VERSION) return;
   await ensurePasswordChangeColumns();
+  // Administrator / Chair accounts are never asked to change their password
+  await query(`UPDATE users SET must_change_password = FALSE WHERE must_change_password`);
 
   const accounts = (await query(`
-    SELECT 'user' AS kind, id, username, password_hash FROM users
+    SELECT id, username, password_hash FROM instructor_accounts
      WHERE COALESCE(is_active, true) AND NOT must_change_password
-    UNION ALL
-    SELECT 'instructor', id, username, password_hash FROM instructor_accounts
-     WHERE COALESCE(is_active, true) AND NOT must_change_password
-  `)).rows as { kind: AccountKind; id: number; username: string | null; password_hash: string | null }[];
+  `)).rows as { id: number; username: string | null; password_hash: string | null }[];
 
   let marked = 0;
   for (const a of accounts) {
@@ -93,7 +90,7 @@ export async function scanForDefaultPasswordsOnce(): Promise<void> {
     for (const pw of candidates) {
       // bcryptjs' async compare works in small steps, so requests keep being served meanwhile
       if (await bcrypt.compare(pw, a.password_hash).catch(() => false)) {
-        await query(`UPDATE ${TABLE[a.kind]} SET must_change_password = TRUE WHERE id = $1`, [a.id]);
+        await query(`UPDATE instructor_accounts SET must_change_password = TRUE WHERE id = $1`, [a.id]);
         marked++;
         break;
       }
@@ -104,5 +101,5 @@ export async function scanForDefaultPasswordsOnce(): Promise<void> {
      ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()`,
     [SCAN_VERSION],
   );
-  console.log(`[startup] Default-password check: ${accounts.length} accounts checked, ${marked} must change their password.`);
+  console.log(`[startup] Default-password check: ${accounts.length} faculty accounts checked, ${marked} must change their password.`);
 }

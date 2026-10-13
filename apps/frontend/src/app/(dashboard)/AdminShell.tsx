@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { motion, useReducedMotion } from 'framer-motion';
@@ -13,8 +13,11 @@ import SystemLogo from '@/components/ui/SystemLogo';
 import { useScrollLock } from '@/hooks/useScrollLock';
 import { logoHover, logoTap, NAV_DURATION, NAV_EASE } from '@/components/layout/navMotion';
 import { useSchedulingPendingCounts } from '@/hooks/useSchedulingPendingCounts';
+import { useRoomRequestPendingCount } from '@/hooks/useRoomRequestPendingCount';
+import type { NavBadgeCounts } from '@/components/layout/adminNav';
 import { useNavTrail } from '@/lib/navTrail';
 import { PageSuccessCheckHost } from '@/components/ui/SaveSuccessOverlay';
+import { ExportProgressHost } from '@/components/ui/ExportProgress';
 
 /**
  * Admin chrome: sticky top navigation + full-width content.
@@ -27,7 +30,13 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
   /** Shown in the phone menu ("Signed in as …") */
   const [username, setUsername] = useState<string | null>(null);
   const isWorkloadPrint = pathname === '/workload/print' || pathname.startsWith('/workload/print/');
-  const pendingCounts = useSchedulingPendingCounts();
+  const schedulingCounts = useSchedulingPendingCounts();
+  // Room Requests: red count while faculty requests wait for a decision
+  const roomRequests = useRoomRequestPendingCount();
+  const pendingCounts = useMemo<NavBadgeCounts>(
+    () => ({ ...schedulingCounts, roomRequests }),
+    [schedulingCounts, roomRequests],
+  );
   // Back buttons return to the page this tab came from
   useNavTrail(pathname, adminHomeHref(role));
 
@@ -119,6 +128,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
 
         {/* "Saved" checks that play after a dialog has closed */}
         <PageSuccessCheckHost />
+        <ExportProgressHost />
 
         {/* Phones / tablets: slide-in sidebar — the same one as the Faculty side */}
         <AdminMobileNav

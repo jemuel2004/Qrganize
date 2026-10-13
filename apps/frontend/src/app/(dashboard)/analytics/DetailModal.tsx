@@ -1,27 +1,23 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { BookOpen, CheckCircle2, Monitor } from 'lucide-react';
 import Modal from '@/components/ui/Modal';
 import { EASE } from './charts';
-import { byPosition } from '@/lib/positionRank';
 
-/* Pop-up behind each Analytics summary card: Rooms, Utilization, Faculty, Conflicts. */
+/* Pop-up behind Analytics' Rooms and Scheduling Conflicts. */
 
 type Kind = 'lec' | 'lab';
-export type DetailKey = 'rooms' | 'utilization' | 'faculty' | 'conflicts';
+export type DetailKey = 'rooms' | 'conflicts';
 
 export interface Details {
   rooms: { id: number; room_name: string; kind: Kind; status: 'In Use' | 'Available' | 'Inactive'; pct: number }[];
-  faculty: { id: number; name: string; employment_status: string | null; position: string | null; load: 'Regular' | 'Overload' | 'Praise' | null }[];
   conflicts: { type: 'instructor' | 'room' | 'block'; day: string; start: number; end: number; a: string; b: string; room: string | null }[];
 }
 
 const TITLES: Record<DetailKey, string> = {
   rooms: 'Rooms',
-  utilization: 'Room Utilization',
-  faculty: 'Faculty',
   conflicts: 'Scheduling Conflicts',
 };
 
@@ -30,12 +26,6 @@ const STATUS_TONE = {
   Available: { bg: '#ECFDF5', fg: '#047857' },
   Inactive: { bg: '#F1F5F9', fg: '#64748B' },
 } as const;
-
-const LOAD_TONE: Record<string, string> = {
-  Regular: 'var(--load-regular)',
-  Overload: 'var(--load-overload)',
-  Praise: 'var(--load-praise)',
-};
 
 const CONFLICT_LABEL = { instructor: 'Faculty', room: 'Room', block: 'Block' } as const;
 
@@ -97,80 +87,6 @@ function RoomsView({ rooms }: { rooms: Details['rooms'] }) {
   );
 }
 
-function UtilizationView({ rooms, rate }: { rooms: Details['rooms']; rate: number }) {
-  const reduceMotion = useReducedMotion();
-  const list = rooms.filter(r => r.status !== 'Inactive').sort((a, b) => b.pct - a.pct);
-  return (
-    <div className="space-y-4">
-      <p className="text-sm text-[#64748B]">
-        Overall <span className="text-2xl font-bold text-[#0B2A5B] align-middle ml-1">{rate}%</span>
-        <span className="ml-2">of weekly room hours booked</span>
-      </p>
-      <List>
-        {list.map((r, i) => (
-          <div key={r.id}>
-            <div className="flex items-center gap-2 text-sm">
-              <KindIcon kind={r.kind} />
-              <span className="font-semibold text-[#0B2A5B]">{r.room_name}</span>
-              <span className="ml-auto font-bold tabular-nums text-[#0B2A5B]">{r.pct}%</span>
-            </div>
-            <div className="mt-1.5 h-2 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--donut-track)' }}>
-              <motion.div className="h-full rounded-full" style={{ backgroundColor: r.kind === 'lab' ? '#F59E0B' : '#1D5BD6' }}
-                initial={reduceMotion ? false : { width: 0 }} animate={{ width: `${r.pct}%` }}
-                transition={{ duration: reduceMotion ? 0 : 0.6, ease: EASE, delay: reduceMotion ? 0 : Math.min(i, 12) * 0.04 }} />
-            </div>
-          </div>
-        ))}
-      </List>
-    </div>
-  );
-}
-
-function FacultyView({ faculty }: { faculty: Details['faculty'] }) {
-  const [filter, setFilter] = useState<'All' | 'Permanent' | 'Contractual'>('All');
-  // Permanent: highest position first · Contractual: A–Z · All: Permanent (by rank), then Contractual (A–Z)
-  const isPerm = (f: Details['faculty'][number]) => f.employment_status === 'Permanent';
-  const permanent = faculty.filter(isPerm).sort(byPosition);
-  const contractual = faculty.filter(f => !isPerm(f)).sort((a, b) => a.name.localeCompare(b.name));
-  const list = filter === 'Permanent' ? permanent : filter === 'Contractual' ? contractual : [...permanent, ...contractual];
-  return (
-    <div className="space-y-4">
-      <div className="flex gap-1 p-1 rounded-full bg-[#EAF0FA] w-fit">
-        {(['All', 'Permanent', 'Contractual'] as const).map(f => {
-          const on = f === filter;
-          const n = f === 'All' ? faculty.length : f === 'Permanent' ? permanent.length : contractual.length;
-          return (
-            <button key={f} type="button" onClick={() => setFilter(f)}
-              className={`relative px-3.5 h-8 rounded-full text-[13px] font-semibold transition-colors ${on ? '' : 'text-[#475569] hover:text-[#0B2A5B]'}`}
-              style={on ? { color: '#FFFFFF' } : undefined}>
-              {on && <motion.span layoutId="faculty-filter" className="absolute inset-0 rounded-full bg-[#0B2A5B]" transition={{ duration: 0.3, ease: EASE }} />}
-              <span className="relative">{f} <span className="opacity-70">{n}</span></span>
-            </button>
-          );
-        })}
-      </div>
-      <List key={filter}>
-        {list.map(f => (
-          <div key={f.id} className="flex items-center gap-3 min-w-0">
-            <span className="w-9 h-9 rounded-full bg-[#EFF6FF] text-[#1D5BD6] text-xs font-bold flex items-center justify-center flex-shrink-0">
-              {f.name.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase()}
-            </span>
-            <div className="min-w-0">
-              <p className="font-semibold text-[#0B2A5B] truncate">{f.name}</p>
-              <p className="text-xs text-[#64748B] truncate">{f.position || f.employment_status || '—'}</p>
-            </div>
-            <span className="ml-auto">
-              {f.load
-                ? <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#0B2A5B]"><span className="w-2 h-2 rounded-full" style={{ backgroundColor: LOAD_TONE[f.load] }} />{f.load}</span>
-                : <span className="text-xs text-[#94A3B8]">No load</span>}
-            </span>
-          </div>
-        ))}
-      </List>
-    </div>
-  );
-}
-
 function ConflictsView({ conflicts }: { conflicts: Details['conflicts'] }) {
   if (!conflicts.length) {
     return (
@@ -198,14 +114,12 @@ function ConflictsView({ conflicts }: { conflicts: Details['conflicts'] }) {
   );
 }
 
-export default function DetailModal({ open, details, rate, onClose }: {
-  open: DetailKey | null; details: Details; rate: number; onClose: () => void;
+export default function DetailModal({ open, details, onClose }: {
+  open: DetailKey | null; details: Details; onClose: () => void;
 }) {
   return (
     <Modal open={!!open} onClose={onClose} title={open ? TITLES[open] : ''} size="lg" headerAccent>
       {open === 'rooms' && <RoomsView rooms={details.rooms} />}
-      {open === 'utilization' && <UtilizationView rooms={details.rooms} rate={rate} />}
-      {open === 'faculty' && <FacultyView faculty={details.faculty} />}
       {open === 'conflicts' && <ConflictsView conflicts={details.conflicts} />}
     </Modal>
   );

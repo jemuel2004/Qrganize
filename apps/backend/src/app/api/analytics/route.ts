@@ -3,6 +3,8 @@ import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { getActiveAcademicPeriod } from '@/services/activeAcademicPeriod';
 import { computeWorkloadMonitoring } from '@/services/workloadMonitoring';
+import { loadRoomPlanning } from '@/services/roomPlanning';
+import type { RoomPlanningSummary } from '@shared/roomPlanning';
 import {
   DAY_END_MIN, DAY_START_MIN, LUNCH_END_MIN, LUNCH_START_MIN, timeToMinutes,
 } from '@/services/scheduleConflicts';
@@ -15,7 +17,9 @@ import {
  * bookable minutes per week (Mon–Sat, 7 AM–6 PM minus lunch). The range end
  * gives the current rate, the range start the "previous" one, and each month
  * end a trend point. Weekly patterns (by day / by time / class type) and
- * conflicts describe the timetable as it stands now.
+ * conflicts describe the timetable as it stands now. Room demand vs. usable
+ * rooms per time slot and room type comes from Room Planning (the same
+ * numbers as Room Utilization → Room Planning), without class or faculty lists.
  */
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -64,7 +68,7 @@ export async function GET(req: NextRequest) {
     const inTerm = `($1 = '' OR b.semester = $1) AND ($2 = '' OR b.academic_year = $2)`;
     const scheduled = `ms.status IN ('Assigned', 'Scheduled', 'Completed')`;
 
-    const [sessRes, classRes, roomsRes, loadsRes, facultyRes, monitoring] = await Promise.all([
+    const [sessRes, classRes, roomsRes, loadsRes, facultyRes, monitoring, planning] = await Promise.all([
       query(`
         SELECT ms.id AS ms_id, ms.faculty_id, bs.block_id, ss.room_id, ss.day_of_week AS day,
                COALESCE(ss.type, 'lec') AS type, ss.start_time::text AS start_time,
@@ -79,12 +83,11 @@ export async function GET(req: NextRequest) {
         WHERE ${scheduled} AND ${inTerm}
           AND ss.day_of_week IS NOT NULL AND ss.start_time IS NOT NULL AND ss.end_time IS NOT NULL
       `, term),
-      // Every subject offering this term (scheduled or not) + its program
+      // Every subject offering this term (scheduled or not)
       query(`
-        SELECT ms.id, ms.status, ms.faculty_id, COALESCE(p.code, 'Other') AS program_code
+        SELECT ms.id, ms.status, ms.faculty_id
         FROM master_schedule ms
         ${termJoin}
-        LEFT JOIN programs p ON p.id = b.program_id
         WHERE ${inTerm}
       `, term),
       // "In use" = held right now (QR occupancy) or a class is running in it now
@@ -126,6 +129,7 @@ export async function GET(req: NextRequest) {
       `),
       // Same workload rules as the Dashboard / notifications
       computeWorkloadMonitoring(),
+      loadRoomPlanning({ semester: semester ?? '', academicYear: schoolYear ?? '' }),
     ]);
 
     /* ── Rooms ─────────────────────────────────────────────────────────── */
@@ -161,11 +165,6 @@ export async function GET(req: NextRequest) {
 
     const current = bookedAsOf(to);
     const previous = bookedAsOf(toYmd(toMs(from) - DAY_MS));
-
-    const perRoom = active
-      .map(r => ({ id: r.id, room_name: r.room_name, kind: kindOf(r.room_type), pct: pct(current.perRoom.get(r.id) ?? 0, WEEK_CAPACITY_MIN) }))
-      .sort((a, b) => b.pct - a.pct || a.room_name.localeCompare(b.room_name));
-    const mostUsed = perRoom.filter(r => r.pct > 0).slice(0, 5);
 
     /* ── Weekly patterns ───────────────────────────────────────────────── */
     const byDay = Object.fromEntries(DAYS.map(d => [d, { lec: 0, lab: 0 }]));
@@ -233,13 +232,9 @@ export async function GET(req: NextRequest) {
     const facultyList = (facultyRes.rows as { id: number; name: string; employment_status: string | null; position: string | null }[])
       .map(f => ({ ...f, load: loadOf(kinds.get(f.id)) }));
     const permanent = facultyList.filter(f => f.employment_status === 'Permanent').length;
-    /* ── Offerings: scheduled / unscheduled (by program) / with conflict ── */
-    const offerings = classRes.rows as { id: number; status: string; faculty_id: number | null; program_code: string }[];
+    /* ── Offerings: scheduled / not yet / with conflict ── */
+    const offerings = classRes.rows as { id: number; status: string; faculty_id: number | null }[];
     const scheduledIds = new Set(sessions.map(x => x.ms_id));
-    const unscheduledByProgram = new Map<string, number>();
-    for (const o of offerings) {
-      if (!scheduledIds.has(o.id)) unscheduledByProgram.set(o.program_code, (unscheduledByProgram.get(o.program_code) ?? 0) + 1);
-    }
     const noFaculty = (o: { status: string; faculty_id: number | null }) => o.status === 'Unassigned' || o.faculty_id == null;
     const unassigned = offerings.filter(noFaculty).length;
     // Where each class stands — the three stages never overlap and add up to the total
@@ -250,49 +245,33 @@ export async function GET(req: NextRequest) {
       no_faculty: notScheduled.filter(noFaculty).length,
     };
 
-    /* ── Weekly occupancy heatmap: rooms in use, day × hour (all / lecture / lab) ── */
-    const HEAT_HOURS = Array.from({ length: (DAY_END_MIN - DAY_START_MIN) / 60 }, (_, i) => DAY_START_MIN / 60 + i);
-    const heatmap = DAYS.map(day => {
-      const cells = HEAT_HOURS.map(h => {
-        const inUse = new Set(roomSessions.filter(x => x.day === day && x.start < (h + 1) * 60 && x.end > h * 60).map(x => x.room_id!));
-        const lab = [...inUse].filter(id => roomKind.get(id) === 'lab').length;
-        return { all: inUse.size, lec: inUse.size - lab, lab };
-      });
-      return {
-        day,
-        // % of active rooms in use (kept for older callers)
-        values: cells.map(c => (active.length ? Math.round((c.all / active.length) * 100) : 0)),
-        all: cells.map(c => c.all),
-        lec: cells.map(c => c.lec),
-        lab: cells.map(c => c.lab),
-      };
-    });
-    const roomsOfKind = (k: Kind) => active.filter(r => kindOf(r.room_type) === k);
-    /* Share of each day's bookable room time that is booked (same rule as the overall rate) */
-    const usageByDayPct = DAYS.map(day => {
-      const mins = { lec: 0, lab: 0 };
-      for (const x of roomSessions) {
-        if (x.day !== day || x.created_on > to) continue;
-        mins[roomKind.get(x.room_id!) ?? 'lec'] += x.end - x.start;
-      }
-      return {
-        day,
-        all: pct(mins.lec + mins.lab, DAY_CAPACITY_MIN * active.length),
-        lec: pct(mins.lec, DAY_CAPACITY_MIN * roomsOfKind('lec').length),
-        lab: pct(mins.lab, DAY_CAPACITY_MIN * roomsOfKind('lab').length),
-      };
-    });
-    const kindRate = (k: Kind) => {
-      const list = roomsOfKind(k);
-      const booked = list.reduce((s, r) => s + (current.perRoom.get(r.id) ?? 0), 0);
-      return pct(booked, WEEK_CAPACITY_MIN * list.length);
+    /* ── Faculty and rooms: every faculty member with classes this term — all their
+          scheduled classes have a room, some still have none (the same rule as Room
+          Management's Classes Without a Room), or none of their classes has a day and time yet ── */
+    const scheduledFaculty = new Set<number>();
+    /** Faculty → their scheduled classes (offerings) with a meeting that has no room */
+    const roomless = new Map<number, Set<number>>();
+    const nameOf = new Map<number, string>();
+    for (const s of sessions) {
+      if (s.faculty_id == null) continue;
+      scheduledFaculty.add(s.faculty_id);
+      if (s.faculty_name) nameOf.set(s.faculty_id, s.faculty_name);
+      if (s.room_id == null) roomless.set(s.faculty_id, (roomless.get(s.faculty_id) ?? new Set<number>()).add(s.ms_id));
+    }
+    for (const f of facultyRes.rows as { id: number; name: string }[]) nameOf.set(Number(f.id), f.name);
+    const facultyRooms = {
+      with_room: 0, without_room: 0, no_schedule: 0,
+      // Who is in each group — the card's rows open these lists
+      faculty: [] as { id: number; name: string; state: 'room' | 'none' | 'unscheduled'; no_room: number }[],
     };
-    const buckets: [string, (p: number) => boolean][] = [
-      ['Under 50%', p => p < 50],
-      ['50–75%', p => p >= 50 && p <= 75],
-      ['76–90%', p => p > 75 && p <= 90],
-      ['Over 90%', p => p > 90],
-    ];
+    for (const id of new Set(offerings.filter(o => !noFaculty(o)).map(o => Number(o.faculty_id)))) {
+      const state = roomless.has(id) ? 'none' : scheduledFaculty.has(id) ? 'room' : 'unscheduled';
+      if (state === 'none') facultyRooms.without_room++;
+      else if (state === 'room') facultyRooms.with_room++;
+      else facultyRooms.no_schedule++;
+      facultyRooms.faculty.push({ id, name: nameOf.get(id) ?? 'Unnamed', state, no_room: roomless.get(id)?.size ?? 0 });
+    }
+    facultyRooms.faculty.sort((a, b) => a.name.localeCompare(b.name));
 
     return NextResponse.json({
       range: { from, to },
@@ -301,7 +280,6 @@ export async function GET(req: NextRequest) {
         rooms: { total: active.length, lec: active.filter(r => kindOf(r.room_type) === 'lec').length, lab: active.filter(r => kindOf(r.room_type) === 'lab').length },
         utilization: current.rate,
         utilization_change: Math.round((current.rate - previous.rate) * 10) / 10,
-        utilization_by_kind: { lec: kindRate('lec'), lab: kindRate('lab') },
         instructors: { total: facultyList.length, permanent, contractual: facultyList.length - permanent },
         conflicts: clash.instructor + clash.room + clash.block,
       },
@@ -311,10 +289,7 @@ export async function GET(req: NextRequest) {
         inactive: rooms.length - active.length,
       },
       usage_by_day: DAYS.map(d => ({ day: d, ...byDay[d] })),
-      usage_by_day_pct: usageByDayPct,
       usage_by_time: byTime,
-      most_used: mostUsed,
-      least_used: perRoom.filter(r => !mostUsed.includes(r)).reverse().slice(0, 5),
       workload,
       class_types: { lec: components.lec.size, lab: components.lab.size },
       scheduling: {
@@ -328,10 +303,11 @@ export async function GET(req: NextRequest) {
         scheduled: scheduledIds.size,
         conflicted: [...scheduledIds].filter(id => conflicted.has(id)).length,
         stages,
-        unscheduled_by_program: [...unscheduledByProgram].map(([program, count]) => ({ program, count })).sort((a, b) => b.count - a.count),
       },
       conflict_counts: { room: clash.room, faculty: clash.instructor, block: clash.block },
-      // Complete / complete with overload / in progress / not started — per faculty
+      faculty_rooms: facultyRooms,
+      // Complete / with overload / with praise / in progress / not started — per faculty.
+      // A full load with any Praise Load counts as praise (the last step after Overload).
       faculty_load: (() => {
         const needsSchedule = new Set(monitoring.schedule_needed_instructors.map(i => i.faculty_id));
         return monitoring.faculty_loads.map(f => ({
@@ -340,18 +316,25 @@ export async function GET(req: NextRequest) {
           current: f.current_load,
           limit: f.regular_load_limit,
           unit: f.unit,
-          status: f.status === 'OVERLOAD' ? 'overload'
-            : f.status === 'COMPLETE' ? 'complete'
-              : f.current_load > 0.001 ? 'in_progress' : 'not_started',
+          status: (f.status === 'OVERLOAD' || f.status === 'COMPLETE') && kinds.get(f.faculty_id)?.has('Praise') ? 'praise'
+            : f.status === 'OVERLOAD' ? 'overload'
+              : f.status === 'COMPLETE' ? 'complete'
+                : f.current_load > 0.001 ? 'in_progress' : 'not_started',
           needs_schedule: needsSchedule.has(f.faculty_id),
         }));
       })(),
-      heatmap: {
-        hours: HEAT_HOURS,
-        rooms: { all: active.length, lec: roomsOfKind('lec').length, lab: roomsOfKind('lab').length },
-        days: heatmap,
-      },
-      capacity: buckets.map(([label, test]) => ({ label, rooms: perRoom.filter(r => test(r.pct)).length })),
+      // Room demand vs. usable rooms per kind and hour slot (Room Planning, no class lists)
+      room_planning: {
+        days: planning.days,
+        hours: planning.hours,
+        week_minutes: planning.week_minutes,
+        pools: planning.pools,
+        grid: planning.grid,
+        totals: planning.totals,
+        busiest: planning.busiest,
+      } satisfies RoomPlanningSummary,
+      // In use / Free on the busiest-time card open these rooms (all kinds)
+      busiest_rooms: planning.busiest_rooms.all,
       trends,
       // Detail lists for the summary-card pop-ups
       details: {
@@ -362,7 +345,6 @@ export async function GET(req: NextRequest) {
             pct: pct(current.perRoom.get(r.id) ?? 0, WEEK_CAPACITY_MIN),
           }))
           .sort((a, b) => a.room_name.localeCompare(b.room_name, undefined, { numeric: true })),
-        faculty: facultyList,
         conflicts: conflictList.sort((a, b) => DAYS.indexOf(a.day) - DAYS.indexOf(b.day) || a.start - b.start),
       },
     });

@@ -2,6 +2,34 @@ import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { resolveProgramScope, assertBlockProgramAccess } from '@/services/programScope';
+import { getNstpSchedule, nstpSql } from '@/services/nstp';
+import { NSTP_DAY, nstpHours, nstpTimeSet, type NstpSchedule } from '@shared/nstp';
+
+type ScheduleRow = Record<string, unknown> & { block_subject_id: number };
+
+/**
+ * NSTP on the Class Program: every Saturday at the time set in Settings →
+ * Day Combinations → NSTP, the handler's typed name, no room. It never comes
+ * from a class row, so reloads can't duplicate it and a change in Settings
+ * shows at once. Until the time is set it waits under Pending.
+ */
+function nstpRow(row: ScheduleRow, nstp: NstpSchedule) {
+  const set = nstpTimeSet(nstp);
+  return {
+    ...row,
+    ms_id: -row.block_subject_id,
+    day_pattern: set ? 'Sat' : null,
+    start_time: set ? nstp.start_time : null,
+    end_time: set ? nstp.end_time : null,
+    status: 'NSTP',
+    faculty_name: nstp.handler_name || null,
+    room_name: null,
+    sessions: set
+      ? [{ day: NSTP_DAY, start_time: `${nstp.start_time}:00`, end_time: `${nstp.end_time}:00`, session_hours: nstpHours(nstp) }]
+      : null,
+    nstp: true,
+  };
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -92,6 +120,8 @@ export async function GET(req: NextRequest) {
     const schedResult = await query(`
       SELECT
         COALESCE(ms.id, bs.id * -1)            AS ms_id,
+        bs.id                                  AS block_subject_id,
+        ${nstpSql('c.subject_code')}           AS is_nstp,
         ms.day_pattern,
         ms.start_time,
         ms.end_time,
@@ -130,7 +160,11 @@ export async function GET(req: NextRequest) {
       ORDER BY ms.start_time NULLS LAST, c.subject_code
     `, [blockId]);
 
-    return NextResponse.json({ block, schedules: schedResult.rows });
+    const nstp = await getNstpSchedule();
+    const schedules = (schedResult.rows as (ScheduleRow & { is_nstp: boolean })[])
+      .map(({ is_nstp, ...row }) => (is_nstp ? nstpRow(row, nstp) : row));
+
+    return NextResponse.json({ block, schedules });
 
   } catch (error) {
     console.error('[GET /api/class-program]', error);

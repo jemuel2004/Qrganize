@@ -1,10 +1,40 @@
 import { query, transaction } from '@/database/db';
 import { bumpTopics } from '@/services/realtime';
+import { manilaDateAtSql } from '@/services/appTimezone';
+import { holdEndSql } from '@/services/occupancyHold';
 import { needsOneRoomSql } from '@shared/subjectCategory';
+import { HOLD_BEFORE_MIN } from '@shared/roomRequestWindow';
 
 let ready = false;
 let rcrSchemaReady = false;
 let qrScanLogsSchemaReady = false;
+
+/*
+  Room requests are for today only (@shared/roomRequestWindow): a request with a
+  use_date holds its room for that one class time — from 15 minutes before the
+  class until it ends — and never changes the class's schedule. Requests made
+  before (no use_date) moved the class into the room until it was released and
+  keep that behaviour.
+*/
+
+/** SQL: when today-only request `a` starts holding its room (15 minutes before its class time) */
+const holdFromSql = (a: string) =>
+  `(${manilaDateAtSql(`${a}.use_date`, `${a}.use_start`)} - INTERVAL '${HOLD_BEFORE_MIN} minutes')`;
+/** SQL: when today-only request `a`'s class time ends */
+const classEndSql = (a: string) => manilaDateAtSql(`${a}.use_date`, `${a}.use_end`);
+
+/** SQL: occupancy `ro` belongs to an older In-Use request that moved its class into the room (held until released) */
+export function legacyInUseHoldSql(ro: string): string {
+  return `EXISTS (
+    SELECT 1 FROM room_change_requests lr
+    WHERE  lr.requested_room_id = ${ro}.room_id
+      AND  lr.faculty_id        = ${ro}.faculty_id
+      AND  lr.status            = 'In-Use'
+      AND  lr.use_date IS NULL
+  )`;
+}
+
+export { holdEndSql };
 
 /**
  * Ensures all v15+ columns exist on room_change_requests.
@@ -41,6 +71,10 @@ export async function ensureRoomRequestsSchema(): Promise<void> {
     `ALTER TABLE room_change_requests ADD COLUMN IF NOT EXISTS expired_at            TIMESTAMPTZ`,
     `ALTER TABLE room_change_requests ADD COLUMN IF NOT EXISTS confirmed_at          TIMESTAMPTZ`,
     `ALTER TABLE room_change_requests ADD COLUMN IF NOT EXISTS session_rooms         JSONB`,
+    // Today-only requests: the date and the class time the room is held for
+    `ALTER TABLE room_change_requests ADD COLUMN IF NOT EXISTS use_date              DATE`,
+    `ALTER TABLE room_change_requests ADD COLUMN IF NOT EXISTS use_start             TIME`,
+    `ALTER TABLE room_change_requests ADD COLUMN IF NOT EXISTS use_end               TIME`,
   ];
   for (const sql of cols) {
     await query(sql).catch(() => {});
@@ -112,18 +146,17 @@ export async function ensureRoomOccupancy(): Promise<void> {
 }
 
 /** Expire stale Pending/Occupied rows whose expires_at has passed.
- *  Occupied rows tied to an In-Use room request stay active until the
- *  instructor (or admin) explicitly releases them. */
+ *  Occupied rows tied to an older In-Use room request (one that moved its
+ *  class) stay active until the instructor (or admin) explicitly releases
+ *  them; a today-only request's hold ends with its class time. Then request
+ *  statuses that time changes are brought up to date, and today-only requests
+ *  whose time has come take their rooms. */
 export async function expireStaleOccupancy(roomId?: number): Promise<void> {
+  await ensureRoomRequestsSchema();
   const inUseGuard = `
     AND NOT (
       status = 'Occupied'
-      AND EXISTS (
-        SELECT 1 FROM room_change_requests rcr
-        WHERE rcr.requested_room_id = room_occupancy.room_id
-          AND rcr.faculty_id        = room_occupancy.faculty_id
-          AND rcr.status            = 'In-Use'
-      )
+      AND ${legacyInUseHoldSql('room_occupancy')}
     )
   `;
   const expired = roomId !== undefined
@@ -145,7 +178,200 @@ export async function expireStaleOccupancy(roomId?: number): Promise<void> {
   // Time-based change — open tabs refresh the rooms that just freed up
   if ((expired.rowCount ?? 0) > 0) bumpTopics(['occupancy']);
 
+  await closeTimedOutRequests();
+  await activateDueReservations();
   await restoreSchedulesAfterReleasedRequests();
+}
+
+/**
+ * Today-only requests whose time has come hold their room, from 15 minutes
+ * before the class: one waiting for its QR scan gets a Pending hold until the
+ * scan deadline; one an administrator approved is held (Occupied) until the
+ * class ends. A hold left from a class that has already ended (the 30-minute
+ * tail after a check-in) gives way first; anyone else still holding the room
+ * keeps it, and the hold follows once it ends.
+ */
+export async function activateDueReservations(): Promise<void> {
+  await ensureRoomRequestsSchema();
+  try {
+    const madeWay = await query(`
+      UPDATE room_occupancy ro
+      SET    status = 'Expired', released_at = NOW()
+      FROM   room_change_requests rcr
+      WHERE  rcr.use_date IS NOT NULL
+        AND  rcr.status IN ('Pending Confirmation', 'Approved')
+        AND  (rcr.status = 'Approved' OR rcr.confirmation_deadline > NOW())
+        AND  NOW() >= ${holdFromSql('rcr')}
+        AND  NOW() <  ${classEndSql('rcr')}
+        AND  ro.room_id     = rcr.requested_room_id
+        AND  ro.faculty_id <> rcr.faculty_id
+        AND  ro.status IN ('Pending', 'Occupied')
+        AND  ro.scheduled_end IS NOT NULL
+        AND  ${holdEndSql('ro')} <= NOW()
+        AND  NOT ${legacyInUseHoldSql('ro')}
+    `);
+    const held = await query(`
+      INSERT INTO room_occupancy (room_id, faculty_id, status, reserved_at, expires_at, scheduled_start, scheduled_end)
+      SELECT DISTINCT ON (rcr.requested_room_id)
+             rcr.requested_room_id, rcr.faculty_id, 'Pending', NOW(), rcr.confirmation_deadline, rcr.use_start, rcr.use_end
+      FROM   room_change_requests rcr
+      WHERE  rcr.use_date IS NOT NULL
+        AND  rcr.status = 'Pending Confirmation'
+        AND  rcr.confirmation_deadline > NOW()
+        AND  NOW() >= ${holdFromSql('rcr')}
+        AND  NOT EXISTS (
+               SELECT 1 FROM room_occupancy ro
+               WHERE  ro.room_id = rcr.requested_room_id
+                 AND  ro.status IN ('Pending', 'Occupied')
+             )
+      ORDER  BY rcr.requested_room_id, rcr.use_start
+      ON CONFLICT DO NOTHING
+    `);
+    const approved = await query(`
+      SELECT DISTINCT ON (rcr.requested_room_id) rcr.id
+      FROM   room_change_requests rcr
+      WHERE  rcr.use_date IS NOT NULL
+        AND  rcr.status = 'Approved'
+        AND  NOW() >= ${holdFromSql('rcr')}
+        AND  NOW() <  ${classEndSql('rcr')}
+        AND  NOT EXISTS (
+               SELECT 1 FROM room_occupancy ro
+               WHERE  ro.room_id     = rcr.requested_room_id
+                 AND  ro.faculty_id <> rcr.faculty_id
+                 AND  ro.status IN ('Pending', 'Occupied')
+             )
+      ORDER  BY rcr.requested_room_id, rcr.use_start
+    `);
+    let changed = (madeWay.rowCount ?? 0) + (held.rowCount ?? 0);
+    for (const r of approved.rows as { id: number }[]) {
+      if (await holdRoomForRequest(Number(r.id))) changed++;
+    }
+    if (changed > 0) bumpTopics(['occupancy', 'room-requests']);
+  } catch (err) {
+    console.error('[activateDueReservations]', err);
+  }
+}
+
+/**
+ * Hold the room for a today-only request now, until its class ends: the
+ * faculty's own hold of the room (the Pending one from the request, or one
+ * they already had) becomes Occupied, otherwise a new one is made, and the
+ * request becomes In-Use. False when another faculty holds the room.
+ */
+export async function holdRoomForRequest(requestId: number): Promise<boolean> {
+  const own = await query(`
+    UPDATE room_occupancy ro
+    SET    status          = 'Occupied',
+           occupied_at     = COALESCE(ro.occupied_at, NOW()),
+           expires_at      = ${classEndSql('rcr')},
+           scheduled_start = rcr.use_start,
+           scheduled_end   = rcr.use_end
+    FROM   room_change_requests rcr
+    WHERE  rcr.id = $1
+      AND  rcr.use_date IS NOT NULL
+      AND  ro.room_id    = rcr.requested_room_id
+      AND  ro.faculty_id = rcr.faculty_id
+      AND  ro.status IN ('Pending', 'Occupied')
+    RETURNING ro.id
+  `, [requestId]);
+  if ((own.rowCount ?? 0) === 0) {
+    const made = await query(`
+      INSERT INTO room_occupancy
+        (room_id, faculty_id, status, reserved_at, expires_at, occupied_at, scheduled_start, scheduled_end)
+      SELECT rcr.requested_room_id, rcr.faculty_id, 'Occupied', NOW(), ${classEndSql('rcr')}, NOW(), rcr.use_start, rcr.use_end
+      FROM   room_change_requests rcr
+      WHERE  rcr.id = $1 AND rcr.use_date IS NOT NULL
+      ON CONFLICT DO NOTHING
+      RETURNING id
+    `, [requestId]);
+    if ((made.rowCount ?? 0) === 0) return false;
+  }
+  await query(`
+    UPDATE room_change_requests
+    SET    status       = 'In-Use',
+           confirmed_at = COALESCE(confirmed_at, NOW()),
+           updated_at   = NOW()
+    WHERE  id = $1
+  `, [requestId]);
+  bumpTopics(['occupancy', 'room-requests']);
+  return true;
+}
+
+export interface ConfirmedReservation {
+  id: number;
+  master_schedule_id: number | null;
+  /** "HH:MM" */
+  use_start: string;
+  use_end: string;
+  subject_name: string | null;
+  block_name: string | null;
+}
+
+/**
+ * The faculty's today-only request for this room whose time has come (from 15
+ * minutes before its class; one waiting for its scan only until the
+ * deadline): the scan confirms it and holds the room until the class ends.
+ * Null when there is none, or another faculty holds the room.
+ */
+export async function confirmReservationByScan(facultyId: number, roomId: number): Promise<ConfirmedReservation | null> {
+  await ensureRoomRequestsSchema();
+  const res = await query(`
+    SELECT rcr.id, rcr.master_schedule_id,
+           to_char(rcr.use_start, 'HH24:MI') AS use_start,
+           to_char(rcr.use_end,   'HH24:MI') AS use_end,
+           c.subject_name, b.block_name
+    FROM   room_change_requests rcr
+    LEFT JOIN master_schedule ms ON ms.id = rcr.master_schedule_id
+    LEFT JOIN block_subjects  bs ON bs.id = ms.block_subject_id
+    LEFT JOIN curriculums      c ON c.id  = bs.curriculum_id
+    LEFT JOIN blocks           b ON b.id  = bs.block_id
+    WHERE  rcr.faculty_id        = $1
+      AND  rcr.requested_room_id = $2
+      AND  rcr.use_date IS NOT NULL
+      AND  rcr.status IN ('Pending Confirmation', 'Approved')
+      AND  (rcr.status = 'Approved' OR rcr.confirmation_deadline > NOW())
+      AND  NOW() >= ${holdFromSql('rcr')}
+      AND  NOW() <  ${classEndSql('rcr')}
+    ORDER  BY rcr.use_start
+    LIMIT  1
+  `, [facultyId, roomId]);
+  const found = res.rows[0] as ConfirmedReservation | undefined;
+  if (!found) return null;
+  return (await holdRoomForRequest(Number(found.id))) ? found : null;
+}
+
+/** The faculty's today-only request for this room whose time hasn't come yet (its scan opens 15 minutes before the class) */
+export async function upcomingReservation(facultyId: number, roomId: number): Promise<{ use_start: string; use_end: string } | null> {
+  await ensureRoomRequestsSchema();
+  const res = await query(`
+    SELECT to_char(rcr.use_start, 'HH24:MI') AS use_start, to_char(rcr.use_end, 'HH24:MI') AS use_end
+    FROM   room_change_requests rcr
+    WHERE  rcr.faculty_id        = $1
+      AND  rcr.requested_room_id = $2
+      AND  rcr.use_date IS NOT NULL
+      AND  rcr.status IN ('Pending Confirmation', 'Approved')
+      AND  NOW() < ${holdFromSql('rcr')}
+    ORDER  BY rcr.use_date, rcr.use_start
+    LIMIT  1
+  `, [facultyId, roomId]);
+  return (res.rows[0] as { use_start: string; use_end: string } | undefined) ?? null;
+}
+
+/** When another faculty's today-only request next starts holding this room
+ *  (15 minutes before its class) — someone walking in must be out by then */
+export async function nextReservationHoldFrom(roomId: number, facultyId: number): Promise<Date | null> {
+  await ensureRoomRequestsSchema();
+  const res = await query(`
+    SELECT MIN(${holdFromSql('rcr')}) AS hold_from
+    FROM   room_change_requests rcr
+    WHERE  rcr.requested_room_id = $1
+      AND  rcr.faculty_id       <> $2
+      AND  rcr.use_date IS NOT NULL
+      AND  rcr.status IN ('Pending Confirmation', 'Approved')
+      AND  ${holdFromSql('rcr')} > NOW()
+  `, [roomId, facultyId]);
+  const at = res.rows[0]?.hold_from;
+  return at ? new Date(at) : null;
 }
 
 /**
@@ -227,7 +453,8 @@ async function restoreRequestSessionRooms(r: {
 /**
  * If the latest request for a class is Released but the schedule still
  * points at the requested room (leftover from admin approval), restore
- * the previous rooms so the room can be requested again.
+ * the previous rooms so the room can be requested again. Today-only
+ * requests never moved the class, so there is nothing to restore for them.
  */
 async function restoreSchedulesAfterReleasedRequests(): Promise<void> {
   await ensureRoomRequestsSchema();
@@ -238,7 +465,8 @@ async function restoreSchedulesAfterReleasedRequests(): Promise<void> {
              original_room_id,
              requested_room_id,
              faculty_id,
-             status
+             status,
+             use_date
       FROM   room_change_requests
       WHERE  master_schedule_id IS NOT NULL
       ORDER BY master_schedule_id, created_at DESC, id DESC
@@ -248,6 +476,7 @@ async function restoreSchedulesAfterReleasedRequests(): Promise<void> {
     FROM   latest
     WHERE  ms.id = latest.master_schedule_id
       AND  latest.status = 'Released'
+      AND  latest.use_date IS NULL
       AND  ms.room_id IS NOT DISTINCT FROM latest.requested_room_id
       AND  ms.room_id IS DISTINCT FROM latest.original_room_id
       AND  NOT EXISTS (
@@ -268,7 +497,8 @@ async function restoreSchedulesAfterReleasedRequests(): Promise<void> {
              requested_room_id,
              faculty_id,
              status,
-             session_rooms
+             session_rooms,
+             use_date
       FROM   room_change_requests
       WHERE  master_schedule_id IS NOT NULL
       ORDER BY master_schedule_id, created_at DESC, id DESC
@@ -281,6 +511,7 @@ async function restoreSchedulesAfterReleasedRequests(): Promise<void> {
     FROM   latest
     WHERE  ss.master_schedule_id = latest.master_schedule_id
       AND  latest.status = 'Released'
+      AND  latest.use_date IS NULL
       AND  ss.room_id IS NOT DISTINCT FROM latest.requested_room_id
       AND  (
              (latest.session_rooms IS NULL AND ss.room_id IS DISTINCT FROM latest.original_room_id)
@@ -298,9 +529,10 @@ async function restoreSchedulesAfterReleasedRequests(): Promise<void> {
 }
 
 /**
- * End occupancy and close matching In-Use room requests.
- * Restores the class to original_room_id so the released room can be
- * requested again without being treated as still assigned.
+ * End occupancy and close matching In-Use room requests (and a today-only
+ * request whose hold was just given up, so it doesn't take the room back).
+ * An older request's class goes back to original_room_id so the released room
+ * can be requested again without being treated as still assigned.
  */
 export async function completeRoomRelease(
   roomId: number,
@@ -326,13 +558,17 @@ export async function completeRoomRelease(
            auto_notes = COALESCE(NULLIF(trim(auto_notes), ''), 'Room released by faculty.')
     WHERE  faculty_id        = $1
       AND  requested_room_id = $2
-      AND  status            = 'In-Use'
-    RETURNING master_schedule_id, original_room_id, requested_room_id, session_rooms
+      AND  (status = 'In-Use'
+            OR (use_date IS NOT NULL
+                AND status IN ('Pending Confirmation', 'Approved')
+                AND NOW() >= ${holdFromSql('room_change_requests')}))
+    RETURNING master_schedule_id, original_room_id, requested_room_id, session_rooms, use_date
   `, [facultyId, roomId]);
   if (closed.rows.length > 0) bumpTopics(['room-requests', 'schedule', 'workload']);
 
   for (const row of closed.rows) {
-    if (!row.master_schedule_id) continue;
+    // Today-only requests never moved the class
+    if (!row.master_schedule_id || row.use_date) continue;
     await query(
       `UPDATE master_schedule SET room_id = $1 WHERE id = $2 AND room_id IS NOT DISTINCT FROM $3`,
       [row.original_room_id ?? null, row.master_schedule_id, row.requested_room_id ?? null],
@@ -350,11 +586,20 @@ export async function completeRoomRelease(
 }
 
 /**
- * Expire room_change_requests whose 15-minute QR confirmation window has passed.
+ * Expire room_change_requests whose QR confirmation window has passed, and
+ * close today-only requests whose class time is over.
  * Calls ensureRoomRequestsSchema() first so this is self-healing on any database
  * that hasn't had the v15 migration applied yet (e.g. after a hot-reload in dev).
  */
 export async function expireStaleRoomRequests(): Promise<void> {
+  await ensureRoomRequestsSchema();
+  await closeTimedOutRequests();
+  await purgeOldRoomRequestHistory();
+}
+
+/** Request statuses that time alone changes: a QR scan that didn't come in
+ *  time, and a today-only request whose class time is over. */
+async function closeTimedOutRequests(): Promise<void> {
   await ensureRoomRequestsSchema();
   const expired = await query(`
     UPDATE room_change_requests
@@ -363,13 +608,24 @@ export async function expireStaleRoomRequests(): Promise<void> {
            expired_at = COALESCE(expired_at, NOW()),
            auto_notes = COALESCE(
              auto_notes,
-             'QR scan window expired — room returned to available.'
+             CASE WHEN use_date IS NULL
+                  THEN 'QR scan window expired — room returned to available.'
+                  ELSE 'The QR code was not scanned in time, so the room was given back.'
+             END
            )
     WHERE  status               = 'Pending Confirmation'
       AND  confirmation_deadline < NOW()
-  `).catch(() => null);
-  if ((expired?.rowCount ?? 0) > 0) bumpTopics(['room-requests']);
-  await purgeOldRoomRequestHistory();
+  `).catch(err => { console.error('[closeTimedOutRequests] expire', err); return null; });
+  const ended = await query(`
+    UPDATE room_change_requests rcr
+    SET    status     = 'Released',
+           updated_at = NOW(),
+           auto_notes = COALESCE(NULLIF(trim(rcr.auto_notes), ''), 'Ended after the class time.')
+    WHERE  rcr.use_date IS NOT NULL
+      AND  rcr.status IN ('In-Use', 'Approved')
+      AND  ${classEndSql('rcr')} <= NOW()
+  `).catch(err => { console.error('[closeTimedOutRequests] end', err); return null; });
+  if ((expired?.rowCount ?? 0) + (ended?.rowCount ?? 0) > 0) bumpTopics(['room-requests']);
 }
 
 /**

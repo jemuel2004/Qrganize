@@ -1,4 +1,6 @@
 ﻿import { NextRequest, NextResponse } from 'next/server';
+import { parseId } from '@/database/ids';
+import { cleanText, readJsonObject } from '@/services/requestInput';
 import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { withAudit } from '@/services/audit';
@@ -12,9 +14,13 @@ export async function GET(req: NextRequest) {
     }
 
     const { searchParams } = new URL(req.url);
-    const facultyId = searchParams.get('faculty_id');
-    const academicYear = searchParams.get('academic_year');
-    const semester = searchParams.get('semester');
+    const facultyRaw = searchParams.get('faculty_id');
+    const facultyId = facultyRaw ? parseId(facultyRaw) : null;
+    const academicYear = cleanText(searchParams.get('academic_year'), 20);
+    const semester = cleanText(searchParams.get('semester'), 20);
+    if ((facultyRaw && facultyId === null) || academicYear === null || semester === null) {
+      return NextResponse.json({ error: 'Invalid filter.' }, { status: 400 });
+    }
 
     let sql = `
       SELECT p.*, f.name as faculty_name, f.position, f.employee_id
@@ -51,7 +57,19 @@ async function POST_handler(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { faculty_id, praise_type, description, equivalent_units, equivalent_hours, academic_year, semester, remarks } = await req.json();
+    const body = await readJsonObject(req);
+    const faculty_id = parseId(body?.faculty_id);
+    // As the columns hold them: praise_type 100 characters, academic_year / semester 20
+    const praise_type = cleanText(body?.praise_type, 100);
+    const academic_year = cleanText(body?.academic_year, 20);
+    const semester = cleanText(body?.semester, 20);
+    const description = cleanText(body?.description, 2000);
+    const remarks = cleanText(body?.remarks, 2000);
+    const equivalent_units = body?.equivalent_units;
+    const equivalent_hours = body?.equivalent_hours;
+    if (praise_type === null || academic_year === null || semester === null || description === null || remarks === null) {
+      return NextResponse.json({ error: 'Check the Praise Load details and try again.' }, { status: 400 });
+    }
 
     if (!faculty_id || !praise_type || !academic_year || !semester) {
       return NextResponse.json({ error: 'Faculty, praise type, academic year, and semester are required' }, { status: 400 });
@@ -98,7 +116,7 @@ async function POST_handler(req: NextRequest) {
     const result = await query(`
       INSERT INTO praise (faculty_id, praise_type, description, equivalent_units, equivalent_hours, academic_year, semester, remarks)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *
-    `, [faculty_id, praise_type, description, units, hours, academic_year, semester, remarks]);
+    `, [faculty_id, praise_type, description || null, units, hours, academic_year, semester, remarks || null]);
 
     return NextResponse.json({ praise: result.rows[0] }, { status: 201 });
   } catch (error) {

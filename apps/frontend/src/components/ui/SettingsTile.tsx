@@ -7,7 +7,7 @@ import { ChevronRight, X } from 'lucide-react';
 import { useScrollLock } from '@/hooks/useScrollLock';
 
 /*
- * One setting on a Settings page (faculty Settings, chairs' My Account): a big
+ * One setting on a Settings page (faculty and chairs' Settings): a big
  * colour tile; clicking it opens the setting in its own centred pop-up (no
  * long scrolling page). Close / Esc / backdrop closes it. On phones the
  * window fits the visible screen (dvh) and scrolls inside.

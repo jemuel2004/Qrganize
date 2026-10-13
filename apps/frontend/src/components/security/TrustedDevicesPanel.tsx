@@ -40,14 +40,15 @@ function formatWhen(value: string) {
   const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const startThat = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
   const dayDiff = Math.round((startToday - startThat) / 86400000);
-  const time = date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const time = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
   if (dayDiff === 0) return `Today at ${time}`;
   if (dayDiff === 1) return `Yesterday at ${time}`;
-  return date.toLocaleString(undefined, {
+  return date.toLocaleString('en-US', {
     month: 'long',
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
+    hour12: true,
   });
 }
 

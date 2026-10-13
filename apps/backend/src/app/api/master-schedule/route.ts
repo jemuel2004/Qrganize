@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { notNstpSql } from '@/services/nstp';
 import { query } from '@/database/db';
 import { parseId } from '@/database/ids';
 import { getAuthUser } from '@/auth/auth';
@@ -83,6 +84,7 @@ export async function GET(req: NextRequest) {
          JOIN blocks      b ON bs.block_id      = b.id
          JOIN programs    p ON b.program_id     = p.id
          ${backfillWhere}
+           AND ${notNstpSql('c.subject_code')}
            AND NOT EXISTS (SELECT 1 FROM master_schedule ms2 WHERE ms2.block_subject_id = bs.id)`,
         backfillParams,
       );

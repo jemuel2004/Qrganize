@@ -6,6 +6,10 @@ import FaviconUpdater from "@/components/ui/FaviconUpdater";
 export const metadata: Metadata = {
   title: "QRganize — QR-Based Program Scheduler",
   description: "QR-powered room booking, faculty workload tracking, and program scheduling",
+  // Added to a phone's Home Screen it opens as an app (app/manifest.ts) — on
+  // iPhone and iPad that is where class reminders can arrive
+  appleWebApp: { title: "QRganize", statusBarStyle: "default" },
+  icons: { apple: "/icons/apple-touch-icon.png" },
 };
 
 /** Runs before paint.

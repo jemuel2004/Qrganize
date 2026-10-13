@@ -3,6 +3,8 @@ import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { getActiveAcademicPeriod } from '@/services/activeAcademicPeriod';
 import { ensureQrScanLogsSchema, ensureRoomOccupancy, expireStaleOccupancy } from '@/services/ensureRoomOccupancy';
+import { ensureRoomReleasesTable, occupancyCoversSql, releasedOnSql, unclaimedNowSql } from '@/services/roomReleases';
+import { SCAN_WITHIN_MIN } from '@shared/roomRequestWindow';
 
 /**
  * GET /api/rooms/utilization?date=YYYY-MM-DD&view=daily|weekly|monthly|upcoming[&room_id=N]
@@ -19,6 +21,11 @@ import { ensureQrScanLogsSchema, ensureRoomOccupancy, expireStaleOccupancy } fro
  *   Not Checked  — check-in window passed with no scan
  *   Upcoming     — hasn't started yet
  *   Walk-in      — a check-in with no matching scheduled class
+ * Being in the room for a class without a scan of its own counts as checked in
+ * (e.g. a Laboratory right after its Lecture, one scan) — the same rule that
+ * decides when a room is free (services/roomReleases.ts). Today's classes also
+ * say when they don't hold their room (`free_now`): released by their faculty,
+ * or not checked in within 15 minutes — then the room is free to anyone.
  * Plus each room's live status (Available / Pending / Occupied) and, with
  * room_id, that room's raw QR scan logs.
  */
@@ -26,7 +33,7 @@ import { ensureQrScanLogsSchema, ensureRoomOccupancy, expireStaleOccupancy } fro
 type View = 'daily' | 'weekly' | 'monthly' | 'upcoming';
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const CHECKIN_EARLY_MIN = 30; // a scan up to 30 min before start counts
-const PENDING_WINDOW_MIN = 15; // same 15-minute window as room reservations
+const PENDING_WINDOW_MIN = SCAN_WITHIN_MIN; // the class's 15 minutes to check in — then its room is free to anyone
 
 const toMin = (hm: string) => { const [h, m] = hm.split(':').map(Number); return h * 60 + (m || 0); };
 
@@ -60,9 +67,14 @@ export async function GET(req: NextRequest) {
     }
     await ensureRoomOccupancy();
     await ensureQrScanLogsSchema();
+    await ensureRoomReleasesTable();
     await expireStaleOccupancy();
 
-    const clock = (await query(`SELECT CURRENT_DATE::text AS today, to_char(LOCALTIME, 'HH24:MI') AS now_hm`)).rows[0];
+    // Manila date and time from NOW() — the same clock as the free-room rule (services/roomReleases.ts)
+    const clock = (await query(`
+      SELECT (NOW() AT TIME ZONE 'Asia/Manila')::date::text AS today,
+             to_char(NOW() AT TIME ZONE 'Asia/Manila', 'HH24:MI') AS now_hm
+    `)).rows[0];
     const today: string = clock.today;
     const nowMin = toMin(clock.now_hm);
 
@@ -80,7 +92,7 @@ export async function GET(req: NextRequest) {
     /* Rooms + live status */
     const roomsRes = await query(`
       SELECT r.id, r.room_name, r.room_type, r.building, r.capacity,
-             ro.status AS live_status, ro.occupied_at, ro.reserved_at,
+             ro.status AS live_status, ro.occupied_at, ro.reserved_at, ro.faculty_id AS live_faculty_id,
              COALESCE(NULLIF(TRIM(f.name), ''), TRIM(CONCAT_WS(' ', f.first_name, f.last_name))) AS live_faculty
       FROM rooms r
       LEFT JOIN room_occupancy ro ON ro.room_id = r.id AND ro.status IN ('Pending', 'Occupied')
@@ -95,7 +107,9 @@ export async function GET(req: NextRequest) {
              COALESCE(ss.type, 'lec') AS type, ss.room_id, ms.id AS ms_id, ms.faculty_id,
              ss.created_at::date::text AS created_on,
              COALESCE(NULLIF(TRIM(f.name), ''), TRIM(CONCAT_WS(' ', f.first_name, f.last_name))) AS faculty_name,
-             c.subject_code, c.subject_name, b.block_name, b.year_level, p.code AS program_code
+             c.subject_code, c.subject_name, b.block_name, b.year_level, p.code AS program_code,
+             ${releasedOnSql('ss', 'ms', '$4::date')} AS released_today,
+             ${unclaimedNowSql('ss', 'ms')} AS unclaimed_now
       FROM schedule_sessions ss
       JOIN master_schedule ms ON ms.id = ss.master_schedule_id
       JOIN block_subjects bs ON bs.id = ms.block_subject_id
@@ -110,7 +124,7 @@ export async function GET(req: NextRequest) {
         AND ($1 = '' OR b.semester = $1)
         AND ($2 = '' OR b.academic_year = $2)
         AND ($3::int IS NULL OR ss.room_id = $3)
-    `, [semester ?? '', schoolYear ?? '', roomId]);
+    `, [semester ?? '', schoolYear ?? '', roomId, today]);
 
     /* Actual check-ins (Valid / Late; reservation-only logs don't count) */
     const scanRes = await query(`
@@ -139,6 +153,21 @@ export async function GET(req: NextRequest) {
         AND ($3::int IS NULL OR ro.room_id = $3)
     `, [start, end, roomId]);
 
+    /* Classes whose faculty was in the room for them without a scan of their own
+       ("<session id>|<date>") — still there from an earlier class or walk-in */
+    const coverRes = await query(`
+      SELECT DISTINCT ss.id AS session_id, od.d::text AS d
+      FROM   room_occupancy ro
+      CROSS JOIN LATERAL (SELECT (ro.occupied_at AT TIME ZONE 'Asia/Manila')::date AS d) od
+      JOIN   schedule_sessions ss ON ss.room_id = ro.room_id AND ss.day_of_week = to_char(od.d, 'FMDay')
+      JOIN   master_schedule  ms ON ms.id = ss.master_schedule_id AND ms.faculty_id = ro.faculty_id
+      WHERE  ro.occupied_at IS NOT NULL
+        AND  od.d BETWEEN $1::date AND $2::date
+        AND  ($3::int IS NULL OR ro.room_id = $3)
+        AND  ${occupancyCoversSql('ro', 'ss', 'od.d')}
+    `, [start, end, roomId]);
+    const covered = new Set(coverRes.rows.map(c => `${c.session_id}|${c.d}`));
+
     const roomById = new Map(roomsRes.rows.map(r => [Number(r.id), r]));
     const scans = scanRes.rows.map(s => ({ ...s, used: false }));
 
@@ -149,6 +178,8 @@ export async function GET(req: NextRequest) {
       start: string | null; end: string | null; scan_time: string | null; late: boolean;
       status: 'Occupied' | 'Completed' | 'Pending' | 'Not Checked' | 'Upcoming' | 'Walk-in';
       hours_scheduled: number; hours_used: number;
+      /** Today: the class doesn't hold its room — released by its faculty, or no check-in within 15 minutes */
+      free_now: 'released' | 'no_scan' | null;
     };
     const rows: Row[] = [];
 
@@ -181,6 +212,10 @@ export async function GET(req: NextRequest) {
           status = isToday && nowMin < etM ? 'Occupied' : 'Completed';
         } else if (future) {
           status = 'Upcoming';
+        } else if (covered.has(`${s.session_id}|${d}`)) {
+          // In the room for it without a scan of its own (e.g. right after their previous class)
+          used = ((isToday ? Math.min(etM, Math.max(nowMin, stM)) : etM) - stM) / 60;
+          status = isToday && nowMin < etM ? 'Occupied' : 'Completed';
         } else if (isToday && nowMin < stM + PENDING_WINDOW_MIN && nowMin < etM) {
           status = 'Pending';
         } else {
@@ -194,6 +229,7 @@ export async function GET(req: NextRequest) {
           faculty_id: Number(s.faculty_id), faculty_name: s.faculty_name,
           start: st, end: et, scan_time: scan ? scan.scan_hm : null, late: scan?.status === 'Late',
           status, hours_scheduled: (etM - stM) / 60, hours_used: Math.round(used * 100) / 100,
+          free_now: !isToday ? null : s.released_today ? 'released' : s.unclaimed_now ? 'no_scan' : null,
         });
       }
     }
@@ -213,6 +249,7 @@ export async function GET(req: NextRequest) {
         start: w?.start_hm ?? x.scan_hm, end: live ? null : (w?.end_hm ?? null), scan_time: x.scan_hm, late: false,
         status: live ? 'Occupied' : 'Walk-in', hours_scheduled: 0,
         hours_used: w ? Math.round(Number(w.hrs) * 100) / 100 : 0,
+        free_now: null,
       });
     }
 
@@ -248,6 +285,7 @@ export async function GET(req: NextRequest) {
       rooms: roomsRes.rows.map(r => ({
         id: Number(r.id), room_name: r.room_name, room_type: r.room_type, building: r.building,
         capacity: r.capacity, live_status: r.live_status ?? 'Available', live_faculty: r.live_faculty ?? null,
+        live_faculty_id: r.live_faculty_id != null ? Number(r.live_faculty_id) : null,
       })),
       activity: rows,
       logs,

@@ -4,9 +4,28 @@ import {
   DEFAULT_WORKLOAD_POLICY, LOAD_GRACE_UNITS,
   canHaveOverloadOrPraise, computeRegularLoadStatus, contractualLimitError, formatLoadCap, isRegularLoadComplete, maxDeductionUnits,
   normalizeWorkloadPolicy, overloadUnitsCap, parseWorkloadPolicy, permanentRegularLoadLimit,
-  regularLoadLimit, regularUnitsCap, sameWorkloadPolicy, shownUnitsCap, shownUnitsLeft, shownUnitsOver,
+  regularLoadLimit, regularOverflowSplit, regularUnitsCap, sameWorkloadPolicy, shownUnitsCap, shownUnitsLeft, shownUnitsOver,
   type WorkloadPolicy,
 } from './regularLoad';
+
+test('a subject that fits the Regular Load is not split (the 0.25 grace counts)', () => {
+  assert.equal(regularOverflowSplit({ currentRegular: 14, limit: 18.25, lecValue: 2, labValue: 2.25 }), null);
+  assert.equal(regularOverflowSplit({ currentRegular: 0, limit: 18.25, lecValue: 3, labValue: 0 }), null);
+});
+
+test('a subject that does not fit fills Regular to the published cap; the Laboratory goes to Overload first', () => {
+  // 3 units of room: Lecture 2 + Laboratory 1 stay Regular, Laboratory 1.25 to Overload
+  assert.deepEqual(regularOverflowSplit({ currentRegular: 15, limit: 18.25, lecValue: 2, labValue: 2.25 }), { regular: 3, lec: 0, lab: 1.25, moved: 1.25 });
+  // 1 unit of room: the whole Laboratory and 1 of the Lecture go
+  assert.deepEqual(regularOverflowSplit({ currentRegular: 17, limit: 18.25, lecValue: 2, labValue: 2.25 }), { regular: 1, lec: 1, lab: 2.25, moved: 3.25 });
+  // Deloading 9 → cap 9.25 (published 9): a 3-unit lecture subject on 7.25 keeps 1.75 Regular
+  assert.deepEqual(regularOverflowSplit({ currentRegular: 7.25, limit: 9.25, lecValue: 3, labValue: 0 }), { regular: 1.75, lec: 1.25, lab: 0, moved: 1.25 });
+});
+
+test('a full Regular Load sends the whole subject to Overload', () => {
+  assert.deepEqual(regularOverflowSplit({ currentRegular: 18, limit: 18.25, lecValue: 2, labValue: 2.25 }), { regular: 0, lec: 2, lab: 2.25, moved: 4.25 });
+  assert.deepEqual(regularOverflowSplit({ currentRegular: 20, limit: 18.25, lecValue: 3, labValue: 0 }), { regular: 0, lec: 3, lab: 0, moved: 3 });
+});
 
 const P = DEFAULT_WORKLOAD_POLICY;
 

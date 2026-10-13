@@ -1,4 +1,5 @@
 ﻿import { NextRequest, NextResponse } from 'next/server';
+import { parseIdList, readJsonObject } from '@/services/requestInput';
 import { query, transaction } from '@/database/db';
 import { parseId } from '@/database/ids';
 import { getAuthUser } from '@/auth/auth';
@@ -19,7 +20,8 @@ async function POST_handler(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const body = await req.json();
+    const body = await readJsonObject(req);
+    if (!body) return NextResponse.json({ error: 'Faculty and subject are required.' }, { status: 400 });
     await ensurePraiseSplitColumn();
 
     // Any amount of the Lecture and of the Laboratory → Praise; the rest stays Regular
@@ -28,22 +30,17 @@ async function POST_handler(req: NextRequest) {
     }
     // Single component (Lec or Lab) of a Regular subject → Praise; the other stays Regular
     if (body.component === 'lec' || body.component === 'lab') {
-      return movePraiseComponent(auth, Number(body.faculty_id), Number(body.master_schedule_id), body.component);
+      return movePraiseComponent(auth, parseId(body.faculty_id), parseId(body.master_schedule_id), body.component);
     }
     // The whole of a Regular (or Overload) subject → Praise in one step
     if (body.whole_subject === true) {
       return moveWholeSubjectToPraise(auth, parseId(body.faculty_id), parseId(body.master_schedule_id));
     }
 
-    const faculty_id = Number(body.faculty_id);
-    const rawIds: unknown[] = Array.isArray(body.master_schedule_ids)
+    const faculty_id = parseId(body.faculty_id);
+    const master_schedule_ids = parseIdList(Array.isArray(body.master_schedule_ids)
       ? body.master_schedule_ids
-      : body.master_schedule_id != null
-        ? [body.master_schedule_id]
-        : [];
-    const master_schedule_ids = [...new Set(
-      rawIds.map(n => Number(n)).filter(n => Number.isInteger(n) && n > 0)
-    )];
+      : body.master_schedule_id != null ? [body.master_schedule_id] : []);
 
     if (!faculty_id || master_schedule_ids.length === 0) {
       return NextResponse.json({ error: 'Faculty and at least one overload subject are required.' }, { status: 400 });
@@ -129,8 +126,8 @@ async function POST_handler(req: NextRequest) {
  */
 async function movePraiseComponent(
   auth: { role?: string },
-  faculty_id: number,
-  master_schedule_id: number,
+  faculty_id: number | null,
+  master_schedule_id: number | null,
   component: 'lec' | 'lab',
 ) {
   if (!faculty_id || !master_schedule_id) {

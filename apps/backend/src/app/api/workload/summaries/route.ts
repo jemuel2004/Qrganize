@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { parseId } from '@/database/ids';
+import { cleanText } from '@/services/requestInput';
 import { getAuthUser } from '@/auth/auth';
 import { loadFacultyLoadSummaries } from '@/services/facultyLoadSummaries';
 import { resolveProgramScope, isScopedChair } from '@/services/programScope';
@@ -13,12 +15,20 @@ export async function GET(req: NextRequest) {
 
     const { searchParams } = new URL(req.url);
     let programId = searchParams.get('program_id') || '';
+    if (programId && parseId(programId) === null) {
+      return NextResponse.json({ error: 'Invalid program.' }, { status: 400 });
+    }
     if (isScopedChair(auth)) {
       const scope = await resolveProgramScope(auth, { requestedProgramId: programId || undefined });
       if (!scope.ok) return scope.response;
       programId = scope.programId != null ? String(scope.programId) : '';
     }
-    const term = { semester: searchParams.get('semester') || '', academicYear: searchParams.get('academic_year') || '' };
+    const semester = cleanText(searchParams.get('semester'), 20);
+    const academicYear = cleanText(searchParams.get('academic_year'), 20);
+    if (semester === null || academicYear === null) {
+      return NextResponse.json({ error: 'Invalid term.' }, { status: 400 });
+    }
+    const term = { semester, academicYear };
     const [summaries, unscheduled] = await Promise.all([
       loadFacultyLoadSummaries({ ...term, programId }),
       loadUnscheduledByFaculty({ ...term, programId: programId || null }),

@@ -28,3 +28,6 @@ export function minutesHHMM(min: number): string {
 
 /** "7:00 AM–6:00 PM" */
 export const SCHOOL_DAY_LABEL = `${minutesLabel(SCHOOL_DAY_START_MIN)}–${minutesLabel(SCHOOL_DAY_END_MIN)}`;
+
+/** "12:00 PM–1:00 PM" */
+export const LUNCH_LABEL = `${minutesLabel(LUNCH_START_MIN)}–${minutesLabel(LUNCH_END_MIN)}`;

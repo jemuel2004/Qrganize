@@ -771,19 +771,19 @@ export default function InstructorWorkloadClient() {
         </div>
       </div>
 
-      {/* ── Active academic period (Admin-controlled, read-only) + Refresh / Print ── */}
+      {/* ── Which workload this is: the current term (set by the admin, read-only) + Refresh / Print ── */}
       <div className="bg-white rounded-2xl border border-[#E2E8F0] shadow-[0_1px_3px_rgba(0,0,0,0.06)] px-4 py-3.5 sm:px-5 mb-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-semibold text-[#64748B] uppercase tracking-wide">
-            Active academic period
-          </p>
-          <p className="text-[15px] font-bold text-[#0B2A5B] mt-0.5">
-            {semester && academicYear
-              ? `${semester} — A.Y. ${academicYear}`
-              : periodReady
-                ? 'No active academic period is currently configured.'
-                : 'Loading period…'}
-          </p>
+          {semester && academicYear ? (
+            <>
+              <p className="text-[20px] font-bold leading-tight text-[#0B2A5B]">{semester}</p>
+              <p className="text-[15px] font-semibold text-[#334155]">Academic Year {academicYear.replace('-', '–')}</p>
+            </>
+          ) : (
+            <p className="text-[15px] font-bold text-[#0B2A5B]">
+              {periodReady ? 'No active academic period is currently configured.' : 'Loading period…'}
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2.5 w-full sm:w-auto">
           <RefreshButton

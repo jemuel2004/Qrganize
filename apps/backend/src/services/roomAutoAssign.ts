@@ -1,5 +1,6 @@
 import { codeKey, roomKey } from '@shared/workloadImport';
 import { needsOneRoomSql } from '@shared/subjectCategory';
+import { PATHFIT_VENUE_RULE, isPathfitSubject, pathfitRoomAllowed } from '@shared/pathfitVenue';
 import { findScheduleConflicts } from '@/services/scheduleConflicts';
 
 /**
@@ -125,9 +126,11 @@ function usualRooms(rows: Record<string, unknown>[]): UsualRooms {
   return usual;
 }
 
-/** Scheduling's room-type rule for one session (a Major subject's Lecture shares its Laboratory's room) */
+/** Scheduling's room-type rule for one session (a Major subject's Lecture shares its Laboratory's room);
+ *  PATHFIT only in the CCA Gym or the SAO Room */
 const roomFits = (r: Room, s: Roomless) =>
-  s.type === 'lab' || s.one_room ? isLab(r.room_type) : !(isLab(r.room_type) && s.lab_hours <= 0);
+  pathfitRoomAllowed(s.subject_code, r.room_name)
+  && (s.type === 'lab' || s.one_room ? isLab(r.room_type) : !(isLab(r.room_type) && s.lab_hours <= 0));
 
 /** The room a Major subject's meetings must use: the one the class already has (or was just given) */
 const fixedRoomOf = (s: Roomless, given?: GivenRooms): number | null => {
@@ -168,7 +171,8 @@ function roomCandidates(rooms: Room[], s: Roomless, usual: UsualRooms, given?: G
     ];
     const note: RoomNote | null = score[0] === 2 ? 'class' : score[0] === 1 ? 'pair'
       : score[1] || score[2] ? 'faculty' : score[3] ? 'subject' : null;
-    return { room, note, auto: !special || note !== null, score };
+    // A PATHFIT class may only be offered its venues (roomFits), so those may be picked automatically
+    return { room, note, auto: !special || note !== null || isPathfitSubject(s.subject_code), score };
   });
   scored.sort((a, b) => {
     for (let i = 0; i < a.score.length; i++) if (a.score[i] !== b.score[i]) return b.score[i] - a.score[i];
@@ -424,6 +428,7 @@ export async function assignRooms(q: Queryable, opts: AssignRoomsOptions): Promi
     const chosen = rooms.find(r => r.id === opts.roomId);
     if (!chosen || !roomFits(chosen, s)) {
       result.skipped.push({ ...brief(s), reason: !chosen ? 'That room is no longer available.'
+        : !pathfitRoomAllowed(s.subject_code, chosen.room_name) ? PATHFIT_VENUE_RULE
         : s.type === 'lab' ? 'Lab classes need a laboratory room.'
         : s.one_room ? `${s.subject_code} is a Major subject, so its Lecture uses its Laboratory's room — choose a laboratory.`
         : 'A lecture-only subject cannot use a laboratory room.' });

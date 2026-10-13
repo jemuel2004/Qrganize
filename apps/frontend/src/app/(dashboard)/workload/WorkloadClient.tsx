@@ -33,6 +33,7 @@ import {
 import WorkloadPrintMenu, { type WorkloadPrintData } from '@/components/WorkloadPrintMenu';
 import { openWorkloadPrintableVersion } from '@/lib/openPrintHtmlDocument';
 import { coerceSubjectCategory } from '@shared/subjectCategory';
+import { blockCode } from '@shared/blockCode';
 import {
   LOAD_GRACE_UNITS, overloadUnitsCap, regularUnitsCap, canHaveOverloadOrPraise, contractualLimitError,
   formatLoadCap, shownUnitsCap, shownUnitsLeft, shownUnitsOver, isRegularLoadComplete,
@@ -51,7 +52,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import CountFilterTabs from '@/components/ui/CountFilterTabs';
 import Pagination from '@/components/ui/Pagination';
 import {
-  Plus, X, AlertTriangle, Check, Minus,
+  Plus, X, AlertTriangle, Check, Minus, ChevronUp,
   Eye, Award, CheckCircle2, Pencil,
   Trash2, ArrowDownCircle, ArrowRight, ArrowLeft, Ban,
 } from 'lucide-react';
@@ -71,6 +72,9 @@ interface Faculty {
   assigned_block_ids?: number[];
   priority_subjects?: PrioritySubject[];
 }
+/** Where a faculty stands this term — the Faculty Workload list's filter buttons */
+type LoadCategory = 'complete' | 'incomplete';
+export type LoadFilter = 'all' | LoadCategory;
 interface FacultySummary {
   current_load: number;
   regular_load_limit: number;
@@ -131,6 +135,8 @@ interface Schedule {
   program_code: string; status: string; faculty_name: string | null;
   subject_category?: 'Major' | 'Minor';
 }
+/** A ticked subject, with the block (id) whose list it was ticked in — picks from several blocks are kept */
+interface PickedSubject extends Schedule { pick_block: string }
 /** The Master Schedule row an admin clicked "Assign" on (same API row, plus its IDs). */
 interface AssignTarget extends Schedule {
   program_id: number; block_id: number; faculty_id: number | null;
@@ -218,6 +224,11 @@ interface OverloadConfirmData {
   loadLimit: number;
   currentLoad: number;
   remaining: number;
+  /** How the server splits it: what stays Regular, what goes to Overload (Laboratory first) */
+  regularPart: number;
+  overloadPart: number;
+  lecMoved: number;
+  labMoved: number;
 }
 
 /** Faculty list rows per page (same as Setup → Faculty) */
@@ -239,6 +250,13 @@ function getDaySection(dayPattern: string | null, startTime: string | null): str
   if (dp === 'sat' || dp === 'saturday') return 'sat';
   return 'other';
 }
+
+/** A refusal for going past Settings → Workload Limits gets its own title */
+const LIMIT_TITLE = 'Workload Limit Exceeded';
+const limitTitle = (d: unknown): string | undefined => {
+  const r = d && typeof d === 'object' ? d as { over_limit?: unknown; overload_limit_reached?: unknown } : null;
+  return r && (r.over_limit || r.overload_limit_reached) ? LIMIT_TITLE : undefined;
+};
 
 function timeToMins(t: string | null | undefined): number {
   if (!t) return 9999;
@@ -359,8 +377,8 @@ export default function WorkloadPage({
   assignFrom = 'master-schedule',
 }: {
   initialFacultyQuery?: string;
-  /** All / Assigned / Unassigned button the faculty list opens on (`?show=unassigned`) */
-  initialAssignFilter?: 'all' | 'assigned' | 'unassigned';
+  /** All / Complete / Incomplete button the faculty list opens on (`?show=incomplete`) */
+  initialAssignFilter?: LoadFilter;
   /** Master Schedule / Block → Assign: the class to assign, and the block it lives in. */
   assignMsId?: number | null;
   assignBlockId?: number | null;
@@ -381,7 +399,7 @@ export default function WorkloadPage({
   const [search, setSearch] = useState('');
   const [filterEmploymentType, setFilterEmploymentType] = useState('');
   /** Faculty list: everyone, only those with a subject this term, or those still needing one */
-  const [assignFilter, setAssignFilter] = useState<'all' | 'assigned' | 'unassigned'>(initialAssignFilter);
+  const [assignFilter, setAssignFilter] = useState<LoadFilter>(initialAssignFilter);
   /** Faculty list page (from 1) — back to the first page when the search or a filter changes */
   const [facultyPage, setFacultyPage] = useState(1);
   useEffect(() => { setFacultyPage(1); }, [search, filterEmploymentType, assignFilter]);
@@ -914,15 +932,17 @@ export default function WorkloadPage({
     const params = availParams();
     const key = params.toString();
     if (availKey.current !== key) return Promise.resolve();
+    const block = filterBlock;
     return fetch('/api/master-schedule?' + params)
       .then(r => (r.ok ? r.json() : null))
       .then(d => {
         if (!d || availKey.current !== key || !Array.isArray(d.schedules)) return;
         const fresh = d.schedules as Schedule[];
         setAvailableSchedules(fresh);
+        // Picks from this block that someone just assigned leave the selection (other blocks' picks stay)
         const stillOpen = new Set(fresh.map(s => s.id));
-        setPickedIds(prev => {
-          const next = new Set([...prev].filter(id => stillOpen.has(id)));
+        setPicked(prev => {
+          const next = new Map([...prev].filter(([id, p]) => p.pick_block !== block || stillOpen.has(id)));
           return next.size === prev.size ? prev : next;
         });
       })
@@ -973,12 +993,18 @@ export default function WorkloadPage({
           loadLimit:    data.load_limit,
           currentLoad:  data.current_load,
           remaining:    data.remaining ?? 0,
+          regularPart:  Number(data.regular_part) || 0,
+          overloadPart: Number(data.overload_part) || 0,
+          lecMoved:     Number(data.lec_moved) || 0,
+          labMoved:     Number(data.lab_moved) || 0,
         });
         return { ok: false };
       }
 
-      if (!res.ok) { toast.error(data.error || 'Failed to assign subject.'); return { ok: false }; }
-      const remainingNote = typeof data.remaining === 'number' && data.unit
+      if (!res.ok) { toast.error(data.error || 'Failed to assign subject.', limitTitle(data)); return { ok: false }; }
+      // Split into Overload or all Overload (the Regular Load was full) — say how
+      const remainingNote = (data.split || data.load_category === 'Overload') && typeof data.message === 'string' ? ` ${data.message}`
+        : typeof data.remaining === 'number' && data.unit
         ? (data.remaining < -0.001
           ? ` ${overFromRemaining(data.remaining, data.unit === 'units').toFixed(2)} ${data.unit} over the regular limit.`
           : ` ${leftNum(data.remaining, data.unit === 'units').toFixed(2)} ${data.unit} remaining.`)
@@ -1101,7 +1127,7 @@ export default function WorkloadPage({
       });
       const data = await res.json();
       if (!res.ok) {
-        toast.error(data.error || 'Failed to move subject to overload.');
+        toast.error(data.error || 'Failed to move subject to overload.', limitTitle(data));
         setMoveToOverloadTarget(null);
         return;
       }
@@ -1255,7 +1281,7 @@ export default function WorkloadPage({
       });
       const data = await res.json();
       if (!res.ok) {
-        toast.error(data.error || 'Failed to return subject to Overload.');
+        toast.error(data.error || 'Failed to return subject to Overload.', limitTitle(data));
         return;
       }
       toast.success(data.message || 'Subject returned to Overload.');
@@ -1494,6 +1520,28 @@ export default function WorkloadPage({
     finally { setModalDeductionsLoading(false); }
   }, [listSemester, listYear]);
 
+  /* Picking a Permanent faculty asks for their deloading only while none is saved
+     for the term — already deloaded faculty open straight to their subjects (the
+     Deloading button still opens it). A quick second pick wins over the first. */
+  const deloadPromptSeq = useRef(0);
+  const promptDeloading = useCallback(async (f: Faculty) => {
+    const seq = ++deloadPromptSeq.current;
+    if (f.employment_status !== 'Permanent' || !listSemester || !listYear) return;
+    try {
+      const params = new URLSearchParams({ semester: listSemester, school_year: listYear });
+      const res = await fetch(`/api/faculty/${f.id}/deductions?${params}`);
+      const data = await res.json().catch(() => null);
+      // Unsure (offline, error): no pop-up rather than one that shows "None" over saved deloading
+      if (!res.ok || !data || !Array.isArray(data.deductions) || data.deductions.length > 0) return;
+    } catch { return; }
+    if (seq !== deloadPromptSeq.current) return;
+    setDesignationError('');
+    setDeductionEntries([]);
+    setDeductionNone(true);
+    setModalDeductionsLoading(false);
+    setDesignationPending(f);
+  }, [listSemester, listYear]);
+
   useEffect(() => {
     const raw = initialFacultyQuery.trim();
     if (!raw) return;
@@ -1514,10 +1562,8 @@ export default function WorkloadPage({
       return;
     }
     selectFaculty(match);
-    if (match.employment_status === 'Permanent') {
-      void openDeductionModal(match);
-    }
-  }, [faculty, initialFacultyQuery, listSemester, listYear, selectFaculty, openDeductionModal, toast]);
+    void promptDeloading(match);
+  }, [faculty, initialFacultyQuery, listSemester, listYear, selectFaculty, promptDeloading, toast]);
 
   async function confirmDesignation() {
     if (!designationPending) return;
@@ -1636,8 +1682,15 @@ export default function WorkloadPage({
     return 3;                          // exactly complete — no problem
   }
 
-  const isAssigned = (f: Faculty) => (facultySummaries[f.id]?.assigned_count ?? 0) > 0;
-  /* Search + employment type first, so the Assigned / Unassigned counts match what's searched */
+  /* Complete: the Regular load is full (a fully deloaded faculty with no subject counts too).
+     Incomplete: still short — including faculty with no subject yet (they list first, lowest load). */
+  const loadCategory = (f: Faculty): LoadCategory => {
+    const s = facultySummaries[f.id];
+    return s && isRegularLoadComplete(s.remaining_load, (s.employment_status ?? f.employment_status) === 'Permanent')
+      ? 'complete'
+      : 'incomplete';
+  };
+  /* Search + employment type first, so the counts on the buttons match what's searched */
   const searchedFaculty = faculty.filter(f => {
     const matchesSearch = !search ||
       f.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -1646,15 +1699,22 @@ export default function WorkloadPage({
       f.employment_status === filterEmploymentType;
     return matchesSearch && matchesType;
   });
-  const assignedCount = searchedFaculty.filter(isAssigned).length;
+  const loadCounts: Record<LoadCategory, number> = { complete: 0, incomplete: 0 };
+  for (const f of searchedFaculty) loadCounts[loadCategory(f)]++;
   const filteredFaculty = searchedFaculty
-    .filter(f => assignFilter === 'all' || (assignFilter === 'assigned') === isAssigned(f))
+    .filter(f => assignFilter === 'all' || loadCategory(f) === assignFilter)
     .sort((a, b) => {
       const sa = facultySummaries[a.id];
       const sb = facultySummaries[b.id];
       const pa = workloadProblemPriority(sa);
       const pb = workloadProblemPriority(sb);
       if (pa !== pb) return pa - pb;
+      // Incomplete: faculty with no subject yet come first, so they're never missed
+      if (pa === 0) {
+        const noneA = (sa?.assigned_count ?? 0) === 0 ? 0 : 1;
+        const noneB = (sb?.assigned_count ?? 0) === 0 ? 0 : 1;
+        if (noneA !== noneB) return noneA - noneB;
+      }
       // Permanent (units) before Contractual (hours) within each group
       const permA = a.employment_status === 'Permanent' ? 0 : 1;
       const permB = b.employment_status === 'Permanent' ? 0 : 1;
@@ -1736,15 +1796,21 @@ export default function WorkloadPage({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFaculty?.id, filtersApplied, availLoading, assignTarget, filterBlock, filterSemester, filterAcademicYear, categoryCounts.Minor, categoryCounts.Major]);
 
-  /* -- Multi-select: pick several subjects (either tab), assign in one save -- */
-  const [pickedIds, setPickedIds] = useState<Set<number>>(() => new Set());
+  /* -- Multi-select: pick several subjects (either tab, any block), assign in one save --
+     The picks belong to the faculty and term: switching program or block keeps them, so
+     subjects from several blocks can be assigned together. Each pick keeps its row, so the
+     list (bar → View list) can show subjects from blocks that aren't on screen. */
+  const [picked, setPicked] = useState<Map<number, PickedSubject>>(() => new Map());
+  const pickedIds = useMemo(() => new Set(picked.keys()), [picked]);
+  const [pickedListOpen, setPickedListOpen] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkState, setBulkState] = useState<'idle' | 'saving' | 'success'>('idle');
   const [bulkProgress, setBulkProgress] = useState(0);
   /** Size of the running/finished batch — the picked list empties once the table refreshes */
   const [bulkTotal, setBulkTotal] = useState(0);
   const [bulkNote, setBulkNote] = useState('');
-  useEffect(() => { setPickedIds(new Set()); }, [selectedFaculty?.id, filterBlock, filterSemester, filterAcademicYear]);
+  useEffect(() => { setPicked(new Map()); setPickedListOpen(false); }, [selectedFaculty?.id, filterSemester, filterAcademicYear]);
+  useEffect(() => { if (picked.size === 0) setPickedListOpen(false); }, [picked.size]);
 
   /* Live updates: loads, blocks, schedules or faculty changed elsewhere (another
      admin, another tab). Everything reloads quietly — the picked faculty,
@@ -1762,24 +1828,35 @@ export default function WorkloadPage({
     ]),
     { enabled: !facultyListLoading && bulkState !== 'saving' },
   );
-  const pickedSchedules = offeredSchedules.filter(s => pickedIds.has(s.id));
+  const pickedSchedules = useMemo(() => [...picked.values()], [picked]);
+  /** "BSCpE 1B" — the block a picked subject belongs to */
+  const pickBlockLabel = (s: Schedule) => `${s.program_code} ${blockCode(s.year_level, s.block_name)}`.trim();
+  /** The picked subjects by block, in the order they were picked */
+  const pickedByBlock = useMemo(() => {
+    const groups = new Map<string, PickedSubject[]>();
+    for (const s of pickedSchedules) {
+      const k = `${s.program_code} ${blockCode(s.year_level, s.block_name)}`.trim();
+      groups.set(k, [...(groups.get(k) ?? []), s]);
+    }
+    return [...groups.entries()];
+  }, [pickedSchedules]);
   const loadUnit = isPermanent ? 'units' : 'hours';
   const scheduleValue = (s: Schedule) => isPermanent
     ? calcWorkloadUnits(parseFloat(String(s.lecture_hours)) || 0, parseFloat(String(s.laboratory_hours)) || 0)
     : parseFloat(String(s.total_hours)) || 0;
   const pickedTotal = pickedSchedules.reduce((sum, s) => sum + scheduleValue(s), 0);
 
-  function togglePicked(id: number) {
-    setPickedIds(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
+  function togglePicked(s: Schedule) {
+    setPicked(prev => {
+      const next = new Map(prev);
+      if (next.has(s.id)) next.delete(s.id); else next.set(s.id, { ...s, pick_block: filterBlock });
       return next;
     });
   }
-  function setPickedMany(ids: number[], on: boolean) {
-    setPickedIds(prev => {
-      const next = new Set(prev);
-      for (const id of ids) { if (on) next.add(id); else next.delete(id); }
+  function setPickedMany(list: Schedule[], on: boolean) {
+    setPicked(prev => {
+      const next = new Map(prev);
+      for (const s of list) { if (on) next.set(s.id, { ...s, pick_block: filterBlock }); else next.delete(s.id); }
       return next;
     });
   }
@@ -1812,21 +1889,21 @@ export default function WorkloadPage({
     else if (!extraLoads) {
       // Contractual: nothing past the hours limit is saved
       const why = pickedLimitError(remaining ?? null, fresh?.summary.regular_load_limit ?? summary?.regular_load_limit ?? null);
-      if (why) toast.error(why);
+      if (why) toast.error(why, LIMIT_TITLE);
       else void assignPicked({ direct: true }); // load not known here — the server checks each subject
     }
     else setBulkOpen(true);
   }
 
-  /** Saves every picked subject as Regular (over-limit ones can be moved to Overload after).
-   *  `direct` = started from the bar without the dialog, so report with a toast. */
+  /** Saves every picked subject as Regular — for a Permanent faculty the server puts what doesn't
+   *  fit the Regular Load into Overload. `direct` = started from the bar without the dialog, so report with a toast. */
   async function assignPicked({ direct = false }: { direct?: boolean } = {}) {
     if (!selectedFaculty || pickedSchedules.length === 0 || bulkState !== 'idle') return;
     const list = pickedSchedules;
     setBulkState('saving');
     setBulkProgress(0);
     setBulkTotal(list.length);
-    const failed: { id: number; error: string }[] = [];
+    const failed: { id: number; error: string; limit?: boolean }[] = [];
     let remaining: number | null = null;
     for (let i = 0; i < list.length; i++) {
       const s = list[i];
@@ -1837,7 +1914,7 @@ export default function WorkloadPage({
           body: JSON.stringify({ faculty_id: selectedFaculty.id, master_schedule_id: s.id, assign_category: 'regular' }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) failed.push({ id: s.id, error: `${s.subject_code}: ${data.error || 'could not be assigned.'}` });
+        if (!res.ok) failed.push({ id: s.id, error: `${s.subject_code}: ${data.error || 'could not be assigned.'}`, limit: !!limitTitle(data) });
         else if (typeof data.remaining === 'number') remaining = data.remaining;
       } catch {
         failed.push({ id: s.id, error: `${s.subject_code}: connection error.` });
@@ -1852,15 +1929,18 @@ export default function WorkloadPage({
       : `${leftNum(remaining, isPermanent).toFixed(2)} ${loadUnit} remaining.`;
     if (failed.length > 0) {
       setBulkState('idle');
-      setPickedIds(new Set(failed.map(f => f.id)));
+      setPicked(new Map(list.filter(s => failed.some(f => f.id === s.id)).map(s => [s.id, s])));
       if (done > 0) toast.success(`${done} subject${done === 1 ? '' : 's'} assigned. ${note}`.trim());
-      toast.error(failed.length === 1 ? failed[0].error : `${failed.length} subjects were not assigned. ${failed[0].error}`);
+      toast.error(
+        failed.length === 1 ? failed[0].error : `${failed.length} subjects were not assigned. ${failed[0].error}`,
+        failed.every(f => f.limit) ? LIMIT_TITLE : undefined,
+      );
       return;
     }
     if (direct) {
       toast.success(`${done === 1 ? 'Subject' : `${done} subjects`} assigned. ${note}`.trim());
       setBulkState('idle');
-      setPickedIds(new Set());
+      setPicked(new Map());
       return;
     }
     setBulkNote(note);
@@ -1868,7 +1948,7 @@ export default function WorkloadPage({
     setTimeout(() => {
       setBulkOpen(false);
       setBulkState('idle');
-      setPickedIds(new Set());
+      setPicked(new Map());
     }, 1500);
   }
   const displaySchedules = categorySchedules
@@ -2193,9 +2273,7 @@ export default function WorkloadPage({
                         onClick={() => {
                           selectFaculty(f);
                           setShowInstructorDropdown(false);
-                          if (f.employment_status === 'Permanent') {
-                            void openDeductionModal(f);
-                          }
+                          void promptDeloading(f);
                         }}
                         className="w-full text-left px-4 py-3 hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-0"
                       >
@@ -2363,21 +2441,21 @@ export default function WorkloadPage({
             {!selectedFaculty && (
               <CountFilterTabs
                 className="px-6 py-4 border-b border-[#E2E8F0]"
-                label="Filter by subject assignment"
+                label="Filter by workload"
                 layoutId="workload-assign-filter"
                 value={assignFilter}
                 onChange={setAssignFilter}
                 options={[
                   { key: 'all', label: 'All', count: searchedFaculty.length, color: '#0B2A5B' },
-                  { key: 'assigned', label: 'Assigned', count: assignedCount, color: '#15803D', dot: '#16A34A' },
-                  { key: 'unassigned', label: 'Unassigned', count: searchedFaculty.length - assignedCount, color: '#B91C1C', dot: '#DC2626' },
+                  { key: 'complete', label: 'Complete', count: loadCounts.complete, color: '#15803D', dot: '#16A34A' },
+                  { key: 'incomplete', label: 'Incomplete', count: loadCounts.incomplete, color: '#B91C1C', dot: '#DC2626' },
                 ]}
               />
             )}
 
             {!selectedFaculty ? (
               <>
-              {/* All / Assigned / Unassigned, or another page: the old list fades out, the new one fades in */}
+              {/* Another filter or page: the old list fades out, the new one fades in */}
               <AnimatePresence mode="wait" initial={false}>
               <motion.div
                 key={`faculty-list-${assignFilter}-${safeFacultyPage}`}
@@ -2390,11 +2468,11 @@ export default function WorkloadPage({
               {filteredFaculty.length === 0 ? (
                 <div className="py-14 px-8 text-center">
                   <p className="text-sm text-[#64748B]">
-                    {assignFilter === 'unassigned' && searchedFaculty.length > 0
-                      ? 'Every faculty member has a subject this term.'
-                      : assignFilter === 'assigned' && searchedFaculty.length > 0
-                        ? 'No faculty member has a subject yet this term.'
-                        : 'No faculty found.'}
+                    {searchedFaculty.length === 0 || assignFilter === 'all'
+                      ? 'No faculty found.'
+                      : assignFilter === 'incomplete'
+                        ? 'Every faculty member has a complete workload.'
+                        : 'No faculty member has a complete workload yet.'}
                   </p>
                 </div>
               ) : (
@@ -2425,7 +2503,7 @@ export default function WorkloadPage({
                             transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1], delay: reduceMotion ? 0 : Math.min(rowIdx, 10) * 0.025 }}
                             onClick={() => {
                               selectFaculty(f);
-                              if (f.employment_status === 'Permanent') void openDeductionModal(f);
+                              void promptDeloading(f);
                             }}
                             className="cursor-pointer hover:bg-slate-50 active:bg-slate-100 transition-colors duration-200"
                           >
@@ -2435,11 +2513,11 @@ export default function WorkloadPage({
                                 <EmploymentBadge status={f.employment_status} />
                               </div>
                               {f.specialization && (
-                                <div className="text-xs text-[#1D5BD6] mt-0.5">{f.specialization}</div>
+                                <div className="text-sm text-[#1D5BD6] mt-0.5">{f.specialization}</div>
                               )}
-                              <div className="text-xs text-slate-500 mt-0.5">{f.employee_id}</div>
+                              <div className="text-sm text-slate-500 mt-0.5">{f.employee_id}</div>
                               {/* Phone: program + status move under the name */}
-                              <div className="sm:hidden mt-1 flex items-center gap-2 flex-wrap text-xs text-slate-600">
+                              <div className="sm:hidden mt-1 flex items-center gap-2 flex-wrap text-sm text-slate-600">
                                 <span>{f.program_code || '—'}</span>
                                 {status && (
                                   <span className="inline-flex items-center gap-1.5">
@@ -2453,11 +2531,11 @@ export default function WorkloadPage({
                             <td className="hidden sm:table-cell px-6 py-3">
                               {status ? (
                                 <span className="inline-flex items-center gap-1.5">
-                                  <span className={`w-2 h-2 rounded-full ${status.dot}`} />
-                                  <span className={`text-xs font-medium ${status.text}`}>{status.label}</span>
+                                  <span className={`w-2.5 h-2.5 rounded-full ${status.dot}`} />
+                                  <span className={`text-sm font-semibold ${status.text}`}>{status.label}</span>
                                 </span>
                               ) : (
-                                <span className="text-xs text-slate-400">—</span>
+                                <span className="text-sm text-slate-400">—</span>
                               )}
                             </td>
                             <td className="px-4 sm:px-6 py-3 tabular-nums whitespace-nowrap align-top sm:align-middle">
@@ -2545,14 +2623,14 @@ export default function WorkloadPage({
                     <tr>
                       <th className="pl-3 sm:pl-5 pr-1 py-3 w-10">
                         {(() => {
-                          const tabIds = displaySchedules.filter(s => !blockedOverLimit(scheduleValue(s))).map(s => s.id);
-                          const pickedHere = tabIds.filter(id => pickedIds.has(id)).length;
-                          const all = pickedHere > 0 && pickedHere === tabIds.length;
+                          const tabRows = displaySchedules.filter(s => !blockedOverLimit(scheduleValue(s)));
+                          const pickedHere = tabRows.filter(s => pickedIds.has(s.id)).length;
+                          const all = pickedHere > 0 && pickedHere === tabRows.length;
                           return (
                             <PickBox
                               checked={all}
                               mixed={pickedHere > 0 && !all}
-                              onToggle={() => setPickedMany(tabIds, !all)}
+                              onToggle={() => setPickedMany(tabRows, !all)}
                               label={all ? 'Unselect all subjects in this tab' : 'Select all subjects in this tab'}
                             />
                           );
@@ -2590,7 +2668,7 @@ export default function WorkloadPage({
                           initial={animateTarget ? { backgroundColor: '#FFFFFF' } : false}
                           animate={animateTarget ? { backgroundColor: ['#FFFFFF', '#86EFAC', '#DCFCE7'] } : undefined}
                           transition={animateTarget ? { duration: 1.1, ease: 'easeOut', delay: 0.35 } : undefined}
-                          onClick={() => { if (!blocked) togglePicked(s.id); }}
+                          onClick={() => { if (!blocked) togglePicked(s); }}
                           aria-selected={isPicked}
                           aria-disabled={blocked || undefined}
                           className={`${blocked ? 'cursor-not-allowed' : 'cursor-pointer'} transition-colors duration-300 ${
@@ -2604,7 +2682,7 @@ export default function WorkloadPage({
                           <td className="pl-3 sm:pl-5 pr-1 py-4 align-middle">
                             {blocked && !isPicked
                               ? <span aria-hidden className="block w-6 h-6 rounded-md border-2 border-[#E2E8F0] bg-[#F1F5F9]" />
-                              : <PickBox checked={isPicked} onToggle={() => togglePicked(s.id)} label={`Select ${s.subject_code}`} />}
+                              : <PickBox checked={isPicked} onToggle={() => togglePicked(s)} label={`Select ${s.subject_code}`} />}
                           </td>
                           <td className="px-3 sm:px-5 py-4 font-mono font-semibold text-[#0B2A5B] text-sm align-middle whitespace-nowrap">{s.subject_code}</td>
                           <td className="px-3 sm:px-5 py-4 align-middle">
@@ -2653,7 +2731,7 @@ export default function WorkloadPage({
                               <motion.button
                                 {...plusPulse}
                                 onClick={e => { e.stopPropagation(); assignSubject(s.id); }}
-                                title="Exceeds remaining regular load — will require confirmation"
+                                title="Doesn't fit the regular load — the rest goes to Overload (shown before saving)"
                                 className="flex items-center justify-center w-9 h-9 rounded-full bg-[#FEE2E2] text-[#DC2626] border border-[#FECACA] hover:bg-[#FECACA] transition-colors"
                               >
                                 <AlertTriangle className="w-4 h-4" />
@@ -2681,7 +2759,7 @@ export default function WorkloadPage({
             )}
         </div>
         {/* Room for the picked-subjects bar so it never covers the last row */}
-        {selectedFaculty && pickedSchedules.length > 0 && <div className="h-36 sm:h-24" aria-hidden="true" />}
+        {selectedFaculty && pickedSchedules.length > 0 && <div className="h-48 sm:h-24" aria-hidden="true" />}
       </PageLoadTransition>
 
       {/* -- Picked subjects bar — slides up once something is ticked -- */}
@@ -2689,6 +2767,7 @@ export default function WorkloadPage({
         {selectedFaculty && pickedSchedules.length > 0 && !bulkOpen && (() => {
           const n = pickedSchedules.length;
           const minor = pickedSchedules.filter(x => categoryOf(x) === 'Minor').length;
+          const blocks = pickedByBlock.length;
           const ease = [0.4, 0, 0.2, 1] as const;
           return (
             <motion.div
@@ -2698,7 +2777,76 @@ export default function WorkloadPage({
               exit={{ opacity: 0, y: reduceMotion ? 0 : 28, transition: { duration: reduceMotion ? 0 : 0.3, ease } }}
               className="fixed inset-x-0 bottom-5 z-40 flex justify-center px-4 pointer-events-none"
             >
-              <div className={`pointer-events-auto w-full max-w-2xl bg-white border rounded-2xl shadow-[0_16px_40px_-12px_rgba(11,42,91,0.35)] px-4 sm:px-5 py-3 flex flex-col sm:flex-row sm:items-center gap-3 transition-colors duration-300 ${
+              <div className="pointer-events-auto w-full max-w-3xl flex flex-col gap-2">
+              {/* Every picked subject, by block — check them, or take one out */}
+              <AnimatePresence initial={false}>
+                {pickedListOpen && (
+                  <motion.div
+                    key="picked-list"
+                    id="picked-list"
+                    initial={reduceMotion ? false : { opacity: 0, y: 12, height: 0 }}
+                    animate={{ opacity: 1, y: 0, height: 'auto', transition: { duration: reduceMotion ? 0 : 0.45, ease } }}
+                    exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 12, height: 0, transition: { duration: 0.3, ease } }}
+                    className="overflow-hidden bg-white border border-[#D6E0EF] rounded-2xl shadow-[0_16px_40px_-12px_rgba(11,42,91,0.35)]"
+                    role="region"
+                    aria-label="Selected subjects"
+                  >
+                    <div className="flex items-center justify-between gap-3 px-4 sm:px-5 py-3 border-b border-[#EEF2F8]">
+                      <p className="text-[15px] font-bold text-[#0B2A5B]">Selected subjects</p>
+                      <button
+                        type="button"
+                        onClick={() => setPickedListOpen(false)}
+                        aria-label="Hide the list"
+                        className="w-9 h-9 rounded-lg flex items-center justify-center text-[#64748B] hover:text-[#0B2A5B] hover:bg-[#F1F5F9] transition-colors duration-300"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="max-h-[42vh] overflow-y-auto">
+                      {pickedByBlock.map(([label, rows]) => (
+                        <div key={label}>
+                          <p className="sticky top-0 z-[1] bg-[#F8FAFC] px-4 sm:px-5 py-2 text-sm font-semibold text-[#475569] border-b border-[#EEF2F8]">
+                            {label} <span className="font-medium text-[#94A3B8]">· {rows.length} subject{rows.length === 1 ? '' : 's'}</span>
+                          </p>
+                          <ul className="divide-y divide-[#F1F5F9]">
+                            <AnimatePresence initial={false}>
+                              {rows.map(x => (
+                                <motion.li
+                                  key={x.id}
+                                  initial={reduceMotion ? false : { opacity: 0, height: 0 }}
+                                  animate={{ opacity: 1, height: 'auto' }}
+                                  exit={reduceMotion ? { opacity: 0 } : { opacity: 0, height: 0 }}
+                                  transition={{ duration: 0.3, ease }}
+                                  className="overflow-hidden"
+                                >
+                                  <div className="flex items-center gap-3 px-4 sm:px-5 py-2.5">
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-[15px] text-[#0B2A5B] truncate">
+                                        <span className="font-mono font-semibold">{x.subject_code}</span>
+                                        <span className="text-[#475569]"> · {x.subject_name}</span>
+                                      </p>
+                                    </div>
+                                    <span className="text-[15px] font-bold text-[#1D5BD6] tabular-nums whitespace-nowrap">{scheduleValue(x).toFixed(2)}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => togglePicked(x)}
+                                      aria-label={`Remove ${x.subject_code} (${label})`}
+                                      className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 text-[#94A3B8] hover:text-[#DC2626] hover:bg-[#FEF2F2] transition-colors duration-300"
+                                    >
+                                      <X className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                </motion.li>
+                              ))}
+                            </AnimatePresence>
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              <div className={`w-full bg-white border rounded-2xl shadow-[0_16px_40px_-12px_rgba(11,42,91,0.35)] px-4 sm:px-5 py-3 flex flex-col sm:flex-row sm:items-center gap-3 transition-colors duration-300 ${
                 pickedOver ? 'border-[#FCA5A5]' : 'border-[#D6E0EF]'
               }`}>
                 <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -2727,16 +2875,32 @@ export default function WorkloadPage({
                         {pickedTotal.toFixed(2)} {loadUnit}
                         {minor > 0 && ` · ${minor} Minor`}
                         {n - minor > 0 && ` · ${n - minor} Major`}
+                        {blocks > 1 && ` · ${blocks} blocks`}
                       </p>
                     )}
                   </div>
                 </div>
-                <div className="flex gap-2">
+                <div className="grid grid-cols-2 gap-2 sm:flex">
                   <motion.button
                     type="button"
                     whileTap={reduceMotion ? undefined : { scale: 0.96 }}
-                    onClick={() => setPickedIds(new Set())}
-                    className="flex-1 sm:flex-none h-11 px-4 rounded-xl border border-[#E2E8F0] text-[#475569] text-sm font-semibold hover:bg-[#F8FAFC] transition-colors duration-300"
+                    onClick={() => setPickedListOpen(o => !o)}
+                    aria-expanded={pickedListOpen}
+                    aria-controls="picked-list"
+                    className={`sm:flex-none h-11 px-4 rounded-xl border text-sm font-semibold whitespace-nowrap inline-flex items-center justify-center gap-1.5 transition-colors duration-300 ${
+                      pickedListOpen ? 'border-[#1D5BD6] text-[#1D5BD6] bg-[#EFF6FF]' : 'border-[#BFDBFE] text-[#1D5BD6] hover:bg-[#EFF6FF]'
+                    }`}
+                  >
+                    {pickedListOpen ? 'Hide list' : 'View list'}
+                    <motion.span animate={{ rotate: pickedListOpen ? 180 : 0 }} transition={{ duration: reduceMotion ? 0 : 0.4, ease }} className="inline-flex">
+                      <ChevronUp className="w-4 h-4" />
+                    </motion.span>
+                  </motion.button>
+                  <motion.button
+                    type="button"
+                    whileTap={reduceMotion ? undefined : { scale: 0.96 }}
+                    onClick={() => setPicked(new Map())}
+                    className="sm:flex-none h-11 px-4 rounded-xl border border-[#E2E8F0] text-[#475569] text-sm font-semibold whitespace-nowrap hover:bg-[#F8FAFC] transition-colors duration-300"
                   >
                     Clear
                   </motion.button>
@@ -2746,7 +2910,7 @@ export default function WorkloadPage({
                     onClick={() => { void onAssignPickedClick(); }}
                     disabled={bulkState !== 'idle' || bulkChecking || pickedBlocked}
                     title={pickedBlocked ? `Contractual faculty can't go over ${regularLimitLabel}` : undefined}
-                    className={`flex-1 sm:flex-none h-11 px-5 rounded-xl bg-[#1D5BD6] hover:bg-[#2E7DD1] text-white text-sm font-bold inline-flex items-center justify-center gap-2 transition-colors duration-300 ${
+                    className={`col-span-2 sm:flex-none h-11 px-5 rounded-xl bg-[#1D5BD6] hover:bg-[#2E7DD1] text-white text-sm font-bold whitespace-nowrap inline-flex items-center justify-center gap-2 transition-colors duration-300 ${
                       pickedBlocked ? 'opacity-50 cursor-not-allowed' : 'disabled:cursor-wait disabled:opacity-90'
                     }`}
                   >
@@ -2758,6 +2922,7 @@ export default function WorkloadPage({
                   </motion.button>
                 </div>
               </div>
+              </div>
             </motion.div>
           );
         })()}
@@ -2767,7 +2932,7 @@ export default function WorkloadPage({
       <Modal
         open={bulkOpen}
         onClose={() => { if (bulkState === 'idle') setBulkOpen(false); }}
-        title={pickedOver ? `Exceeds ${regularLimitLabel} Regular Load` : 'Assign Selected Subjects'}
+        title={pickedOver && !extraLoads ? `Exceeds ${regularLimitLabel} Regular Load` : 'Assign Selected Subjects'}
         subtitle={selectedFaculty?.name}
         size="lg"
         footer={
@@ -2818,14 +2983,14 @@ export default function WorkloadPage({
                             {cat}
                           </span>
                         </div>
-                        <p className="text-sm text-[#475569] truncate mt-0.5" title={x.subject_name}>{x.subject_name}</p>
+                        <p className="text-sm text-[#475569] truncate mt-0.5" title={x.subject_name}>{x.subject_name} · {pickBlockLabel(x)}</p>
                       </div>
                       <span className="font-bold text-[#1D5BD6] tabular-nums text-sm">{scheduleValue(x).toFixed(2)}</span>
                       <button
                         type="button"
                         disabled={bulkState !== 'idle'}
                         onClick={() => {
-                          togglePicked(x.id);
+                          togglePicked(x);
                           if (pickedSchedules.length === 1) setBulkOpen(false);
                         }}
                         aria-label={`Remove ${x.subject_code}`}
@@ -2856,23 +3021,33 @@ export default function WorkloadPage({
                   </div>
                   <div className="flex justify-between border-t border-[#E2E8F0] pt-2.5">
                     <span className="text-[#64748B]">After assigning</span>
-                    <span className={`font-semibold tabular-nums ${over ? 'text-[#DC2626]' : 'text-[#16A34A]'}`}>
-                      {over ? `${overFromRemaining(after, isPermanent).toFixed(2)} ${loadUnit} over the limit` : `${leftNum(after, isPermanent).toFixed(2)} ${loadUnit} left`}
+                    <span className={`font-semibold tabular-nums ${over ? (extraLoads ? 'text-[#1D5BD6]' : 'text-[#DC2626]') : 'text-[#16A34A]'}`}>
+                      {over
+                        ? (extraLoads ? `Regular full · ${overFromRemaining(after, isPermanent).toFixed(2)} ${loadUnit} to Overload` : `${overFromRemaining(after, isPermanent).toFixed(2)} ${loadUnit} over the limit`)
+                        : `${leftNum(after, isPermanent).toFixed(2)} ${loadUnit} left`}
                     </span>
                   </div>
                 </div>
-                {over && (
+                {over && (extraLoads ? (
+                  // Permanent: the Regular Load never goes past its limit — the server splits the rest into Overload
+                  <div className="bg-[#EFF6FF] border border-[#BFDBFE] rounded-xl p-3.5 flex items-start gap-3">
+                    <AlertTriangle className="w-5 h-5 text-[#1D5BD6] flex-shrink-0 mt-0.5" />
+                    <p className="text-[#0B2A5B] text-sm leading-relaxed">
+                      The regular load stops at {regularLimitLabel}. The extra{' '}
+                      <span className="font-semibold text-[#1D5BD6]">{overFromRemaining(after, isPermanent).toFixed(2)} {loadUnit}</span>{' '}
+                      go to Overload (laboratory first), up to the Overload limit — a subject that doesn&apos;t fit even there isn&apos;t assigned.
+                    </p>
+                  </div>
+                ) : (
                   <div className="bg-[#FEF2F2] border border-[#FECACA] rounded-xl p-3.5 flex items-start gap-3">
                     <AlertTriangle className="w-5 h-5 text-[#DC2626] flex-shrink-0 mt-0.5" />
                     <p className="text-[#0B2A5B] text-sm leading-relaxed">
-                      <span className="font-semibold">{selectedFaculty?.name ?? 'This faculty'}</span> will go past the {regularLimitLabel} regular
+                      <span className="font-semibold">{selectedFaculty?.name ?? 'This faculty'}</span> would go past the {regularLimitLabel} regular
                       load by <span className="font-semibold text-[#DC2626]">{overFromRemaining(after, isPermanent).toFixed(2)} {loadUnit}</span>.{' '}
-                      {extraLoads
-                        ? 'You can still assign them, then move any to Overload in View Workload.'
-                        : 'Contractual faculty can\'t go over it — remove a subject to continue.'}
+                      Contractual faculty can&apos;t go over it — remove a subject to continue.
                     </p>
                   </div>
-                )}
+                ))}
               </>
             );
           })()}
@@ -2900,17 +3075,19 @@ export default function WorkloadPage({
         </div>
       </Modal>
 
-      {/* -- Overload Warning Modal --------------------------------------------
-          Shown when assigning would exceed the regular load limit (fully or
-          partially). Admin must explicitly choose to continue or ignore.
+      {/* -- Regular Load Full Modal -------------------------------------------
+          Shown when a subject doesn't fit the regular load: the server keeps
+          what fits as Regular and puts the rest in Overload (laboratory first).
           ------------------------------------------------------------------- */}
-      <Modal open={!!overloadConfirm} onClose={() => { if (continueState !== 'saving') setOverloadConfirm(null); }} title="Overload Warning">
+      <Modal open={!!overloadConfirm} onClose={() => { if (continueState !== 'saving') setOverloadConfirm(null); }} title="Regular Load Full">
         {continueState === 'success' && overloadConfirm && <AssignSuccess note={continueNote} />}
         <div className="space-y-4">
-          <div className="bg-[#FEF2F2] border border-[#FECACA] rounded-xl p-4 flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 text-[#DC2626] flex-shrink-0 mt-0.5" />
+          <div className="bg-[#EFF6FF] border border-[#BFDBFE] rounded-xl p-4 flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-[#1D5BD6] flex-shrink-0 mt-0.5" />
             <p className="text-[#0B2A5B] text-sm leading-relaxed">
-              This subject will exceed the regular load limit. You may continue adding it, then manually move a subject to overload using the table below.
+              {overloadConfirm && overloadConfirm.regularPart > 0.001
+                ? 'This subject doesn\'t fit the regular load. What fits stays Regular; the rest goes to Overload (the laboratory first).'
+                : 'The regular load is full, so this whole subject goes to Overload.'}
             </p>
           </div>
           {overloadConfirm && (
@@ -2943,7 +3120,25 @@ export default function WorkloadPage({
               </div>
               <div className="flex justify-between text-sm border-t border-[#E2E8F0] pt-2.5">
                 <span className="text-[#64748B]">This subject</span>
-                <span className="font-semibold text-[#DC2626]">+{overloadConfirm.subjectValue.toFixed(2)} {overloadConfirm.unit}</span>
+                <span className="font-semibold text-[#0B2A5B]">{overloadConfirm.subjectValue.toFixed(2)} {overloadConfirm.unit}</span>
+              </div>
+              {overloadConfirm.regularPart > 0.001 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-[#64748B]">Stays in Regular Load</span>
+                  <span className="font-semibold text-[#16A34A]">{overloadConfirm.regularPart.toFixed(2)} {overloadConfirm.unit}</span>
+                </div>
+              )}
+              <div className="flex justify-between text-sm">
+                <span className="text-[#64748B]">Goes to Overload</span>
+                <span className="font-semibold text-[#1D5BD6] text-right ml-4">
+                  {overloadConfirm.overloadPart.toFixed(2)} {overloadConfirm.unit}
+                  {overloadConfirm.regularPart > 0.001 && (
+                    <span className="block text-xs font-medium text-[#64748B]">
+                      {[overloadConfirm.labMoved > 0.001 ? `Laboratory ${overloadConfirm.labMoved.toFixed(2)}` : '',
+                        overloadConfirm.lecMoved > 0.001 ? `Lecture ${overloadConfirm.lecMoved.toFixed(2)}` : ''].filter(Boolean).join(' + ')}
+                    </span>
+                  )}
+                </span>
               </div>
             </div>
           )}
@@ -2958,11 +3153,11 @@ export default function WorkloadPage({
                 const c = overloadConfirm;
                 if (c) continueAdding(c.msId, () => setOverloadConfirm(null));
               }}
-              className="flex-1 bg-[#DC2626] hover:bg-[#B91C1C] text-white py-2.5 rounded-xl text-sm font-bold transition flex items-center justify-center gap-2 disabled:cursor-wait"
+              className="flex-1 bg-[#1D5BD6] hover:bg-[#2E7DD1] text-white py-2.5 rounded-xl text-sm font-bold transition flex items-center justify-center gap-2 disabled:cursor-wait"
             >
               {continueState === 'saving'
                 ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Adding…</>
-                : 'Continue Adding'}
+                : 'Assign Subject'}
             </button>
           </div>
         </div>

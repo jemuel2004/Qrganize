@@ -1,14 +1,27 @@
-﻿import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUser } from '@/auth/auth';
-import { query } from '@/database/db';
-import { expireStaleOccupancy, expireStaleRoomRequests } from '@/services/ensureRoomOccupancy';
+import { query, transaction } from '@/database/db';
+import { parseId } from '@/database/ids';
+import {
+  activateDueReservations, expireStaleOccupancy, expireStaleRoomRequests, holdEndSql, legacyInUseHoldSql,
+} from '@/services/ensureRoomOccupancy';
 import { createNotification } from '@/services/notifications';
 import { withAudit } from '@/services/audit';
+import { APP_TIMEZONE, manilaCalendarDateString, manilaClock, manilaDateAtSql } from '@/services/appTimezone';
+import { ensureRoomReleasesTable, freedOnSql, releasedOnSql } from '@/services/roomReleases';
+import { BORROW_MIN_LEFT, fitsFreeTime, minutesLeft, notEnoughTimeMessage, tooLateMessage } from '@/services/borrowedRoom';
 import { needsOneRoomSql } from '@shared/subjectCategory';
+import { PATHFIT_VENUE_RULE, pathfitRoomAllowed } from '@shared/pathfitVenue';
+import {
+  HOLD_BEFORE_MIN, SCAN_WITHIN_MIN, classTimes, requestWindow, shiftTime, time12, timeMinutes, timeRange12,
+  type ClassPart,
+} from '@shared/roomRequestWindow';
 
 /* ─── GET /api/instructor/room-requests ─────────────────────────────────────
    Returns the faculty's full request history with subject, sessions, and
-   room details. Expires stale Pending Confirmation records before responding.
+   room details (a today-only request also its class time and when its QR
+   scan opens), plus today's Manila date and time. Expires stale Pending
+   Confirmation records before responding.
 ─────────────────────────────────────────────────────────────────────────── */
 export async function GET(req: NextRequest) {
   try {
@@ -46,6 +59,12 @@ export async function GET(req: NextRequest) {
         rcr.confirmed_at,
         rcr.created_at,
         rcr.updated_at,
+        to_char(rcr.use_date, 'YYYY-MM-DD') AS use_date,
+        to_char(rcr.use_start, 'HH24:MI')   AS use_start,
+        to_char(rcr.use_end, 'HH24:MI')     AS use_end,
+        CASE WHEN rcr.use_date IS NOT NULL
+             THEN ${manilaDateAtSql('rcr.use_date', 'rcr.use_start')} - INTERVAL '${HOLD_BEFORE_MIN} minutes'
+        END                AS scan_opens_at,
         orig.room_name    AS original_room_name,
         orig.room_type    AS original_room_type,
         req.room_name     AS requested_room_name,
@@ -81,7 +100,12 @@ export async function GET(req: NextRequest) {
       ORDER BY rcr.created_at DESC
     `, [authUser.faculty_id]);
 
-    return NextResponse.json({ requests: result.rows });
+    const { time, dayOfWeek } = manilaClock();
+    return NextResponse.json({
+      requests: result.rows,
+      // Requests are for today's classes only — the form lists those (Manila time)
+      today: { date: manilaCalendarDateString(), day: dayOfWeek, now: time.slice(0, 5) },
+    });
   } catch (error) {
     console.error('[GET /api/instructor/room-requests]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
@@ -89,28 +113,36 @@ export async function GET(req: NextRequest) {
 }
 
 /* ─── POST /api/instructor/room-requests ────────────────────────────────────
-   Creates an auto-resolved room change request.
+   Asks for a room for ONE class time of the faculty's own class TODAY — never
+   for the whole semester (@shared/roomRequestWindow). The class's schedule is
+   not changed; the room is only held for that time.
 
-   NEW FLOW — no manual admin approval:
    • All conflicts detected          → 409 error (no record created)
-   • No conflict found               → status = 'Pending Confirmation'
-                                       confirmation_deadline = NOW() + 15 min
-                                       room_occupancy Pending created (locks the room)
-   • Faculty scans QR within 15m → status → 'In-Use', room applied to schedule
-   • No scan after 15 minutes       → status → 'Expired', occupancy auto-expires
+   • No conflict found               → status = 'Pending Confirmation', with the
+                                       class time (use_date / use_start / use_end)
+   • From 15 minutes before the class the room is held for the faculty (Pending)
+   • Faculty scans the room's QR by 15 minutes after the start → 'In-Use',
+     held until the class ends, then the request closes by itself
+   • No scan by then                 → 'Expired', the room is free again
 
    VALIDATION CHAIN (server-side, never trust frontend):
    1.  Auth             — must be faculty with faculty_id
-   2.  Required fields  — master_schedule_id, requested_room_id, reason (≥10 chars)
+   2.  Required fields  — master_schedule_id, requested_room_id (the reason is optional)
    3+4. Schedule        — must belong to faculty + have ≥1 valid session
-   5.  Room             — must exist and be Active
-   6.  Not same room    — requested ≠ current assigned room (unless last request for that room already ended)
-   7.  No duplicate     — no existing Pending/Pending Confirmation/In-Use for same schedule
-   8.  No session clash — requested room has no other class at same day/time
-   9.  No pending clash — no other faculty's Pending Confirmation for same room/time
-  10.  No live occupancy— room has no active room_occupancy (Pending or Occupied)
-  11.  Insert           — status = 'Pending Confirmation', deadline = NOW() + 15 min
-  12.  Lock room        — create room_occupancy Pending for the 15-min window
+   5.  Room             — must exist and be Active, and fit the subject
+   6.  Class time today — the class meets today (start_time picks which time),
+                          it hasn't ended, and it has NO room for that time (a
+                          class with its own room uses it — services/borrowedRoom.ts)
+   7.  Room free today  — no class in the room during that time (a class whose
+                          faculty made the room available today doesn't count)
+   7b. Freed room only  — another faculty freed this room for today during that
+                          time (Free My Room, or no scan within 15 minutes); a room
+                          nobody freed can't be asked for — and the class must END by
+                          the time it is free until (it may have started earlier)
+   8.  Not in use       — nobody holds the room past the class's start
+   9.  Insert           — one at a time per room: no other request of the
+                          faculty, and nobody else's, overlaps that time
+  10.  Hold             — when the time is near, the room is held right away
 ─────────────────────────────────────────────────────────────────────────── */
 async function POST_handler(req: NextRequest) {
   try {
@@ -124,10 +156,20 @@ async function POST_handler(req: NextRequest) {
     /* Expire stale records before validating ─────────────────────────────── */
     await expireStaleOccupancy();
     await expireStaleRoomRequests();
+    await ensureRoomReleasesTable();
 
     /* 2. Required fields ─────────────────────────────────────────────────── */
-    const body = await req.json();
-    const { master_schedule_id, requested_room_id, reason } = body;
+    const body = await req.json().catch(() => null) as {
+      master_schedule_id?: unknown; requested_room_id?: unknown; reason?: unknown; start_time?: unknown;
+    } | null;
+    const master_schedule_id = parseId(body?.master_schedule_id);
+    const requested_room_id = parseId(body?.requested_room_id);
+    // Optional — saved as empty text when left out
+    const reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
+    // Which of the class's times today ("HH:MM") — optional when only one is left
+    const pickedStart = typeof body?.start_time === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(body.start_time)
+      ? body.start_time.slice(0, 5)
+      : null;
 
     if (!master_schedule_id) {
       return NextResponse.json(
@@ -138,12 +180,6 @@ async function POST_handler(req: NextRequest) {
     if (!requested_room_id) {
       return NextResponse.json(
         { error: 'A preferred room must be selected.' },
-        { status: 400 },
-      );
-    }
-    if (!reason?.trim() || reason.trim().length < 10) {
-      return NextResponse.json(
-        { error: 'Reason must be at least 10 characters.' },
         { status: 400 },
       );
     }
@@ -237,7 +273,7 @@ async function POST_handler(req: NextRequest) {
     }
 
     /* 5d. A Major subject's Lecture and Laboratory share one room — a lecture
-          room could only take the Lecture, so the class can only move to a
+          room could only take the Lecture, so the class can only use a
           laboratory room (services/majorRoomRule.ts) */
     if (!isLabRoom && sched.one_room) {
       return NextResponse.json(
@@ -246,48 +282,128 @@ async function POST_handler(req: NextRequest) {
       );
     }
 
-    /* 6. Not the same as currently assigned room — unless a prior request
-          for this room already ended (Released / Expired / Rejected).
-          Admin approval writes the requested room onto the schedule; after
-          release that assignment can linger until we restore original_room_id. */
-    if (sched.current_room_id && Number(requested_room_id) === Number(sched.current_room_id)) {
-      const lastForRoom = await query(`
-        SELECT status FROM room_change_requests
-        WHERE  master_schedule_id = $1
-          AND  faculty_id         = $2
-          AND  requested_room_id  = $3
-        ORDER BY created_at DESC
-        LIMIT 1
-      `, [master_schedule_id, facultyId, requested_room_id]);
-      const lastStatus = lastForRoom.rows[0]?.status as string | undefined;
-      const priorEnded = lastStatus != null && ['Released', 'Expired', 'Rejected'].includes(lastStatus);
-      if (!priorEnded) {
-        return NextResponse.json(
-          { error: `${requestedRoom.room_name} is already your assigned room for ${sched.subject_code}. No change needed.` },
-          { status: 400 },
-        );
-      }
+    /* 5e. PATHFIT meets only in the CCA Gym or the SAO Room */
+    if (!pathfitRoomAllowed(sched.subject_code, requestedRoom.room_name)) {
+      return NextResponse.json({ error: PATHFIT_VENUE_RULE }, { status: 400 });
     }
 
-    /* 7. Duplicate: no active request for the same schedule */
-    const dupRes = await query(`
-      SELECT id FROM room_change_requests
-      WHERE  master_schedule_id = $1
-        AND  faculty_id         = $2
-        AND  status IN ('Pending', 'Pending Confirmation', 'In-Use')
-    `, [master_schedule_id, facultyId]);
-
-    if (dupRes.rows.length > 0) {
+    /* 6. The class time today ─────────────────────────────────────────────── */
+    const today = manilaCalendarDateString();
+    const { time, dayOfWeek } = manilaClock();
+    const nowHm = time.slice(0, 5);
+    const todayRes = await query(`
+      SELECT ss.id, COALESCE(ss.type, 'lec') AS part,
+             to_char(ss.start_time, 'HH24:MI') AS start, to_char(ss.end_time, 'HH24:MI') AS end,
+             ss.room_id, r0.room_name AS own_room,
+             ${releasedOnSql('ss', 'ms', '$3::date')} AS released
+      FROM   schedule_sessions ss
+      JOIN   master_schedule ms ON ms.id = ss.master_schedule_id
+      LEFT JOIN rooms r0 ON r0.id = ss.room_id AND r0.status = 'Active'
+      WHERE  ss.master_schedule_id = $1
+        AND  ss.day_of_week = $2
+        AND  ss.start_time IS NOT NULL AND ss.end_time IS NOT NULL
+    `, [master_schedule_id, dayOfWeek, today]);
+    const todays = (todayRes.rows as { id: number; part: string; start: string; end: string; room_id: number | null; own_room: string | null; released: boolean }[])
+      .map(s => ({ ...s, part: (s.part === 'lab' ? 'lab' : 'lec') as ClassPart }));
+    if (todays.length === 0) {
       return NextResponse.json(
-        { error: `You already have an active room request for ${sched.subject_code}. Cancel or release it before submitting a new one.` },
+        { error: `${sched.subject_code} has no class today (${dayOfWeek}). Room requests are for today's classes only.` },
+        { status: 400 },
+      );
+    }
+    // Sessions whose room the faculty made available for today aren't held today
+    const held = todays.filter(s => !s.released);
+    if (held.length === 0) {
+      return NextResponse.json(
+        { error: `You made the classroom of ${sched.subject_code} available for today. Take it back on My Schedule first if you will hold the class.` },
+        { status: 400 },
+      );
+    }
+    let start = pickedStart;
+    if (!start) {
+      const left = classTimes(held).filter(t => timeMinutes(t.end) > timeMinutes(nowHm));
+      if (left.length === 0) {
+        return NextResponse.json({ error: `${sched.subject_code}'s class today has already ended.` }, { status: 400 });
+      }
+      if (left.length > 1) {
+        return NextResponse.json({ error: `Choose which of ${sched.subject_code}'s class times today.` }, { status: 400 });
+      }
+      start = left[0].start;
+    }
+    if (!classTimes(held).some(t => t.start === start)) {
+      return NextResponse.json(
+        { error: `${sched.subject_code} has no class at ${time12(start)} today.` },
+        { status: 400 },
+      );
+    }
+    // A lecture room only takes the Lecture part of the class time
+    const slot = requestWindow(held, start, isLabRoom ? 'lab' : 'lec');
+    if (!slot) {
+      return NextResponse.json(
+        { error: `${sched.subject_code}'s class at ${time12(start)} today is its Laboratory, which needs a laboratory room.` },
+        { status: 400 },
+      );
+    }
+    const range = timeRange12(slot.start, slot.end);
+    if (timeMinutes(slot.end) <= timeMinutes(nowHm)) {
+      return NextResponse.json(
+        { error: `${sched.subject_code}'s class at ${range} has already ended.` },
+        { status: 400 },
+      );
+    }
+    if (slot.sessions.every(s => Number(s.room_id) === requested_room_id)) {
+      return NextResponse.json(
+        { error: `${requestedRoom.room_name} is already your room for ${sched.subject_code} at ${range}.` },
+        { status: 400 },
+      );
+    }
+    // Only a class with no room for that time may ask for a freed room — one with its own room uses it
+    const ownRoom = slot.sessions.find(s => s.own_room)?.own_room;
+    if (ownRoom) {
+      return NextResponse.json(
+        { error: `${sched.subject_code} at ${range} already has a room (${ownRoom}). Freed rooms are only for classes without a room.` },
+        { status: 400 },
+      );
+    }
+
+    /* 7. No class in the room during that time today (same school year +
+          semester; a class whose faculty made the room available today, or that
+          nobody checked in for within 15 minutes, doesn't count) */
+    const sessionConflictRes = await query(`
+      SELECT c2.subject_code,
+             to_char(ss2.start_time, 'HH24:MI') AS start, to_char(ss2.end_time, 'HH24:MI') AS end
+      FROM   schedule_sessions ss2
+      JOIN   master_schedule   ms2 ON ss2.master_schedule_id = ms2.id
+      JOIN   block_subjects    bs2 ON ms2.block_subject_id   = bs2.id
+      JOIN   curriculums        c2 ON bs2.curriculum_id      = c2.id
+      JOIN   blocks            b2  ON bs2.block_id           = b2.id
+      WHERE  ss2.room_id = $1
+        AND  ms2.status IN ('Assigned', 'Scheduled')
+        AND  ms2.id != $2
+        AND  b2.academic_year = $3
+        AND  b2.semester      = $4
+        AND  ss2.day_of_week  = $5
+        AND  ss2.start_time   < $7::time
+        AND  ss2.end_time     > $6::time
+        AND  NOT ${freedOnSql('ss2', 'ms2', '$8::date')}
+      ORDER  BY ss2.start_time
+      LIMIT  1
+    `, [requested_room_id, master_schedule_id, sched.academic_year, sched.semester, dayOfWeek, slot.start, slot.end, today]);
+
+    if (sessionConflictRes.rows.length > 0) {
+      const other = sessionConflictRes.rows[0];
+      return NextResponse.json(
+        { error: `${requestedRoom.room_name} has ${other.subject_code} at ${timeRange12(other.start, other.end)} today. Please choose a different room.` },
         { status: 409 },
       );
     }
 
-    /* 8. Session conflict: requested room must have no scheduled class at same time
-          (in the same school year + semester — other terms never clash) */
-    const sessionConflictRes = await query(`
-      SELECT ss2.id
+    /* 7b. Only a room another faculty's class frees today: one of their classes
+           meets in it during this time and they made it available for today
+           (Free My Room), or nobody checked in for it within 15 minutes of the
+           start. Any other room is not open to requests. */
+    const freedRes = await query(`
+      SELECT to_char(ss2.end_time, 'HH24:MI') AS free_until
       FROM   schedule_sessions ss2
       JOIN   master_schedule   ms2 ON ss2.master_schedule_id = ms2.id
       JOIN   block_subjects    bs2 ON ms2.block_subject_id   = bs2.id
@@ -295,129 +411,160 @@ async function POST_handler(req: NextRequest) {
       WHERE  ss2.room_id = $1
         AND  ms2.status IN ('Assigned', 'Scheduled')
         AND  ms2.id != $2
-        AND  b2.academic_year = $3
-        AND  b2.semester      = $4
-        AND  EXISTS (
-               SELECT 1
-               FROM   schedule_sessions ss_mine
-               WHERE  ss_mine.master_schedule_id = $2
-                 AND  ss_mine.day_of_week IS NOT NULL
-                 AND  ss_mine.start_time  IS NOT NULL
-                 AND  ss_mine.end_time    IS NOT NULL
-                 AND  ss_mine.day_of_week = ss2.day_of_week
-                 AND  ss_mine.start_time  < ss2.end_time
-                 AND  ss_mine.end_time    > ss2.start_time
-             )
-      LIMIT  1
-    `, [requested_room_id, master_schedule_id, sched.academic_year, sched.semester]);
+        AND  ms2.faculty_id IS DISTINCT FROM $3::int
+        AND  b2.academic_year = $4
+        AND  b2.semester      = $5
+        AND  ss2.day_of_week  = $6
+        AND  ss2.start_time   < $8::time
+        AND  ss2.end_time     > $7::time
+        AND  ${freedOnSql('ss2', 'ms2', '$9::date')}
+      ORDER  BY ss2.end_time DESC
+    `, [requested_room_id, master_schedule_id, facultyId, sched.academic_year, sched.semester, dayOfWeek, slot.start, slot.end, today]);
 
-    if (sessionConflictRes.rows.length > 0) {
+    if (freedRes.rows.length === 0) {
       return NextResponse.json(
-        { error: `${requestedRoom.room_name} already has a scheduled class during your ${sched.subject_code} sessions. Please choose a different room.` },
+        { error: `${requestedRoom.room_name} is not free for ${range} today. You can request a room its faculty freed with Free My Room, or one whose class was not scanned within 15 minutes of starting.` },
         { status: 409 },
       );
     }
-
-    /* 9. Pending Confirmation clash: no other instructor has already requested same room/time */
-    const pendConflictRes = await query(`
-      SELECT rcr.id
-      FROM   room_change_requests rcr
-      JOIN   schedule_sessions    ss_rcr ON ss_rcr.master_schedule_id = rcr.master_schedule_id
-      JOIN   master_schedule      ms_rcr ON ms_rcr.id = rcr.master_schedule_id
-      JOIN   block_subjects       bs_rcr ON bs_rcr.id = ms_rcr.block_subject_id
-      JOIN   blocks               b_rcr  ON b_rcr.id  = bs_rcr.block_id
-      WHERE  rcr.requested_room_id = $1
-        AND  rcr.status            = 'Pending Confirmation'
-        AND  rcr.faculty_id       != $2
-        AND  b_rcr.academic_year   = $4
-        AND  b_rcr.semester        = $5
-        AND  ss_rcr.day_of_week   IS NOT NULL
-        AND  EXISTS (
-               SELECT 1
-               FROM   schedule_sessions ss_mine
-               WHERE  ss_mine.master_schedule_id = $3
-                 AND  ss_mine.day_of_week IS NOT NULL
-                 AND  ss_mine.start_time  IS NOT NULL
-                 AND  ss_mine.end_time    IS NOT NULL
-                 AND  ss_mine.day_of_week = ss_rcr.day_of_week
-                 AND  ss_mine.start_time  < ss_rcr.end_time
-                 AND  ss_mine.end_time    > ss_rcr.start_time
-             )
-      LIMIT  1
-    `, [requested_room_id, facultyId, master_schedule_id, sched.academic_year, sched.semester]);
-
-    if (pendConflictRes.rows.length > 0) {
+    // The freed class time keeps its own end: the requested class must end by then
+    // (freed class times back to back count as one — the latest end)
+    const freeUntil = String(freedRes.rows[0].free_until);
+    if (!fitsFreeTime(slot.end, freeUntil)) {
       return NextResponse.json(
-        { error: `Another faculty has already submitted a pending request for ${requestedRoom.room_name} during the same time slot. Please choose a different room or try again later.` },
+        { error: notEnoughTimeMessage(sched.subject_code, slot.end, requestedRoom.room_name, freeUntil) },
         { status: 409 },
       );
     }
+    // Asked for after the class started: never with 30 minutes or less of the free time left
+    if (minutesLeft(nowHm, freeUntil) <= BORROW_MIN_LEFT) {
+      return NextResponse.json({ error: tooLateMessage(requestedRoom.room_name, nowHm, freeUntil) }, { status: 409 });
+    }
 
-    /* 10. Live occupancy check: room must not be currently Pending or Occupied ─ */
+    /* 8. Nobody else holds the room past the class's start — a class check-in
+          counts until its class ends (not the 30 minutes after), an older
+          request that moved a class into the room until it is released */
     const liveOccRes = await query(`
-      SELECT id, status FROM room_occupancy
-      WHERE  room_id = $1
-        AND  status IN ('Pending', 'Occupied')
-      LIMIT 1
-    `, [requested_room_id]);
+      SELECT COALESCE(NULLIF(trim(COALESCE(f.name, '')), ''),
+                      NULLIF(trim(COALESCE(f.first_name,'') || ' ' || COALESCE(f.last_name,'')), '')) AS faculty_name,
+             ${legacyInUseHoldSql('ro')} AS until_released,
+             to_char(${holdEndSql('ro')} AT TIME ZONE '${APP_TIMEZONE}', 'HH24:MI') AS until
+      FROM   room_occupancy ro
+      JOIN   faculty f ON f.id = ro.faculty_id
+      WHERE  ro.room_id     = $1
+        AND  ro.faculty_id <> $2
+        AND  ro.status IN ('Pending', 'Occupied')
+        AND  (${holdEndSql('ro')} > ${manilaDateAtSql('$3::date', '$4::time')} OR ${legacyInUseHoldSql('ro')})
+      LIMIT  1
+    `, [requested_room_id, facultyId, today, slot.start]);
 
     if (liveOccRes.rows.length > 0) {
-      const occStatus = liveOccRes.rows[0].status;
+      const o = liveOccRes.rows[0];
       return NextResponse.json(
-        { error: `${requestedRoom.room_name} is currently ${occStatus === 'Occupied' ? 'occupied' : 'reserved'} by another faculty member. Please choose a different room or try again later.` },
+        { error: `${requestedRoom.room_name} is in use by ${o.faculty_name ?? 'another faculty member'}${o.until_released ? '' : ` until ${time12(o.until)}`}. Please choose a different room.` },
         { status: 409 },
       );
     }
 
-    /* 11. Insert room request — status = 'Pending Confirmation' ──────────── */
-    const insertRes = await query(`
-      INSERT INTO room_change_requests
-        (faculty_id, master_schedule_id, original_room_id, requested_room_id,
-         reason, status, confirmation_deadline, submitted_by)
-      VALUES ($1, $2, $3, $4, $5, 'Pending Confirmation', NOW() + INTERVAL '15 minutes', 'instructor')
-      RETURNING id, confirmation_deadline
-    `, [
-      facultyId,
-      master_schedule_id,
-      sched.current_room_id ?? null,
-      requested_room_id,
-      reason.trim(),
-    ]);
+    /* 9. Insert — one request at a time per room and day, so the same time can't be given twice */
+    type Created = { id: number; confirmation_deadline: string; deadline_hm: string; hold_now: boolean };
+    const outcome = await transaction(async (client): Promise<{ created: Created } | { error: string }> => {
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`room-request:${requested_room_id}:${today}`]);
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`room-request-faculty:${facultyId}:${today}`]);
 
-    const newRequest = insertRes.rows[0];
+      const mine = await client.query(`
+        SELECT r.room_name, to_char(rcr.use_start, 'HH24:MI') AS start, to_char(rcr.use_end, 'HH24:MI') AS end
+        FROM   room_change_requests rcr
+        LEFT JOIN rooms r ON r.id = rcr.requested_room_id
+        WHERE  rcr.faculty_id = $1
+          AND  rcr.use_date   = $2::date
+          AND  rcr.status IN ('Pending Confirmation', 'Approved', 'In-Use')
+          AND  rcr.use_start  < $4::time
+          AND  rcr.use_end    > $3::time
+        LIMIT  1
+      `, [facultyId, today, slot.start, slot.end]);
+      if (mine.rows.length > 0) {
+        const m = mine.rows[0];
+        return { error: `You already have ${m.room_name ?? 'a room'} for ${timeRange12(m.start, m.end)} today. Cancel that request first if you need a different room.` };
+      }
 
-    /* 12. Lock the room — create room_occupancy Pending for the 15-min window */
-    try {
-      await query(`
-        INSERT INTO room_occupancy (room_id, faculty_id, status, expires_at)
-        VALUES ($1, $2, 'Pending', NOW() + INTERVAL '15 minutes')
-      `, [requested_room_id, facultyId]);
-    } catch {
-      // Race condition: room was just grabbed — roll back the request
-      await query(
-        `DELETE FROM room_change_requests WHERE id = $1`,
-        [newRequest.id]
-      ).catch(() => {});
-      return NextResponse.json(
-        { error: `${requestedRoom.room_name} was just reserved by another faculty member. Please choose a different room.` },
-        { status: 409 },
-      );
+      const taken = await client.query(`
+        SELECT COALESCE(NULLIF(trim(COALESCE(f.name, '')), ''),
+                        NULLIF(trim(COALESCE(f.first_name,'') || ' ' || COALESCE(f.last_name,'')), '')) AS faculty_name,
+               to_char(rcr.use_start, 'HH24:MI') AS start, to_char(rcr.use_end, 'HH24:MI') AS end
+        FROM   room_change_requests rcr
+        JOIN   faculty f ON f.id = rcr.faculty_id
+        WHERE  rcr.requested_room_id = $1
+          AND  rcr.faculty_id       <> $2
+          AND  rcr.use_date          = $3::date
+          AND  rcr.status IN ('Pending Confirmation', 'Approved', 'In-Use')
+          AND  rcr.use_start < $5::time
+          AND  rcr.use_end   > $4::time
+        LIMIT  1
+      `, [requested_room_id, facultyId, today, slot.start, slot.end]);
+      if (taken.rows.length > 0) {
+        const t = taken.rows[0];
+        return { error: `${requestedRoom.room_name} is already reserved by ${t.faculty_name ?? 'another faculty member'} for ${timeRange12(t.start, t.end)} today. Please choose a different room.` };
+      }
+
+      // Scan by 15 minutes after the class starts (or 15 minutes from now when it
+      // already has), never past the class's end
+      const startAt = manilaDateAtSql('$6::date', '$7::time');
+      const endAt = manilaDateAtSql('$6::date', '$8::time');
+      const ins = await client.query(`
+        INSERT INTO room_change_requests
+          (faculty_id, master_schedule_id, original_room_id, requested_room_id,
+           reason, status, confirmation_deadline, submitted_by, use_date, use_start, use_end)
+        VALUES ($1, $2, $3, $4, $5, 'Pending Confirmation',
+                LEAST(GREATEST(${startAt}, NOW()) + INTERVAL '${SCAN_WITHIN_MIN} minutes', ${endAt}),
+                'instructor', $6::date, $7::time, $8::time)
+        RETURNING id, confirmation_deadline,
+                  to_char(confirmation_deadline AT TIME ZONE '${APP_TIMEZONE}', 'HH24:MI') AS deadline_hm,
+                  NOW() >= ${startAt} - INTERVAL '${HOLD_BEFORE_MIN} minutes' AS hold_now
+      `, [
+        facultyId,
+        master_schedule_id,
+        slot.sessions.find(s => s.room_id != null)?.room_id ?? sched.current_room_id ?? null,
+        requested_room_id,
+        reason,
+        today,
+        slot.start,
+        slot.end,
+      ]);
+      return { created: ins.rows[0] as Created };
+    });
+
+    if ('error' in outcome) {
+      return NextResponse.json({ error: outcome.error }, { status: 409 });
     }
+    const newRequest = outcome.created;
+
+    /* 10. The time is near: the room is held for the faculty right away */
+    if (newRequest.hold_now) await activateDueReservations();
+
+    const scanFrom = time12(shiftTime(slot.start, -HOLD_BEFORE_MIN));
+    const scanBy = time12(newRequest.deadline_hm);
+    const message = newRequest.hold_now
+      ? `${requestedRoom.room_name} is held for your ${sched.subject_code} class (${range}). Scan its QR code by ${scanBy} to confirm.`
+      : `${requestedRoom.room_name} is reserved for your ${sched.subject_code} class today, ${range}. Scan its QR code between ${scanFrom} and ${scanBy} to confirm.`;
 
     // Notify instructor
     createNotification({
       recipientId: facultyId, recipientRole: 'instructor',
       title: 'Room Request Submitted',
-      message: `Your request for ${requestedRoom.room_name} (${sched.subject_code}) is pending. Scan the QR code within 15 minutes to confirm.`,
+      message,
       type: 'room_request_submitted', relatedModule: 'room_request', relatedId: newRequest.id,
     }).catch(() => {});
     // Admin side: the live "Room Request Pending" alert (syncWorkloadMonitoringNotifications) covers it
 
     return NextResponse.json(
       {
-        id:                   newRequest.id,
+        id:                    newRequest.id,
         confirmation_deadline: newRequest.confirmation_deadline,
-        message:              `Room request for ${sched.subject_code} submitted. Scan the QR code at ${requestedRoom.room_name} within 15 minutes to confirm your reservation.`,
+        use_date:              today,
+        use_start:             slot.start,
+        use_end:               slot.end,
+        message,
       },
       { status: 201 },
     );

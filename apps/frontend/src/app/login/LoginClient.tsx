@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import Script from 'next/script';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import {
-  ArrowLeft, ArrowRight, Eye, EyeOff, Lock, MapPin, UserRound,
+  ArrowLeft, ArrowRight, Eye, EyeOff, Lock, MapPin, UserRound, Users,
 } from 'lucide-react';
 import { LOGIN_FX_CSS } from './loginEffects';
 import FlippingLogo from './FlippingLogo';
@@ -31,10 +31,21 @@ function qrReturnPath(): string | null {
 type Role = 'admin_chair' | 'instructor';
 
 /** `short` is shown on phones, where the full label would wrap inside its button */
-const ROLES: { id: Role; label: string; short: string }[] = [
-  { id: 'admin_chair', label: 'Administrator / Chair', short: 'Admin / Chair' },
-  { id: 'instructor',  label: 'Faculty', short: 'Faculty' },
+const ROLES: { id: Role; label: string; short: string; icon: React.ElementType }[] = [
+  { id: 'admin_chair', label: 'Administrator / Chair', short: 'Admin / Chair', icon: Users },
+  { id: 'instructor',  label: 'Faculty', short: 'Faculty', icon: UserRound },
 ];
+
+/**
+ * The page's one blue: the chosen role and the Login button (sky to royal blue).
+ * White set inline — the light-mode rule in globals.css repaints `text-white`.
+ */
+const LOGIN_BLUE = 'linear-gradient(90deg, #1E9BFB 0%, #1A6CE6 100%)';
+const ROLE_ACTIVE_STYLE = {
+  color: '#FFFFFF',
+  backgroundImage: LOGIN_BLUE,
+  boxShadow: '0 6px 16px -6px rgba(26, 108, 230, 0.6)',
+} as const;
 
 /* ── Component ────────────────────────────────────────────────────────── */
 export default function LoginClient() {
@@ -59,8 +70,8 @@ export default function LoginClient() {
   useEffect(() => {
     try {
       const sp = new URLSearchParams(window.location.search);
-      if (sp.get('changed') === '1') setPasswordNotice('Password changed. Sign in with your new password.');
-      else if (sp.get('again') === '1') setPasswordNotice('For your security, sign in again to set your new password.');
+      if (sp.get('changed') === '1') setPasswordNotice('Password changed. Log in with your new password.');
+      else if (sp.get('again') === '1') setPasswordNotice('For your security, log in again to set your new password.');
     } catch { /* no notice */ }
   }, []);
   const googleBtnRef = useRef<HTMLDivElement>(null);
@@ -68,6 +79,9 @@ export default function LoginClient() {
   // Bumped each time the flipped-in card finishes turning, so the Google button
   // (whose container remounts with the card) gets rendered into the new card.
   const [cardShown, setCardShown] = useState(0);
+  /** Google's script is fetched once a Faculty card has finished turning in, so its
+   *  loading never lands in the middle of the turn */
+  const [gisWanted, setGisWanted] = useState(false);
   const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
   const googleEnabled = role === 'instructor' && Boolean(googleClientId);
 
@@ -329,10 +343,10 @@ export default function LoginClient() {
   const inputCls =
     'w-full border border-[#D6E0EF] rounded-xl pl-11 pr-4 text-[15px] text-[#0B2A5B] bg-[#FBFCFE] placeholder:text-[#94A3B8] transition-all duration-150 focus:outline-none focus:bg-white focus:border-[#1D5BD6] focus:ring-4 focus:ring-[#1D5BD6]/10';
   const primaryBtnCls =
-    'qrfx-shine w-full font-semibold text-[15px] rounded-xl transition-all duration-150 flex items-center justify-center gap-2 shadow-[0_10px_24px_-10px_rgba(18,64,143,0.7)] hover:brightness-110 active:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed';
+    'qrfx-shine w-full font-semibold text-[16px] rounded-xl transition-all duration-150 flex items-center justify-center gap-2 shadow-[0_12px_26px_-12px_rgba(26,108,230,0.85)] hover:brightness-105 active:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed';
   // White label set inline — a `text-white` class gets repainted dark by the
   // light-mode override in globals.css.
-  const primaryBtnStyle = { height: '52px', color: '#FFFFFF', backgroundImage: 'linear-gradient(90deg, #0E3F9E 0%, #1D5BD6 100%)' };
+  const primaryBtnStyle = { height: '52px', color: '#FFFFFF', backgroundImage: LOGIN_BLUE };
 
   const errorAlert = error ? (
     <div
@@ -347,19 +361,22 @@ export default function LoginClient() {
     </div>
   ) : null;
 
-  // Switching role turns the Sign In card over: it rotates edge-on, the form
+  // Switching role turns the Login card over: it rotates edge-on, the form
   // swaps to the other role, then it rotates back to face the user.
   // Direction follows the role: Instructor turns the card to the right,
   // Admin turns it back to the left (like turning a page and back).
-  const flipHalf = reduceMotion
-    ? { duration: 0 }
-    : { duration: 0.45, ease: [0.45, 0, 0.55, 1] as const };
+  // One unbroken turn: the first half speeds up into the edge-on point and the
+  // second leaves it at that same speed (matching ease-in / ease-out), so the card
+  // never slows to a stop in the middle. Animated as a whole `transform` so the
+  // browser runs it off the main thread and building the other card can't stall it.
+  const flipOut = reduceMotion ? { duration: 0 } : { duration: 0.34, ease: [0.32, 0, 0.67, 0] as const };
+  const flipIn = reduceMotion ? { duration: 0 } : { duration: 0.34, ease: [0.33, 1, 0.68, 1] as const };
   const flipDir = role === 'instructor' ? 1 : -1;
   const cardFlip = {
     // rotateY(+) turns the card's face toward the right
-    enter: (dir: number) => (reduceMotion ? { opacity: 1 } : { rotateY: -90 * dir, opacity: 0.6 }),
-    center: { rotateY: 0, opacity: 1, transition: flipHalf },
-    exit: (dir: number) => (reduceMotion ? { opacity: 1 } : { rotateY: 90 * dir, opacity: 0.6, transition: flipHalf }),
+    enter: (dir: number) => (reduceMotion ? { opacity: 1 } : { transform: `rotateY(${-90 * dir}deg)`, opacity: 0.6 }),
+    center: { transform: 'rotateY(0deg)', opacity: 1, transition: flipIn },
+    exit: (dir: number) => (reduceMotion ? { opacity: 1 } : { transform: `rotateY(${90 * dir}deg)`, opacity: 0.6, transition: flipOut }),
   };
 
   return (
@@ -367,7 +384,7 @@ export default function LoginClient() {
       <style>{LOGIN_FX_CSS}</style>
       {/* Glowing seam between the campus panel and the sign-in side */}
       <div aria-hidden className="qrfx-seam hidden lg:block" />
-      {role === 'instructor' && googleClientId && (
+      {gisWanted && googleClientId && (
         <Script
           src="https://accounts.google.com/gsi/client?hl=en"
           strategy="afterInteractive"
@@ -440,7 +457,7 @@ export default function LoginClient() {
         </div>
       </aside>
 
-      {/* ════════ RIGHT — sign in ════════ */}
+      {/* ════════ RIGHT — login ════════ */}
       <main
         className="relative flex flex-col min-h-screen px-4 sm:px-8 py-6 sm:py-8 overflow-x-clip"
         style={{ background: 'radial-gradient(900px 500px at 70% 30%, rgba(29,91,214,0.06), transparent 70%), #F4F7FC' }}
@@ -476,7 +493,7 @@ export default function LoginClient() {
           >
             {/* Soft halo around the card — brightens while typing */}
             <div aria-hidden className="qrfx-halo" />
-            {/* ── Sign In card — turns over when the role changes ── */}
+            {/* ── Login card — turns over when the role changes ── */}
             {/* `custom` hands the NEW direction to the exiting card too, so both
                 halves of the turn go the same way */}
             <AnimatePresence mode="wait" initial={false} custom={flipDir}>
@@ -487,7 +504,13 @@ export default function LoginClient() {
               initial="enter"
               animate="center"
               exit="exit"
-              onAnimationComplete={() => setCardShown(n => n + 1)}
+              onAnimationComplete={definition => {
+                // Only when the new card has turned in — not when the old one leaves
+                // (drawing the Google button then stalled the turn at its middle)
+                if (definition !== 'center') return;
+                setCardShown(n => n + 1);
+                if (role === 'instructor') setGisWanted(true);
+              }}
               // Phones: 24px / 20px inside — the fixed 40px squeezed every row on a 390px screen
               className="relative w-full bg-white border border-[#E3E9F3] rounded-3xl px-5 pt-6 pb-6 sm:px-10 sm:pt-10 sm:pb-[34px]"
               style={{
@@ -497,12 +520,9 @@ export default function LoginClient() {
               }}
             >
               <div className="mb-6 sm:mb-7">
-                <div className="flex items-center gap-3">
-                  <UserRound className="w-8 h-8 sm:w-9 sm:h-9 text-[#0B2A5B] flex-shrink-0" strokeWidth={1.9} aria-hidden="true" />
-                  <h2 className={`${headingFont.className} text-[26px] sm:text-[30px] font-bold text-[#0B2A5B] leading-tight`}>
-                    {step === 'otp' ? 'Verify Login' : 'Sign In'}
-                  </h2>
-                </div>
+                <h2 className={`${headingFont.className} text-[28px] sm:text-[32px] font-bold text-[#0B2A5B] leading-tight`}>
+                  {step === 'otp' ? 'Verify Login' : 'Login'}
+                </h2>
                 <p className="text-[14px] sm:text-[15px] text-[#5B6F8C] mt-2">
                   {step === 'otp'
                     ? 'A 6-digit authentication code was sent to your verified email.'
@@ -573,44 +593,35 @@ export default function LoginClient() {
                 </form>
               ) : (
                 <>
-                  {/* Role segmented control */}
-                  <div className="mb-5">
-                    <p className="text-[14px] font-semibold text-[#0B2A5B] mb-2">Role</p>
-                    <div
-                      role="group"
-                      aria-label="Select role"
-                      className="flex bg-white border border-[#D6E0EF] rounded-xl p-1 gap-1"
-                    >
-                      {ROLES.map(r => {
-                        const active = role === r.id;
-                        return (
-                          <button
-                            key={r.id}
-                            type="button"
-                            onClick={() => { if (!active) selectRole(r.id); }}
-                            aria-pressed={active}
-                            className={[
-                              // Each button as wide as its label needs ("Administrator / Chair" is longer than "Faculty"),
-                              // the rest shared; min-w-0 + wrapping on phones keeps the card from widening
-                              'relative flex-auto min-w-0 min-h-[44px] px-2 py-1.5 inline-flex items-center justify-center gap-2 text-[14px] leading-tight text-center font-semibold rounded-[10px] sm:whitespace-nowrap transition-colors duration-300',
-                              active ? 'text-[#1D5BD6]' : 'text-[#0B2A5B] hover:text-[#1D5BD6]',
-                            ].join(' ')}
-                          >
-                            {active && (
-                              <span
-                                className="absolute inset-0 rounded-[10px] bg-[#EAF1FC] border border-[#BFD3F5] shadow-sm"
-                                aria-hidden="true"
-                              />
-                            )}
-                            <span className="relative inline-flex items-center gap-1.5 min-w-0">
-                              {active && <UserRound className="hidden sm:inline-block w-4 h-4 flex-shrink-0" aria-hidden="true" />}
-                              <span className="sm:hidden">{r.short}</span>
-                              <span className="hidden sm:inline">{r.label}</span>
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
+                  {/* Role: the chosen one in solid blue, each with its icon */}
+                  <div
+                    role="group"
+                    aria-label="Select role"
+                    className="mb-6 flex bg-white border border-[#DCE5F2] rounded-2xl p-1 gap-1 shadow-[0_1px_2px_rgba(11,42,91,0.05)]"
+                  >
+                    {ROLES.map(r => {
+                      const active = role === r.id;
+                      const Icon = r.icon;
+                      return (
+                        <button
+                          key={r.id}
+                          type="button"
+                          onClick={() => { if (!active) selectRole(r.id); }}
+                          aria-pressed={active}
+                          className={[
+                            // Each button as wide as its label needs ("Administrator / Chair" is longer than "Faculty"),
+                            // the rest shared; min-w-0 + wrapping on phones keeps the card from widening
+                            'relative flex-auto min-w-0 min-h-[46px] px-3 py-1.5 inline-flex items-center justify-center gap-2 text-[14px] sm:text-[15px] leading-tight text-center font-semibold rounded-xl sm:whitespace-nowrap transition-colors duration-200',
+                            active ? '' : 'text-[#0B2A5B] hover:bg-[#F1F6FD]',
+                          ].join(' ')}
+                          style={active ? ROLE_ACTIVE_STYLE : undefined}
+                        >
+                          <Icon className="w-[18px] h-[18px] flex-shrink-0" strokeWidth={2} aria-hidden="true" />
+                          <span className="sm:hidden">{r.short}</span>
+                          <span className="hidden sm:inline">{r.label}</span>
+                        </button>
+                      );
+                    })}
                   </div>
 
                   <form onSubmit={handleSubmit} noValidate>
@@ -691,7 +702,7 @@ export default function LoginClient() {
                       </button>
                     </div>
 
-                    {/* Sign In */}
+                    {/* Login */}
                     <button
                       type="submit"
                       disabled={loading || googleLoading}
@@ -701,9 +712,9 @@ export default function LoginClient() {
                       {loading ? (
                         <>
                           <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" aria-hidden="true" />
-                          <span>Signing in…</span>
+                          <span>Logging in…</span>
                         </>
-                      ) : <>Sign In <ArrowRight className="w-4 h-4" /></>}
+                      ) : <>Login <ArrowRight className="w-[18px] h-[18px]" /></>}
                     </button>
                     <AnimatePresence initial={false}>
                       {slowServer && (
@@ -731,13 +742,15 @@ export default function LoginClient() {
                       </div>
                       {process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ? (
                         <div className="flex flex-col items-center min-w-0">
-                          {/* overflow-hidden: the Google button can never widen the card */}
+                          {/* overflow-hidden: the Google button can never widen the card.
+                              min-h = the button's 40px, kept free while it is drawn after the turn,
+                              so the card lands at its final size instead of growing a moment later */}
                           <div
                             ref={googleBtnRef}
-                            className={`w-full max-w-full min-w-0 overflow-hidden flex justify-center ${googleLoading ? 'pointer-events-none opacity-60' : ''}`}
+                            className={`w-full max-w-full min-w-0 min-h-[40px] overflow-hidden flex justify-center ${googleLoading ? 'pointer-events-none opacity-60' : ''}`}
                           />
                           {googleLoading && (
-                            <p className="mt-2 text-[12px] text-[#5B6F8C]">Signing in with Google…</p>
+                            <p className="mt-2 text-[12px] text-[#5B6F8C]">Logging in with Google…</p>
                           )}
                           <p className="mt-2.5 text-center text-[11px] text-[#94A3B8] leading-snug">
                             Use the Google account already verified for this Faculty account.
@@ -745,7 +758,7 @@ export default function LoginClient() {
                         </div>
                       ) : (
                         <p className="text-center text-[12px] text-[#94A3B8]">
-                          Google sign-in is not configured.
+                          Google login is not configured.
                         </p>
                       )}
                     </div>
@@ -761,14 +774,14 @@ export default function LoginClient() {
         {/* Role switch button — one arrow pointing where it goes: → on
             Administrator / Chair (turns the card to Faculty, like the card's
             own flip to the right), ← on Faculty (turns it back). On desktop it
-            sits on the seam between the branding panel and the sign-in side
-            (fixed so it stays centred while the sign-in side scrolls); on mobile
+            sits on the seam between the branding panel and the login side
+            (fixed so it stays centred while the login side scrolls); on mobile
             it sits under the card. */}
         {step !== 'otp' && (
           <button
             type="button"
             onClick={() => selectRole(role === 'admin_chair' ? 'instructor' : 'admin_chair')}
-            aria-label={role === 'admin_chair' ? 'Switch to Faculty sign in' : 'Switch to Administrator / Chair sign in'}
+            aria-label={role === 'admin_chair' ? 'Switch to Faculty login' : 'Switch to Administrator / Chair login'}
             title={role === 'admin_chair' ? 'Faculty' : 'Administrator / Chair'}
             // Desktop only — on phones the Role buttons already switch the card
             className="group z-20 hidden lg:flex lg:fixed lg:left-1/2 lg:top-1/2 lg:-translate-x-1/2 lg:-translate-y-1/2 w-14 h-14 rounded-full bg-white border border-[#E3E9F3] text-[#0B2A5B] shadow-[0_10px_28px_-10px_rgba(11,42,91,0.45)] items-center justify-center overflow-hidden transition-all duration-200 hover:text-[#1D5BD6] hover:border-[#BFD3F5] hover:shadow-[0_12px_30px_-10px_rgba(29,91,214,0.55)] active:scale-95"

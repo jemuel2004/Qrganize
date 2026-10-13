@@ -1,4 +1,11 @@
-import WorkloadClient from './WorkloadClient';
+import WorkloadClient, { type LoadFilter } from './WorkloadClient';
+
+/** `?show=` → the faculty list's filter button. Old links (Unassigned / No Subjects) open Incomplete. */
+function loadFilter(show: string): LoadFilter {
+  if (show === 'complete' || show === 'incomplete') return show;
+  if (show === 'unassigned' || show === 'none') return 'incomplete';
+  return 'all';
+}
 
 function firstQueryValue(value: string | string[] | undefined): string {
   if (Array.isArray(value)) return value[0]?.trim() ?? '';
@@ -14,7 +21,7 @@ export default async function WorkloadPage({
     assign?: string | string[];
     block?: string | string[];
     from?: string | string[];
-    /** Faculty list filter to open on — e.g. the Dashboard's "Incomplete Faculty Load" → unassigned */
+    /** Faculty list filter to open on — e.g. the Dashboard's "Incomplete Faculty Load" → incomplete */
     show?: string | string[];
   }>;
 }) {
@@ -26,7 +33,7 @@ export default async function WorkloadPage({
   return (
     <WorkloadClient
       initialFacultyQuery={initialFacultyQuery}
-      initialAssignFilter={show === 'unassigned' || show === 'assigned' ? show : 'all'}
+      initialAssignFilter={loadFilter(show)}
       assignMsId={Number(firstQueryValue(params.assign)) || null}
       assignBlockId={Number(firstQueryValue(params.block)) || null}
       assignFrom={firstQueryValue(params.from) === 'block' ? 'block' : 'master-schedule'}

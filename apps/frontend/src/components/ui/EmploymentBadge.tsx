@@ -30,7 +30,7 @@ export function EmploymentBadge({
   const { fg, bg } = employmentColors(status);
   return (
     <span
-      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border whitespace-nowrap ${className}`}
+      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-sm font-semibold border whitespace-nowrap ${className}`}
       style={{ color: fg, backgroundColor: bg, borderColor: `color-mix(in srgb, ${fg} 35%, transparent)` }}
     >
       {label ?? (isPermanent ? 'Permanent' : 'Contractual')}

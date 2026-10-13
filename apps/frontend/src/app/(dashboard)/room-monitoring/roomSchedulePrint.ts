@@ -10,6 +10,7 @@
  */
 
 import { WEEK_DAYS, sortDays, type WeekDay } from '@shared/dayCombination';
+import { clock12 } from '@shared/clock12';
 import { activeCombinations, fetchDayCombinations } from '@/lib/dayCombinations';
 import {
   DEFAULT_FOOTER_CONFIG, escapePrintHtml as esc, footerHtml,
@@ -32,8 +33,9 @@ export interface RoomClass {
 }
 
 const toMin = (hm: string) => { const [h, m] = hm.split(':').map(Number); return h * 60 + (m || 0); };
-/** 7:00, 1:30 — the MORNING / AFTERNOON heading carries the AM / PM */
-const clock = (min: number) => `${Math.floor(min / 60) % 12 || 12}:${String(min % 60).padStart(2, '0')}`;
+/** "7:00 AM–8:30 AM" — breaks only after the dash, so AM / PM stays with its time */
+const timeRange = (start: number, end: number) =>
+  `<span class="rs-t">${clock12(start)}–</span><wbr><span class="rs-t">${clock12(end)}</span>`;
 
 /** Standard periods of the sheet (blank rows when free) and the lunch hour */
 const PERIODS: [number, number][] = [[420, 510], [510, 600], [600, 690], [780, 870], [870, 960], [960, 1050], [1050, 1140]];
@@ -94,7 +96,7 @@ function groupLines(days: WeekDay[], classes: RoomClass[]): Line[] {
 }
 
 function lineHtml(line: Line, groupDays: WeekDay[]): string {
-  const time = `${clock(line.start)} – ${clock(line.end)}`;
+  const time = timeRange(line.start, line.end);
   if (!line.cls) return `<tr class="rs-free"><td class="rs-time">${time}</td><td></td><td></td><td></td></tr>`;
   const c = line.cls;
   const lab = (c.component ?? '').toLowerCase().startsWith('lab');
@@ -115,7 +117,7 @@ function groupHtml(days: WeekDay[], classes: RoomClass[]): string {
   const afternoon = lines.filter(l => l.start >= NOON);
   const lunch = lines.some(l => l.cls && l.start < LUNCH[1] && l.end > LUNCH[0])
     ? ''
-    : `<tr class="rs-lunch"><td class="rs-time">${clock(LUNCH[0])} – ${clock(LUNCH[1])}</td><td colspan="3">Lunch Break</td></tr>`;
+    : `<tr class="rs-lunch"><td class="rs-time">${timeRange(LUNCH[0], LUNCH[1])}</td><td colspan="3">Lunch Break</td></tr>`;
   return `
     <tbody class="rs-group">
       <tr class="rs-day"><td colspan="4">${groupLabel(days)}</td></tr>
@@ -139,7 +141,8 @@ const ROOM_SCHEDULE_CSS = `
 .rs .rs-cols th { font-size: 8pt; letter-spacing: .04em; padding: 4px 6px; }
 .rs .rs-day td { text-align: center; font-weight: bold; font-size: 9.5pt; letter-spacing: .05em; padding: 5px 6px; border-top: 2px solid #000; }
 .rs .rs-half td { text-align: center; font-weight: bold; font-size: 8pt; letter-spacing: .1em; padding: 2px 6px; }
-.rs td.rs-time { text-align: center; white-space: nowrap; }
+.rs td.rs-time { text-align: center; }
+.rs .rs-t { white-space: nowrap; }
 .rs td.rs-subj { text-align: left; }
 .rs td.rs-course { text-align: center; white-space: nowrap; }
 .rs td.rs-inst { text-align: center; }

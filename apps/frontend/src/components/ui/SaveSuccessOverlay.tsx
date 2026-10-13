@@ -95,18 +95,20 @@ export function PageSuccessCheckHost() {
 
 /**
  * Shows the check for SAVE_SUCCESS_MS, then runs `then` (e.g. a toast or closing
- * the dialog). The timer is cleared if the component goes away first.
+ * the dialog). The timer is cleared if the component goes away first. With
+ * `keep`, the check stays up when `then` runs — for a dialog that closes next,
+ * so the check fades out with it instead of the dialog flashing back first.
  */
 export function useSaveSuccess(ms = SAVE_SUCCESS_MS) {
   const [shown, setShown] = useState(false);
   const timer = useRef<number | null>(null);
   useEffect(() => () => { if (timer.current) window.clearTimeout(timer.current); }, []);
-  const play = useCallback((then?: () => void) => {
+  const play = useCallback((then?: () => void, opts?: { keep?: boolean }) => {
     if (timer.current) window.clearTimeout(timer.current);
     setShown(true);
     timer.current = window.setTimeout(() => {
       timer.current = null;
-      setShown(false);
+      if (!opts?.keep) setShown(false);
       then?.();
     }, ms);
   }, [ms]);

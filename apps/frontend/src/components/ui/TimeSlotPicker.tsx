@@ -26,6 +26,10 @@ function toMin(t: string) {
   const [h, m] = t.split(':').map(Number);
   return h * 60 + (m || 0);
 }
+/** Minutes after midnight → 'HH:MM' */
+function fromMin(m: number) {
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+}
 function fmt(t: string) {
   const [h, m] = t.split(':').map(Number);
   if (Number.isNaN(h)) return '—';
@@ -261,12 +265,22 @@ export default function TimeSlotPicker({
           })}
         </div>
 
-        {/* Only shown to explain a struck-out time */}
-        {hoveredConflict && (
-          <div className="px-4 py-2 border-t border-red-100 bg-red-50 flex-shrink-0 text-[12px] text-red-700 truncate" title={`Runs into ${hoveredConflict}`}>
-            Runs into {hoveredConflict}
-          </div>
-        )}
+        {/* Always there and always one line: hovering a struck-out time only changes its words
+            and colour. (It used to appear on hover, which resized the panel, moved the time
+            away from the pointer, hid again — and the panel shook.) */}
+        <div
+          className={`px-4 h-9 flex items-center border-t flex-shrink-0 text-[12px] transition-colors duration-150 ${
+            hoveredConflict ? 'border-red-100 bg-red-50 text-red-700' : 'border-[#F1F5F9] bg-white text-[#64748B]'
+          }`}
+          title={hoveredConflict ? `Runs into ${hoveredConflict}` : undefined}
+          aria-live="polite"
+        >
+          <span className="truncate">
+            {hoveredConflict
+              ? `Runs into ${hoveredConflict}`
+              : day ? `${fmt(preview)} – ${fmt(fromMin(toMin(preview) + durationMin))}` : 'Pick a day first'}
+          </span>
+        </div>
       </AnchoredPopover>
     </>
   );

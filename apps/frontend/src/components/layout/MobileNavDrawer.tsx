@@ -8,6 +8,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { LogOut, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import SystemLogo from '@/components/ui/SystemLogo';
+import { releaseReminderDevice } from '@/lib/classReminders';
 
 /**
  * Phone / tablet navigation shared by the Faculty and the Admin shells — a
@@ -38,7 +39,8 @@ export function MobileNavDrawer({ open, onClose, subtitle, signedInAs, children 
     if (signingOut) return;
     setSigningOut(true);
     onClose();
-    try { await fetch('/api/auth/logout', { method: 'POST' }); } finally { router.push('/login'); }
+    // This device stops getting the account's class reminders (needs the session, so first)
+    try { await releaseReminderDevice(); await fetch('/api/auth/logout', { method: 'POST' }); } finally { router.push('/login'); }
   }
 
   return createPortal(

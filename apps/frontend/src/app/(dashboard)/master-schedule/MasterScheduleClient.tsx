@@ -18,6 +18,7 @@ import Link from 'next/link';
 import { isScopedChairRole } from '@/lib/roleAccess';
 import SubjectFacultyPreview from '@/components/SubjectFacultyPreview';
 import { blockCode, isBlockQuery, matchesBlockQuery, programShortCode, squashSearch } from '@shared/blockCode';
+import { clockRange12 } from '@shared/clock12';
 import { useLivePrograms } from '@/hooks/useLivePrograms';
 
 const BLOCK_PAGE_EASE = [0.16, 1, 0.3, 1] as const;
@@ -248,8 +249,7 @@ function BlockTable({ block, onOpenSubject, withProgram = false }: {
                       ? (
                         <span className="text-[#334155] font-medium">
                           {s.day_pattern}{' '}
-                          {s.start_time?.slice(0, 5)}
-                          {s.end_time ? `–${s.end_time.slice(0, 5)}` : ''}
+                          {clockRange12(s.start_time, s.end_time)}
                         </span>
                       )
                       : <span className="text-[#94A3B8] italic text-xs">Not scheduled</span>}

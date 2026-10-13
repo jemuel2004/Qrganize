@@ -85,11 +85,12 @@ function AutoAssignBar({ count, scope, busy, onClick }: {
   );
 }
 
-export default function UnassignedRoomsPanel({ refreshKey = 0 }: { refreshKey?: number }) {
+/** `initialOpen`: the pop-up opens by itself (Analytics → "Classes Without a Room") */
+export default function UnassignedRoomsPanel({ refreshKey = 0, initialOpen = false }: { refreshKey?: number; initialOpen?: boolean }) {
   const reduceMotion = useReducedMotion();
   const toast = useToast();
   const [data, setData] = useState<Data | null>(null);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initialOpen);
   const [pickedKey, setPickedKey] = useState<string | null>(null); // faculty window
   const [search, setSearch] = useState('');
   /** Room picked on screen per class (falls back to the suggestion) */
@@ -103,6 +104,10 @@ export default function UnassignedRoomsPanel({ refreshKey = 0 }: { refreshKey?: 
     .then((d: Data | null) => { if (d) setData(d); })
     .catch(() => {}), []);
   useEffect(() => { load(); }, [load, refreshKey]);
+  // Opened from a link: the address loses ?open=no-room, so a refresh doesn't reopen it
+  useEffect(() => {
+    if (initialOpen) window.history.replaceState(null, '', window.location.pathname);
+  }, [initialOpen]);
   // Live updates: classes got a room (or lost one) elsewhere
   useRealtime(['schedule', 'rooms'], load);
 

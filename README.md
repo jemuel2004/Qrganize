@@ -33,7 +33,7 @@
 | 4 | **Manage Faculty Workloads** | View and track workload assignments per faculty; monitors regular load vs. overload for permanent and contractual faculty |
 | 5 | **Create Student Blocks** | Create block sections (A, B, C…) per program, year level, and semester; subjects are auto-loaded from the curriculum |
 | 6 | **Assign Instructor Workload** | Assign faculty to block subjects; system auto-computes workload units and tracks regular/overload split |
-| 7 | **Schedule Classes** | Set the day pattern, start time, and room for each assigned subject; handles Lecture-only, Lab-only, and Lec+Lab subjects separately |
+| 7 | **Class Assignment** | Set the day pattern, start time, and room for each assigned subject; handles Lecture-only, Lab-only, and Lec+Lab subjects separately |
 | 8 | **Detect Schedule Conflicts** | Automatically prevents overlapping schedules for instructor, block section, and room during class scheduling |
 | 9 | **Generate Class Program** | Auto-generate the printable Class Program per block; export to Excel or print as PDF |
 | 10 | **Scan Room QR Code** | Faculty scan the room's QR code on entry; system logs the scan with timestamp and room ID |
@@ -63,7 +63,7 @@
                             Regular load and overload tracked
                                    │
                                    ▼
-                        06. Schedule Classes
+                        06. Class Assignment
                             Day pattern + start time + room
                             Lec+Lab → separate rooms
                             Conflicts auto-detected

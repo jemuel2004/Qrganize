@@ -6,6 +6,7 @@ import { assertBlockProgramAccess } from '@/services/programScope';
 import { ensureBlockCurriculumVersion } from '@/database/migrateCurriculum';
 import { blockCurriculumVersion } from '@shared/curriculumVersion';
 import { withAudit } from '@/services/audit';
+import { isNstpSubject } from '@shared/nstp';
 
 // POST /api/blocks/[id]/subjects — add a curriculum subject to a block
 async function POST_handler(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -51,6 +52,8 @@ async function POST_handler(req: NextRequest, { params }: { params: Promise<{ id
       );
       if (bs.rows.length === 0) return null;
 
+      // NSTP: on the Class Program only — no class row (Settings → Day Combinations → NSTP)
+      if (isNstpSubject(currRow.rows[0].subject_code)) return bs.rows[0];
       await client.query(
         'INSERT INTO master_schedule (block_subject_id, status, academic_year, semester) VALUES ($1,\'Unassigned\',$2,$3)',
         [bs.rows[0].id, block.academic_year, block.semester]

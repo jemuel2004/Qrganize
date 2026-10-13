@@ -1397,23 +1397,27 @@ interface SectionDef {
   icon: React.ElementType;
   label: string;
   description: string;
-  /** Tile / banner colour */
+  /** Tile / banner colour — the same colour tiles as the faculty Settings (components/ui/SettingsTile) */
   tone: string;
+  /** Destructive (System Reset): red title */
+  danger?: boolean;
 }
+
+const toneOf = (item: SectionDef) => item.tone;
 
 const SECTION_GROUPS: { label: string; items: SectionDef[] }[] = [
   {
     label: 'My Account',
     items: [
       { id: 'profile', icon: User, label: 'My Profile', description: 'Your photo, username and email', tone: '#1D5BD6' },
-      { id: 'security', icon: Lock, label: 'Password & Security', description: 'Password, two-step verification and devices', tone: '#4F46E5' },
+      { id: 'security', icon: Lock, label: 'Password & Security', description: 'Password, two-step verification and trusted devices', tone: '#4F46E5' },
     ],
   },
   {
     label: 'System',
     items: [
       { id: 'school-year', icon: CalendarDays, label: 'School Year', description: 'Set the active school year and semester', tone: '#0284C7' },
-      { id: 'day-combinations', icon: CalendarRange, label: 'Day Combinations', description: 'Common class days (MWF, TTh…) for this semester', tone: '#1D5BD6' },
+      { id: 'day-combinations', icon: CalendarRange, label: 'Day Combinations', description: 'Common class days (MWF, TTh…) and NSTP (Saturday)', tone: '#1D5BD6' },
       { id: 'workload-limits', icon: Scale, label: 'Workload Limits', description: 'Regular load, overload limit and contractual hours', tone: '#0B4FA8' },
       { id: 'branding', icon: ImagePlus, label: 'System Logo', description: 'Upload the logo shown across the system', tone: '#12408F' },
       { id: 'appearance', icon: Palette, label: 'Appearance', description: 'Light or dark display', tone: '#7C3AED' },
@@ -1422,7 +1426,7 @@ const SECTION_GROUPS: { label: string; items: SectionDef[] }[] = [
   {
     label: 'Maintenance',
     items: [
-      { id: 'reset', icon: ShieldAlert, label: 'System Reset', description: 'Clear system data — cannot be undone', tone: '#DC2626' },
+      { id: 'reset', icon: ShieldAlert, label: 'System Reset', description: 'Clear system data — cannot be undone', tone: '#DC2626', danger: true },
     ],
   },
 ];
@@ -1447,8 +1451,8 @@ function SectionBody({ id, onClose }: { id: SettingsSectionId; onClose: () => vo
       );
     case 'security': return <PasswordAndSecuritySection />;
     case 'school-year': return <SchoolYearSection />;
-    case 'day-combinations': return <DayCombinationsSection />;
-    case 'workload-limits': return <WorkloadLimitsSection />;
+    case 'day-combinations': return <DayCombinationsSection onClose={onClose} />;
+    case 'workload-limits': return <WorkloadLimitsSection onClose={onClose} />;
     case 'branding': return <LogoUploadContent />;
     case 'appearance': return <AppearanceSection />;
     case 'reset': return <SystemResetSection />;
@@ -1458,31 +1462,58 @@ function SectionBody({ id, onClose }: { id: SettingsSectionId; onClose: () => vo
 function SettingTile({ item, index, onOpen }: { item: SectionDef; index: number; onOpen: () => void }) {
   const reduceMotion = useReducedMotion();
   const Icon = item.icon;
+  const tone = toneOf(item);
   return (
     <motion.button
       type="button"
       onClick={onOpen}
+      aria-haspopup="dialog"
       initial={reduceMotion ? false : { opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0, transition: { duration: 0.4, ease: EASE_S, delay: index * 0.05 } }}
-      whileHover={reduceMotion ? undefined : { y: -4, boxShadow: `0 18px 36px -18px ${item.tone}99` }}
+      whileHover={reduceMotion ? undefined : { y: -4, boxShadow: `0 18px 36px -18px ${tone}99` }}
       whileTap={reduceMotion ? undefined : { scale: 0.98 }}
-      className="qr-stat-tint group relative overflow-hidden text-left rounded-2xl border p-5 flex items-center gap-4 min-h-[104px] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1D5BD6]/40"
-      style={{ background: `linear-gradient(135deg, ${item.tone}1A 0%, #FFFFFF 70%)`, borderColor: `${item.tone}33` }}
+      // Same colour tile as the faculty Settings; the app-wide focus outline keeps the round corners
+      className="qr-stat-tint group relative overflow-hidden h-full w-full text-left rounded-2xl border p-5 flex items-center gap-4 min-h-[104px] focus-visible:rounded-2xl!"
+      style={{ background: `linear-gradient(135deg, ${tone}1A 0%, #FFFFFF 70%)`, borderColor: `${tone}33` }}
     >
       {/* soft decorative circle */}
-      <span aria-hidden className="absolute -right-8 -top-8 w-28 h-28 rounded-full" style={{ backgroundColor: `${item.tone}0F` }} />
+      <span aria-hidden className="absolute -right-8 -top-8 w-28 h-28 rounded-full" style={{ backgroundColor: `${tone}0F` }} />
       <span
         className="relative w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-[0_8px_18px_-8px_rgba(11,42,91,0.45)]"
-        style={{ background: `linear-gradient(135deg, ${item.tone} 0%, #0B2A5B 140%)` }}
+        style={{ background: `linear-gradient(135deg, ${tone} 0%, #0B2A5B 140%)` }}
       >
-        <Icon className="w-6 h-6" style={WHITE_TEXT} />
+        <Icon className="w-6 h-6" style={WHITE_TEXT} aria-hidden />
       </span>
       <span className="relative min-w-0 flex-1">
-        <span className="block text-[17px] font-bold leading-tight" style={{ color: item.tone === '#DC2626' ? '#B91C1C' : '#0B2A5B' }}>{item.label}</span>
+        <span className={`block text-[17px] font-bold leading-tight ${item.danger ? 'text-[#B91C1C] [html:not(.light)_&]:text-[#FCA5A5]' : 'text-[#0B2A5B]'}`}>{item.label}</span>
         <span className="block text-sm text-[#64748B] mt-1 leading-snug">{item.description}</span>
       </span>
-      <ChevronRight className="relative w-5 h-5 flex-shrink-0 transition-transform duration-200 group-hover:translate-x-1" style={{ color: item.tone }} />
+      <ChevronRight className="relative w-5 h-5 flex-shrink-0 transition-transform duration-200 group-hover:translate-x-1" style={{ color: tone }} aria-hidden />
     </motion.button>
+  );
+}
+
+/** Loading: the same shape as the page — section headings over rows of cards */
+function SettingsGridSkeleton() {
+  return (
+    <div className="space-y-8" role="status" aria-live="polite" aria-label="Loading settings">
+      {SECTION_GROUPS.map(group => (
+        <div key={group.label}>
+          <Skeleton className="h-4 w-28 rounded mb-3.5 ml-1" />
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {group.items.map(item => (
+              <div key={item.id} className="min-h-[104px] rounded-2xl border border-[#E2E8F0] bg-white p-5 flex items-center gap-4">
+                <Skeleton className="w-14 h-14 rounded-2xl flex-shrink-0" />
+                <div className="flex-1 space-y-2">
+                  <Skeleton className="h-4 w-36 rounded" />
+                  <Skeleton className="h-3.5 w-[75%] rounded" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -1490,14 +1521,38 @@ function SettingTile({ item, index, onOpen }: { item: SectionDef; index: number;
 function SettingDialog({ section, onClose }: { section: SectionDef | null; onClose: () => void }) {
   const reduceMotion = useReducedMotion();
   const [mounted, setMounted] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
   useEffect(() => { setMounted(true); }, []);
   useScrollLock(!!section);
   useEffect(() => {
     if (!section) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { onClose(); return; }
+      // Keyboard: Tab stays inside the open window
+      if (e.key !== 'Tab' || !panelRef.current) return;
+      const items = [...panelRef.current.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )].filter(el => el.offsetParent !== null && !el.matches(':disabled')); // a disabled button can't take focus
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const inside = panelRef.current.contains(document.activeElement);
+      if (e.shiftKey && (document.activeElement === first || !inside)) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (document.activeElement === last || !inside)) { e.preventDefault(); first.focus(); }
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [section, onClose]);
+  // Focus goes into the window when it opens, and back to its card when it closes
+  useEffect(() => {
+    if (!section) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const t = window.setTimeout(() => panelRef.current?.querySelector<HTMLElement>('[data-dialog-close]')?.focus(), 60);
+    return () => {
+      window.clearTimeout(t);
+      if (opener && document.contains(opener)) opener.focus({ preventScroll: true });
+    };
+  }, [section]);
   if (!mounted) return null;
   const Icon = section?.icon;
 
@@ -1513,18 +1568,22 @@ function SettingDialog({ section, onClose }: { section: SectionDef | null; onClo
         >
           <div className="absolute inset-0 bg-[#0B2A5B]/40 backdrop-blur-sm" onClick={onClose} aria-hidden />
           <motion.div
+            ref={panelRef}
             role="dialog"
             aria-modal="true"
             aria-labelledby="setting-dialog-title"
+            aria-describedby="setting-dialog-desc"
             initial={reduceMotion ? false : { opacity: 0, scale: 0.95, y: 16 }}
             animate={{ opacity: 1, scale: 1, y: 0, transition: { duration: 0.35, ease: EASE_S } }}
             exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: 10, transition: { duration: 0.2, ease: EASE_S } }}
-            className="relative w-full max-w-3xl max-h-[90vh] flex flex-col rounded-3xl overflow-hidden bg-white shadow-[0_30px_70px_-25px_rgba(11,42,91,0.55)]"
+            // While a section's saved check shows (SettingsSaveCheck), the window steps
+            // aside — only the check card floats over the dimmed page, as in other dialogs
+            className="relative w-full max-w-3xl max-h-[90vh] flex flex-col rounded-3xl overflow-hidden bg-white shadow-[0_30px_70px_-25px_rgba(11,42,91,0.55)] transition-[background-color,box-shadow] duration-200 has-[[data-check-area]]:bg-transparent! has-[[data-check-area]]:shadow-none! [&:has([data-check-area])>*]:invisible [&_[data-check-area]_.save-success-overlay]:visible"
           >
             {/* Gradient banner */}
             <header
               className="relative overflow-hidden flex-shrink-0 px-6 sm:px-8 py-6"
-              style={{ background: `linear-gradient(120deg, ${section.tone} 0%, #0B2A5B 115%)` }}
+              style={{ background: `linear-gradient(120deg, ${toneOf(section)} 0%, #0B2A5B 115%)` }}
             >
               <span aria-hidden className="absolute -right-14 -top-20 w-56 h-56 rounded-full bg-white/10" />
               <span aria-hidden className="absolute right-28 -bottom-24 w-44 h-44 rounded-full bg-white/[0.06]" />
@@ -1534,14 +1593,15 @@ function SettingDialog({ section, onClose }: { section: SectionDef | null; onClo
                 </span>
                 <div className="min-w-0 flex-1">
                   <h2 id="setting-dialog-title" className="text-2xl font-bold leading-tight" style={WHITE_TEXT}>{section.label}</h2>
-                  <p className="text-[15px] mt-1" style={{ color: 'rgba(255,255,255,0.8)' }}>{section.description}</p>
+                  <p id="setting-dialog-desc" className="text-[15px] mt-1" style={{ color: 'rgba(255,255,255,0.85)' }}>{section.description}</p>
                 </div>
                 <motion.button
                   type="button"
                   onClick={onClose}
+                  data-dialog-close
                   whileTap={reduceMotion ? undefined : { scale: 0.95 }}
                   aria-label="Close"
-                  className="self-start inline-flex items-center gap-1.5 h-10 px-3.5 rounded-full bg-white/15 hover:bg-white/25 text-[15px] font-semibold transition-colors flex-shrink-0"
+                  className="self-start inline-flex items-center gap-1.5 h-10 px-3.5 rounded-full bg-white/15 hover:bg-white/25 text-[15px] font-semibold transition-colors flex-shrink-0 focus-visible:outline-white! focus-visible:rounded-full!"
                   style={WHITE_TEXT}
                 >
                   <X className="w-5 h-5" style={WHITE_TEXT} /> Close
@@ -1572,25 +1632,30 @@ export default function SettingsPage() {
     <div className="p-4 sm:p-6 max-w-7xl mx-auto w-full min-w-0">
       <BackButton />
       <div className="mt-4 sm:mt-7 mb-6">
-        <WatermarkTitle>Settings</WatermarkTitle>
+        <WatermarkTitle strong>Settings</WatermarkTitle>
       </div>
 
-      <PageLoadTransition showSkeleton={showSkeleton} skeleton={<FormSkeleton fields={8} />}>
+      <PageLoadTransition showSkeleton={showSkeleton} skeleton={<SettingsGridSkeleton />}>
         <motion.div
           initial={reduceMotion ? false : { opacity: 0 }}
           animate={{ opacity: 1, transition: { duration: 0.3, ease: EASE_S } }}
-          className="space-y-7"
+          className="space-y-8"
         >
-          {SECTION_GROUPS.map((group, gi) => (
-            <section key={group.label}>
-              <p className="px-1 mb-3 text-xs font-bold uppercase tracking-[0.14em] text-[#64748B]">{group.label}</p>
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {group.items.map((item, i) => (
-                  <SettingTile key={item.id} item={item} index={gi * 2 + i} onOpen={() => setActive(item.id)} />
-                ))}
-              </div>
-            </section>
-          ))}
+          {SECTION_GROUPS.map((group, gi) => {
+            const before = SECTION_GROUPS.slice(0, gi).reduce((n, g) => n + g.items.length, 0);
+            const headingId = `settings-group-${gi}`;
+            return (
+              <section key={group.label} aria-labelledby={headingId}>
+                <h2 id={headingId} className="px-1 mb-3 text-sm font-bold uppercase tracking-[0.12em] text-[#475569]">{group.label}</h2>
+                {/* 1 column on phones, 2 on tablets, 3 on wide screens; cards in a row share one height */}
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {group.items.map((item, i) => (
+                    <SettingTile key={item.id} item={item} index={before + i} onOpen={() => setActive(item.id)} />
+                  ))}
+                </div>
+              </section>
+            );
+          })}
         </motion.div>
       </PageLoadTransition>
 

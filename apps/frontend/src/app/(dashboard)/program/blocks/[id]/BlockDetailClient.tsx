@@ -22,6 +22,7 @@ import { motion, useReducedMotion, type Variants } from 'framer-motion';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import { Skeleton } from '@/components/ui/skeletons';
 import { useLivePrograms } from '@/hooks/useLivePrograms';
+import { clockRange12 } from '@shared/clock12';
 
 interface BlockDetail {
   id: number; program_id: number; program_code: string; program_name: string;
@@ -712,7 +713,7 @@ export default function BlockDetailPage() {
                     <td className="px-4 py-4 whitespace-nowrap text-sm">
                       {s.day_pattern
                         ? <><span className="font-semibold text-slate-200">{s.day_pattern}</span><br />
-                            <span className="text-slate-400">{s.start_time?.slice(0, 5)} – {s.end_time?.slice(0, 5)}</span></>
+                            <span className="text-slate-400">{clockRange12(s.start_time, s.end_time)}</span></>
                         : <span className="text-slate-500">—</span>}
                     </td>
                     <td className="px-4 py-4 text-slate-300">

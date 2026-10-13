@@ -6,6 +6,7 @@ import { findScheduleConflicts, validateSessions, type ConflictSessionInput } fr
 import { checkMajorLecLab } from '@/services/majorRoomRule';
 import { withAudit } from '@/services/audit';
 import { ensureFacultyActivitiesTable } from '@/database/facultyActivitiesSchema';
+import { PATHFIT_VENUE_RULE, isPathfitSubject, isPathfitVenue } from '@shared/pathfitVenue';
 
 /**
  * Preview conflicts for sessions before saving. Uses the same rules as the
@@ -36,10 +37,11 @@ async function POST_handler(req: NextRequest) {
     }
 
     const schedResult = await query(`
-      SELECT ms.faculty_id, bs.block_id, b.semester, b.academic_year
+      SELECT ms.faculty_id, bs.block_id, b.semester, b.academic_year, c.subject_code
       FROM master_schedule ms
       JOIN block_subjects bs ON ms.block_subject_id = bs.id
       JOIN blocks b ON bs.block_id = b.id
+      JOIN curriculums c ON c.id = bs.curriculum_id
       WHERE ms.id = $1
     `, [master_schedule_id]);
     if (schedResult.rows.length === 0) {
@@ -79,10 +81,18 @@ async function POST_handler(req: NextRequest) {
       days: sessions.map(s => s.day),
       roomIds: sessions.map(s => s.room_id),
     });
-    const room_rule = majorRoom.applies ? {
+    let room_rule = majorRoom.applies ? {
       error: majorRoom.error,
       move: majorRoom.move ? { part: majorRoom.move.part, room_name: majorRoom.move.roomName } : null,
     } : null;
+    // PATHFIT meets only in the CCA Gym or the SAO Room (same check as the save)
+    if (isPathfitSubject(sched.subject_code)) {
+      const roomIds = [...new Set(sessions.map(s => Number(s.room_id)).filter(id => Number.isInteger(id) && id > 0))];
+      const names = roomIds.length
+        ? (await query('SELECT room_name FROM rooms WHERE id = ANY($1::int[])', [roomIds])).rows.map(r => r.room_name)
+        : [];
+      if (names.some(name => !isPathfitVenue(name))) room_rule = { error: PATHFIT_VENUE_RULE, move: null };
+    }
     return NextResponse.json({ conflicts, room_rule });
   } catch (error) {
     console.error('[POST /api/scheduling/check-conflicts]', error);

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { runExport } from '@/components/ui/ExportProgress';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { ChevronDown, Download, FileSpreadsheet, Loader2, Printer } from 'lucide-react';
 import { useToast } from '@/context/ToastContext';
@@ -132,39 +133,41 @@ export default function WorkloadPrintMenu({
        after a delay, so it uses the menu's data, kept live below. A page with
        `data` keeps its own data live.) */
     let current = workload;
-    if (isExcel && facultyId != null) {
-      try {
-        current = await fetchWorkloadPrintData(facultyId, semester, academicYear);
-        setFetched(current);
-      } catch { /* offline: the data read when the menu opened */ }
-    }
-    const docInput = printDocInput(kind, current, semester, academicYear);
     if (isExcel) {
-      // Same official form as Print, as a spreadsheet
+      // Same official form as Print, as a spreadsheet — with the 1–100% progress card
+      const label = options.find(o => o.kind === kind)?.label ?? 'Workload';
       try {
-        const { buildWorkloadFormWorkbook } = await import('@shared/workloadFormExport');
-        const png = (path: string) => fetch(path).then(r => (r.ok ? r.arrayBuffer() : null)).catch(() => null);
-        const [logo, iso, bagong] = await Promise.all([
-          png('/nemlogo/NEMSU-logo.png'),
-          png('/nemlogo/ISO-UKAS.png'),
-          png('/nemlogo/BAGONG-PILIPINAS-LOGO.png'),
-        ]);
-        const { combinations: dayCombinations } = await fetchDayCombinations(semester, academicYear, { fresh: true });
-        const buffer = await buildWorkloadFormWorkbook(
-          buildWorkloadFormModel({ ...docInput, dayCombinations }),
-          logo ? { buffer: logo, extension: 'png' } : undefined,
-          // visibleHeight: how much of each square PNG the mark fills, so both print at the same height
-          [{ b: iso, visibleHeight: 0.57 }, { b: bagong, visibleHeight: 0.74 }]
-            .filter((l): l is { b: ArrayBuffer; visibleHeight: number } => !!l.b)
-            .map(l => ({ buffer: l.b, extension: 'png' as const, visibleHeight: l.visibleHeight })),
-        );
-        const label = options.find(o => o.kind === kind)?.label ?? 'Workload';
-        const url = URL.createObjectURL(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `Faculty_Workload_${label.replace(/\s+/g, '_')}_${workload.faculty.name.replace(/[^A-Za-z0-9]+/g, '_')}_${semester.replace(/\s+/g, '_')}_${academicYear}.xlsx`;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        await runExport({ kind: 'excel', detail: `${label} · ${workload.faculty.name}` }, async () => {
+          if (facultyId != null) {
+            try {
+              current = await fetchWorkloadPrintData(facultyId, semester, academicYear);
+              setFetched(current);
+            } catch { /* offline: the data read when the menu opened */ }
+          }
+          const docInput = printDocInput(kind, current, semester, academicYear);
+          const { buildWorkloadFormWorkbook } = await import('@shared/workloadFormExport');
+          const png = (path: string) => fetch(path).then(r => (r.ok ? r.arrayBuffer() : null)).catch(() => null);
+          const [logo, iso, bagong] = await Promise.all([
+            png('/nemlogo/NEMSU-logo.png'),
+            png('/nemlogo/ISO-UKAS.png'),
+            png('/nemlogo/BAGONG-PILIPINAS-LOGO.png'),
+          ]);
+          const { combinations: dayCombinations } = await fetchDayCombinations(semester, academicYear, { fresh: true });
+          const buffer = await buildWorkloadFormWorkbook(
+            buildWorkloadFormModel({ ...docInput, dayCombinations }),
+            logo ? { buffer: logo, extension: 'png' } : undefined,
+            // visibleHeight: how much of each square PNG the mark fills, so both print at the same height
+            [{ b: iso, visibleHeight: 0.57 }, { b: bagong, visibleHeight: 0.74 }]
+              .filter((l): l is { b: ArrayBuffer; visibleHeight: number } => !!l.b)
+              .map(l => ({ buffer: l.b, extension: 'png' as const, visibleHeight: l.visibleHeight })),
+          );
+          const url = URL.createObjectURL(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `Faculty_Workload_${label.replace(/\s+/g, '_')}_${workload.faculty.name.replace(/[^A-Za-z0-9]+/g, '_')}_${semester.replace(/\s+/g, '_')}_${academicYear}.xlsx`;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        });
         setOpen(false);
         toast.success(`${label} downloaded as Excel.`);
       } catch {
@@ -174,6 +177,7 @@ export default function WorkloadPrintMenu({
       }
       return;
     }
+    const docInput = printDocInput(kind, current, semester, academicYear);
     try {
       const result = await printRegularLoadDocument({ ...docInput, printablePath });
       if (onPrinted) {

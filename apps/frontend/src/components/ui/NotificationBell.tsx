@@ -11,6 +11,7 @@ import {
 import { ArrowRight, Bell, CalendarClock, CheckCheck, ChevronDown, ClipboardList, DoorOpen, RefreshCw } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useNotifications, AppNotification, type NotificationRole } from '@/context/NotificationContext';
+import { useScrollLock } from '@/hooks/useScrollLock';
 import {
   NOTIFICATION_TABS,
   emptyFilterMessage,
@@ -24,10 +25,8 @@ import {
   type NotificationPriority,
 } from '@/lib/notificationMeta';
 import {
-  dropdownVariants,
   NAV_DURATION,
   NAV_EASE,
-  notificationListVariants,
   notificationRowVariants,
 } from '@/components/layout/navMotion';
 
@@ -121,6 +120,67 @@ function NotificationRow({
   );
 }
 
+/**
+ * Faculty list row, Facebook style: round icon, the title in bold over the
+ * message, the time (blue while unread) and a blue dot. The whole row opens it.
+ */
+function FeedRow({
+  n, onOpen, reduceMotion,
+}: {
+  n: AppNotification; onOpen: (n: AppNotification) => void; reduceMotion: boolean;
+}) {
+  const tone = PRIORITY_TONE[notificationPriority(n)];
+  const Icon = CATEGORY_ICON[notificationCategory(n)];
+  return (
+    <motion.button
+      type="button"
+      onClick={() => onOpen(n)}
+      variants={reduceMotion ? undefined : notificationRowVariants}
+      transition={{ duration: NAV_DURATION, ease: NAV_EASE }}
+      className="w-full text-left flex items-center gap-3 px-2.5 py-2.5 rounded-xl transition-colors hover:bg-[#F1F5F9] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#164BB5]/30"
+    >
+      <span aria-hidden className="w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0" style={{ backgroundColor: tone.bg, color: tone.fg }}>
+        <Icon className="w-6 h-6" />
+      </span>
+      <span className="flex-1 min-w-0 block">
+        <span className={`block text-[15px] font-bold leading-snug break-words ${n.is_read ? 'text-[#334155]' : 'text-[#0F172A]'}`}>{n.title}</span>
+        <span className={`block text-[14px] leading-snug break-words mt-0.5 ${n.is_read ? 'text-[#64748B]' : 'text-[#334155]'}`}>{n.message}</span>
+        <span className={`block mt-1 text-[13px] ${n.is_read ? 'text-[#64748B]' : 'font-semibold text-[#1D5BD6]'}`}>{relativeTime(n.created_at)}</span>
+      </span>
+      {!n.is_read && <span aria-label="Unread" className="flex-shrink-0 w-3 h-3 rounded-full bg-[#1D5BD6]" />}
+    </motion.button>
+  );
+}
+
+/*
+ * The panel and the blur behind it move together: opening eases out (it
+ * glides in and settles softly), closing eases in (it lifts away gently, then
+ * goes). A fade and a short drop only — no zoom or bounce, so text never resizes.
+ */
+const PANEL_EASE_OUT = [0.33, 1, 0.68, 1] as const;
+const PANEL_EASE_IN = [0.32, 0, 0.67, 0] as const;
+const PANEL_OPEN_S = 0.26;
+const PANEL_CLOSE_S = 0.2;
+
+const panelVariants = {
+  hidden: { opacity: 0, y: -6 },
+  visible: { opacity: 1, y: 0, transition: { duration: PANEL_OPEN_S, ease: PANEL_EASE_OUT } },
+  exit: { opacity: 0, y: -4, transition: { duration: PANEL_CLOSE_S, ease: PANEL_EASE_IN } },
+};
+
+/** A tab's list: fades in as a whole (empty message included), its rows one after another */
+const tabListVariants = {
+  hidden: { opacity: 0 },
+  visible: {
+    opacity: 1,
+    transition: { duration: 0.22, ease: NAV_EASE, staggerChildren: 0.04, delayChildren: 0.02 },
+  },
+};
+
+/** Newest first */
+const newestFirst = (a: AppNotification, b: AppNotification) =>
+  new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+
 interface NotificationBellProps {
   /** light = page chrome; dark = instructor bar; brand = blue admin header. */
   theme?: 'light' | 'dark' | 'brand';
@@ -136,6 +196,8 @@ export default function NotificationBell({ theme = 'light' }: NotificationBellPr
   const reduceMotion = useReducedMotion();
 
   const [open, setOpen] = useState(false);
+  // While the panel is open the page behind it stays still — only the list scrolls
+  useScrollLock(open);
   const [ringing, setRinging] = useState(false);
   const [ripple, setRipple] = useState(false);
   const [filter, setFilter] = useState<NotificationFilter>('all');
@@ -159,6 +221,35 @@ export default function NotificationBell({ theme = 'light' }: NotificationBellPr
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
+  // Switching tabs: the list keeps the height it had (All is always the
+  // longest), the old list fades out and the new one eases in — no jump
+  const listRef = useRef<HTMLDivElement>(null);
+  const [listMinH, setListMinH] = useState<number | undefined>(undefined);
+  function switchTab(next: NotificationFilter) {
+    if (next === filter) return;
+    const h = listRef.current?.offsetHeight;
+    if (h) setListMinH(prev => Math.max(prev ?? 0, h));
+    setFilter(next);
+  }
+
+  // Faculty: one list like Facebook — "New" (unread) then "Earlier", newest first
+  const feed = role === 'instructor';
+  const feedNew = useMemo(() => notifications.filter(n => !n.is_read).sort(newestFirst), [notifications]);
+  const feedEarlier = useMemo(() => notifications.filter(n => n.is_read).sort(newestFirst), [notifications]);
+
+  // Nothing pops up on the page: when something new arrives, the bell rings once
+  const lastUnread = useRef<number | null>(null);
+  useEffect(() => {
+    if (isInitialLoad) return;
+    if (lastUnread.current !== null && unreadCount > lastUnread.current && !reduceMotion) {
+      setRinging(true);
+      const id = window.setTimeout(() => setRinging(false), 450);
+      lastUnread.current = unreadCount;
+      return () => window.clearTimeout(id);
+    }
+    lastUnread.current = unreadCount;
+  }, [unreadCount, isInitialLoad, reduceMotion]);
+
   /* One group per kind (room requests, block schedules, workloads...), most urgent first */
   const sections = useMemo(
     () => groupNotifications(notifications.filter(n => matchesNotificationFilter(n, filter))),
@@ -173,8 +264,8 @@ export default function NotificationBell({ theme = 'light' }: NotificationBellPr
     }
     return counts;
   }, [notifications]);
-  // Area tabs only when they have something (All / Unread always shown)
-  const tabs = NOTIFICATION_TABS.filter(t => t.id === 'all' || t.id === 'unread' || tabCounts[t.id] > 0);
+  // Area tabs only when they have something (All / Unread always shown); faculty: All / Unread only
+  const tabs = NOTIFICATION_TABS.filter(t => t.id === 'all' || t.id === 'unread' || (!feed && tabCounts[t.id] > 0));
 
   const badge = unreadCount > 99 ? '99+' : unreadCount > 0 ? String(unreadCount) : null;
 
@@ -228,12 +319,15 @@ export default function NotificationBell({ theme = 'light' }: NotificationBellPr
   }
 
   function handleBellClick() {
+    // The bell rings on every tap (and a soft ripple spreads), as well as when something new arrives
     if (!reduceMotion) {
       setRinging(true);
       setRipple(true);
       window.setTimeout(() => setRinging(false), 450);
       window.setTimeout(() => setRipple(false), 500);
     }
+    // The list sizes itself afresh; its content is already current (live updates)
+    if (!open) setListMinH(undefined);
     setOpen(o => !o);
   }
 
@@ -317,11 +411,13 @@ export default function NotificationBell({ theme = 'light' }: NotificationBellPr
           <motion.div
             role="dialog"
             aria-label="Notifications panel"
+            // The scroll lock lets this panel (and only it) scroll
+            data-scroll-portal
             className="qr-nav-menu fixed z-[60] left-3 right-3 top-14 max-h-[min(74vh,36rem)]
               md:absolute md:left-auto md:right-0 md:top-12 md:w-[32rem] md:max-w-[calc(100vw-1.5rem)]
               bg-white border border-[#E2E8F0] rounded-2xl overflow-hidden flex flex-col origin-top-right
               shadow-[0_20px_48px_-12px_rgba(11,42,91,0.28)]"
-            variants={reduceMotion ? undefined : dropdownVariants}
+            variants={reduceMotion ? undefined : panelVariants}
             initial={reduceMotion ? false : 'hidden'}
             animate="visible"
             exit={reduceMotion ? undefined : 'exit'}
@@ -332,14 +428,14 @@ export default function NotificationBell({ theme = 'light' }: NotificationBellPr
                 <h3 className="text-[17px] font-bold text-[#0B2A5B] whitespace-nowrap">
                   Notifications
                 </h3>
-                {unreadCount > 0 && (
+                {unreadCount > 0 && !feed && (
                   <span className="hidden min-[400px]:inline-flex items-center flex-shrink-0 h-6 px-2.5 rounded-full bg-[#EFF6FF] text-[#1D5BD6] text-[12px] font-bold tabular-nums">
                     {unreadCount} unread
                   </span>
                 )}
               </div>
               <div className="flex items-center gap-0.5 flex-shrink-0">
-                <button
+                {!feed && <button
                   type="button"
                   onClick={refresh}
                   aria-label="Refresh notifications"
@@ -347,7 +443,7 @@ export default function NotificationBell({ theme = 'light' }: NotificationBellPr
                   className="h-10 w-10 rounded-full text-[#64748B] hover:text-[#0B2A5B] hover:bg-[#F1F5F9] inline-flex items-center justify-center transition-colors"
                 >
                   <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                </button>
+                </button>}
                 {unreadCount > 0 && (
                   <button
                     type="button"
@@ -377,7 +473,7 @@ export default function NotificationBell({ theme = 'light' }: NotificationBellPr
                     type="button"
                     role="tab"
                     aria-selected={selected}
-                    onClick={() => setFilter(tab.id)}
+                    onClick={() => switchTab(tab.id)}
                     className={`relative h-9 px-3 rounded-full inline-flex items-center gap-1.5 text-[13px] font-semibold whitespace-nowrap transition-colors ${
                       selected ? '' : 'bg-[#F1F5F9] text-[#334155] hover:bg-[#E2E8F0]'
                     }`}
@@ -403,19 +499,56 @@ export default function NotificationBell({ theme = 'light' }: NotificationBellPr
               })}
             </div>
 
-            <motion.div
+            <div
+              ref={listRef}
               className="overflow-y-auto overflow-x-hidden overscroll-contain flex-1 min-h-0 px-1.5 pb-1.5"
+              style={{ minHeight: listMinH }}
               role="tabpanel"
-              variants={reduceMotion ? undefined : notificationListVariants}
-              initial={reduceMotion ? false : 'hidden'}
-              animate="visible"
             >
+              <AnimatePresence
+                mode="wait"
+                // Opening shows the list in place with the panel; only tab switches fade
+                initial={false}
+                // The new tab's list starts at its top
+                onExitComplete={() => listRef.current?.scrollTo({ top: 0 })}
+              >
+              <motion.div
+                key={filter}
+                variants={reduceMotion ? undefined : tabListVariants}
+                initial={reduceMotion ? false : 'hidden'}
+                animate="visible"
+                exit={reduceMotion ? undefined : { opacity: 0, transition: { duration: 0.12, ease: NAV_EASE } }}
+              >
               {isInitialLoad ? (
                 <div className="pt-2">
                   <SkeletonRow />
                   <SkeletonRow />
                   <SkeletonRow />
                 </div>
+              ) : feed ? (
+                (filter === 'unread' && feedNew.length === 0) || feedNew.length + feedEarlier.length === 0 ? (
+                  <div className="py-12 px-6 flex flex-col items-center text-center">
+                    <span className="w-12 h-12 rounded-full bg-[#EFF6FF] flex items-center justify-center mb-3" aria-hidden>
+                      <Bell className="w-6 h-6 text-[#1D5BD6]" />
+                    </span>
+                    <p className="text-[15px] font-semibold text-[#0F172A]">{filter === 'unread' ? emptyFilterMessage('unread') : 'No notifications yet.'}</p>
+                  </div>
+                ) : (
+                  <>
+                    {feedNew.length > 0 && (
+                      <section aria-label="New">
+                        <h4 className="px-2.5 pt-3 pb-1 text-[16px] font-bold text-[#0B2A5B]">New</h4>
+                        {feedNew.map(n => <FeedRow key={n.id} n={n} onOpen={openNotification} reduceMotion={!!reduceMotion} />)}
+                      </section>
+                    )}
+                    {filter === 'all' && feedEarlier.length > 0 && (
+                      <section aria-label="Earlier">
+                        <h4 className="px-2.5 pt-3 pb-1 text-[16px] font-bold text-[#0B2A5B]">Earlier</h4>
+                        {feedEarlier.map(n => <FeedRow key={n.id} n={n} onOpen={openNotification} reduceMotion={!!reduceMotion} />)}
+                      </section>
+                    )}
+                  </>
+                )
               ) : sections.length === 0 ? (
                 <div className="py-12 px-6 flex flex-col items-center text-center">
                   <span className="w-12 h-12 rounded-full bg-[#EFF6FF] flex items-center justify-center mb-3" aria-hidden>
@@ -457,10 +590,30 @@ export default function NotificationBell({ theme = 'light' }: NotificationBellPr
                   );
                 })
               )}
-            </motion.div>
+              </motion.div>
+              </AnimatePresence>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
+      {/* While the panel is open the page behind it is blurred (the top bar, bell
+          and panel stay sharp: the header sits above at z-40); a tap closes it */}
+      {mounted && createPortal(
+        <AnimatePresence>
+          {open && (
+            <motion.div
+              key="notif-backdrop"
+              aria-hidden
+              onClick={() => setOpen(false)}
+              initial={reduceMotion ? false : { opacity: 0 }}
+              animate={{ opacity: 1, transition: { duration: reduceMotion ? 0 : PANEL_OPEN_S, ease: PANEL_EASE_OUT } }}
+              exit={{ opacity: 0, transition: { duration: reduceMotion ? 0 : PANEL_CLOSE_S, ease: PANEL_EASE_IN } }}
+              className="fixed inset-0 z-[39] bg-[#0B2A5B]/20 backdrop-blur-sm"
+            />
+          )}
+        </AnimatePresence>,
+        document.body,
+      )}
       {mounted && createPortal(
         <AnimatePresence>
           {goingTo && (

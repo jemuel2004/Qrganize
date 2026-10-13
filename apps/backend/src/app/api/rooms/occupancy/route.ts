@@ -3,6 +3,10 @@ import { getAuthUser } from '@/auth/auth';
 import { query } from '@/database/db';
 import { ensureRoomOccupancy, expireStaleOccupancy, completeRoomRelease } from '@/services/ensureRoomOccupancy';
 import { withAudit } from '@/services/audit';
+import { getActiveAcademicPeriod } from '@/services/activeAcademicPeriod';
+import { manilaCalendarDateString, manilaClock } from '@/services/appTimezone';
+import { ensureRoomReleasesTable } from '@/services/roomReleases';
+import { facultyName, notifyRoomFreed } from '@/services/roomFreedNotice';
 
 /* ─────────────────────────────────────────────────────────────────────────────
    GET /api/rooms/occupancy
@@ -175,6 +179,51 @@ async function POST_handler(req: NextRequest) {
        the session, not the request body).
      • Admin / department chair: may pass faculty_id to release any occupancy.
 ───────────────────────────────────────────────────────────────────────────── */
+/** The faculty's class in this room right now (or starting within 15 minutes): freed for the rest of
+ *  today's class time — a room_releases row for today — and the faculty who could use it are told.
+ *  Returns until when ('HH:MM'), or null when there is no such class (a borrowed room, a walk-in). */
+async function freeRestOfClassToday(roomId: number, facultyId: number): Promise<string | null> {
+  await ensureRoomReleasesTable();
+  const { time, dayOfWeek } = manilaClock();
+  const today = manilaCalendarDateString();
+  const period = await getActiveAcademicPeriod();
+  const res = await query(`
+    SELECT ss.id AS session_id, to_char(ss.start_time, 'HH24:MI') AS start_time, to_char(ss.end_time, 'HH24:MI') AS end_time,
+           r.id AS room_id, r.room_name, r.room_type
+    FROM   schedule_sessions ss
+    JOIN   master_schedule ms ON ms.id = ss.master_schedule_id
+    JOIN   block_subjects  bs ON bs.id = ms.block_subject_id
+    JOIN   blocks           b ON b.id  = bs.block_id
+    JOIN   rooms            r ON r.id  = ss.room_id
+    WHERE  ms.faculty_id = $1 AND ss.room_id = $2 AND ss.day_of_week = $3
+      AND  $4::time >= ss.start_time - INTERVAL '15 minutes' AND $4::time < ss.end_time
+      AND  ms.status IN ('Assigned', 'Scheduled')
+      AND  ($5 = '' OR b.academic_year = $5)
+      AND  ($6 = '' OR b.semester      = $6)
+    ORDER  BY ss.start_time
+  `, [facultyId, roomId, dayOfWeek, time, period.schoolYear ?? '', period.semester ?? '']);
+  const sessions = res.rows as { session_id: number; start_time: string; end_time: string; room_id: number; room_name: string; room_type: string | null }[];
+  if (sessions.length === 0) return null;
+  await query(`
+    INSERT INTO room_releases (session_id, faculty_id, release_date, reason)
+    SELECT s, $2, $3::date, NULL FROM unnest($1::int[]) AS s
+    ON CONFLICT (session_id, release_date) DO NOTHING
+  `, [sessions.map(s => s.session_id), facultyId, today]);
+  const nowHm = time.slice(0, 5);
+  await notifyRoomFreed({
+    times: sessions.map(s => ({
+      room: { id: Number(s.room_id), room_name: s.room_name, room_type: s.room_type },
+      date: today, weekday: dayOfWeek,
+      start: s.start_time < nowHm ? nowHm : s.start_time,
+      end: s.end_time,
+    })),
+    freedBy: facultyId,
+    freedByName: await facultyName(facultyId),
+    term: { year: period.schoolYear ?? '', semester: period.semester ?? '' },
+  });
+  return sessions[sessions.length - 1].end_time;
+}
+
 async function DELETE_handler(req: NextRequest) {
   try {
     const authUser = await getAuthUser(req) as { role?: string; faculty_id?: number } | null;
@@ -217,7 +266,10 @@ async function DELETE_handler(req: NextRequest) {
       );
     }
 
-    return NextResponse.json({ success: true });
+    // Free My Room during their own class in this room: the rest of that class time today is free
+    // for others (as if freed on My Schedule), and the faculty who could use it are told
+    const freedUntil = authUser.role === 'instructor' ? await freeRestOfClassToday(room_id, faculty_id) : null;
+    return NextResponse.json({ success: true, ...(freedUntil ? { freed_until: freedUntil } : {}) });
   } catch (error) {
     console.error('[rooms/occupancy DELETE]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

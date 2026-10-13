@@ -1,13 +1,20 @@
 import bcrypt from 'bcryptjs';
+import { notNstpSql } from '@/services/nstp';
 import { connectClient } from '@/database/db';
 import { FACULTY_ACTIVITIES_SQL } from '@/database/facultyActivitiesSchema';
 import { ensureAuditTable } from '@/database/auditSchema';
 import { ensureRealtimeTable } from '@/database/realtimeSchema';
 import { type WeekDay } from '@shared/dayCombination';
-import { contractualLimitError, maxDeductionUnits, regularLoadLimit } from '@shared/regularLoad';
+import {
+  contractualLimitError, formatLoadCap, maxDeductionUnits, overloadUnitsCap, permanentRegularLoadLimit, regularLoadLimit,
+  regularOverflowSplit, regularUnitsCap, shownUnitsCap,
+} from '@shared/regularLoad';
+import { movedComponent } from '@shared/loadSplit';
 import { parseWorkloadSheet, roomKey } from '@shared/workloadImport';
 import { needsOneRoomSql } from '@shared/subjectCategory';
-import { SCHOOL_DAY_END_MIN, SCHOOL_DAY_LABEL, SCHOOL_DAY_START_MIN, minutesHHMM } from '@shared/schoolDay';
+import { PATHFIT_VENUE_RULE, isPathfitSubject, pathfitRoomAllowed } from '@shared/pathfitVenue';
+import { LUNCH_LABEL, SCHOOL_DAY_END_MIN, SCHOOL_DAY_LABEL, SCHOOL_DAY_START_MIN, minutesHHMM } from '@shared/schoolDay';
+import { clock12, clockRange12 } from '@shared/clock12';
 import { findScheduleConflicts, type ScheduleConflict } from '@/services/scheduleConflicts';
 import { ensureRoomQrColumn, generateRoomQr } from '@/services/roomQr';
 import { getWorkloadPolicy } from '@/services/workloadPolicy';
@@ -251,9 +258,12 @@ export async function runWorkloadImport(options: ImportOptions): Promise<ImportR
           WHERE c.program_id = $2 AND c.year_level = $3 AND c.semester = $4 AND c.curriculum_version = $5 AND c.is_active = true
          ON CONFLICT (block_id, curriculum_id) DO NOTHING`,
         [blockId, b.programId, b.yearLevel, term.semester, b.version]);
+      // Not NSTP — it is on the Class Program only (Settings → Day Combinations → NSTP)
       await q(
         `INSERT INTO master_schedule (block_subject_id, status, academic_year, semester)
-         SELECT bs.id, 'Unassigned', $2, $3 FROM block_subjects bs WHERE bs.block_id = $1
+         SELECT bs.id, 'Unassigned', $2, $3 FROM block_subjects bs
+           JOIN curriculums c ON c.id = bs.curriculum_id
+          WHERE bs.block_id = $1 AND ${notNstpSql('c.subject_code')}
          ON CONFLICT DO NOTHING`,
         [blockId, term.academicYear, term.semester]);
       blockIds.set(b.key, blockId);
@@ -263,6 +273,19 @@ export async function runWorkloadImport(options: ImportOptions): Promise<ImportR
     // ── Classes, in priority order ──────────────────────────────────────────
     const activitiesByFaculty = new Map<string, { day: WeekDay; start: number; end: number; activity: string }[]>();
     for (const a of plan.activities) activitiesByFaculty.set(a.facultyKey, [...(activitiesByFaculty.get(a.facultyKey) ?? []), a]);
+    // Permanent Regular caps for the classes below: the term's deloading as QRganize has it,
+    // else as the forms give it (recorded after the classes; kept when QRganize already has one)
+    const regularCapOf = new Map<string, number>();
+    for (const f of plan.faculty) {
+      const id = facultyIds.get(f.key);
+      if (id == null || !isPermanentOf.get(f.key)) continue;
+      const existing = Number((await q(
+        `SELECT COALESCE(SUM(deducted_units), 0) AS t FROM instructor_load_deductions WHERE faculty_id = $1 AND semester = $2 AND school_year = $3`,
+        [id, term.semester, term.academicYear])).rows[0].t) || 0;
+      const fromForms = round2(f.deductions.reduce((s, d) => s + d.units, 0));
+      const deloading = existing > 0 ? existing : fromForms <= maxDeductionUnits(policy) ? fromForms : 0;
+      regularCapOf.set(f.key, permanentRegularLoadLimit(deloading, policy));
+    }
     const ctx: PlacementContext = {
       q, term, rooms, roomIdOf, combos: catalog.dayCombinations, plan, activitiesByFaculty,
       daySets: plan.observedDaySets,
@@ -272,6 +295,9 @@ export async function runWorkloadImport(options: ImportOptions): Promise<ImportR
       placedKeys: new Set<string>(),
       roomNotesGiven: new Set<string>(),
       contractualHours: regularLoadLimit(false, 0, policy),
+      regularCapOf,
+      regularCap: regularUnitsCap(policy),
+      overloadCap: overloadUnitsCap(policy),
     };
 
     const roomTasks: RoomTask[] = [];
@@ -362,7 +388,7 @@ export async function runWorkloadImport(options: ImportOptions): Promise<ImportR
 
     // ── Totals and validation (inside the same transaction) ────────────────
     report.totals = await workloadTotals(q, plan, facultyIds, facultyLabel, term);
-    report.validation = await validate(q, term, plan, facultyIds, report, ctx.contractualHours);
+    report.validation = await validate(q, term, plan, facultyIds, report, ctx.contractualHours, { regular: ctx.regularCap, overload: ctx.overloadCap });
 
     // Open pages refresh once the change is committed; one audit entry for the import
     await q(
@@ -496,6 +522,12 @@ interface PlacementContext {
   roomNotesGiven: Set<string>;
   /** Regular Load limit of Contractual faculty (hours) — they can't go past it */
   contractualHours: number;
+  /** Permanent faculty's exact Regular Load cap (published + grace − the term's deloading), by faculty key */
+  regularCapOf: Map<string, number>;
+  /** The exact Regular Load cap with no deloading */
+  regularCap: number;
+  /** Exact Overload cap of Permanent faculty (published + grace; 0 = no Overload) */
+  overloadCap: number;
 }
 
 /** Placed sessions of one component that share the room the form gives them */
@@ -586,6 +618,55 @@ async function placeClassTimes(
     return { outcome, tasks };
   }
 
+  // Permanent: Regular never past its limit, Overload never past its limit (Settings → Workload Limits).
+  // A whole-Regular class that doesn't fit is split — Regular filled to the published cap, the rest to
+  // Overload (the Laboratory first); a class that still doesn't fit is left unassigned for review.
+  let category = cls.category;
+  if (isPermanent) {
+    const cap = ctx.regularCapOf.get(cls.facultyKey) ?? ctx.regularCap;
+    const cur = (await q(
+      `SELECT COALESCE((SELECT SUM(units) FROM instructor_loads WHERE faculty_id = $1 AND load_category = 'Regular' AND academic_year = $2 AND semester = $3), 0) AS reg,
+              COALESCE((SELECT SUM(units) FROM overloads WHERE faculty_id = $1 AND is_praise = false AND academic_year = $2 AND semester = $3), 0) AS ol`,
+      [facultyId, term.academicYear, term.semester])).rows[0];
+    const curReg = Number(cur.reg) || 0;
+    const curOl = Number(cur.ol) || 0;
+    const regularPart = category.loadCategory === 'Regular' ? category.loadValue : 0;
+    const overloadPart = category.loadCategory === 'Overload' ? category.loadValue
+      : category.overloadRow && !category.overloadRow.isPraise ? category.overloadRow.value : 0;
+    const what = `${cls.subject.code} ${cls.programCode} ${cls.year}${cls.block}`;
+    const notAssigned = (why: string) => {
+      outcome.status = 'over-limit';
+      outcome.notes.push(`not assigned — ${why}`);
+      report.issues.push({ level: 'review', topic: 'Load limit', faculty: cls.facultyLabel,
+        message: `${what} (${cls.facultyLabel}): ${why}. Not assigned — give it to another faculty on Faculty Workload.` });
+      return { outcome, tasks };
+    };
+    const regularWord = `Regular Load ${round2(curReg)} of ${formatLoadCap(shownUnitsCap(cap))} units`;
+    const overloadWord = `Overload ${round2(curOl)} of ${formatLoadCap(shownUnitsCap(ctx.overloadCap))} units`;
+    if (curReg + regularPart > cap + 0.001) {
+      const split = category.loadCategory === 'Regular' && !category.overloadRow
+        ? regularOverflowSplit({ currentRegular: curReg, limit: cap, lecValue: cls.subject.lecHours, labValue: cls.subject.labHours * 0.75 })
+        : null;
+      if (!split || curOl + split.moved > ctx.overloadCap + 0.001) {
+        return notAssigned(`it doesn't fit the ${regularWord}, and ${overloadWord} can't take the rest`);
+      }
+      const total = category.loadValue;
+      category = split.regular <= 0.001
+        ? { ...category, loadCategory: 'Overload', loadValue: total, overloadComponent: 'full', label: 'Overload',
+            overloadRow: { value: total, isPraise: false, reason: 'Teaching overload — Regular Load full (Excel workload import)' } }
+        : { ...category, loadValue: split.regular, overloadComponent: movedComponent(split.lec, split.lab),
+            label: `Regular ${split.regular} + Overload ${split.moved}`,
+            overloadRow: { value: split.moved, isPraise: false, lecPart: split.lec,
+              reason: `Split load — ${split.regular.toFixed(2)} units Regular, ${split.moved.toFixed(2)} units Overload (Regular Load full)` } };
+      outcome.category = category.label;
+      outcome.notes.push(`${regularWord} — ${split.moved} units moved to Overload`);
+      report.issues.push({ level: 'review', topic: 'Load limit', faculty: cls.facultyLabel,
+        message: `${what}: the ${regularWord} — ${split.regular <= 0.001 ? 'the whole subject goes' : `${split.moved} units go`} to Overload.` });
+    } else if (curOl + overloadPart > ctx.overloadCap + 0.001) {
+      return notAssigned(`it would put the ${overloadWord} past the limit`);
+    }
+  }
+
   // A Contractual faculty can't go past the hours limit (no Overload) — the class is left unassigned
   if (!isPermanent && cls.category.loadCategory === 'Regular') {
     const cur = await q(
@@ -644,7 +725,7 @@ async function placeClassTimes(
   }
   await q(`UPDATE block_subjects SET status = $1 WHERE id = (SELECT block_subject_id FROM master_schedule WHERE id = $2)`, [status, msId]);
 
-  const c = cls.category;
+  const c = category;
   await q(
     `INSERT INTO instructor_loads (faculty_id, master_schedule_id, load_category, units, hours, academic_year, semester, overload_component)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
@@ -755,7 +836,7 @@ async function tryTimes(
   ctx: PlacementContext, cls: PlannedClass, comp: PlannedComponent, sessions: PlannedSession[],
   msId: number, facultyId: number, blockId: number, vacantSearch: boolean,
 ): Promise<{ ok: boolean; timeConflicts: string[]; invalid?: string }> {
-  if (!sessionsAreValid(sessions)) return { ok: false, timeConflicts: [], invalid: `outside ${SCHOOL_DAY_LABEL} or over the 12:00–1:00 PM lunch break` };
+  if (!sessionsAreValid(sessions)) return { ok: false, timeConflicts: [], invalid: `outside ${SCHOOL_DAY_LABEL} or over the ${LUNCH_LABEL} lunch break` };
   if (vacantSearch) {
     // A moved class also avoids the faculty's non-teaching time and the real
     // classes on the forms that were not imported (they still use the time).
@@ -1000,6 +1081,7 @@ function roomProblem(ctx: PlacementContext, cls: PlannedClass, comp: PlannedComp
   const room = ctx.rooms.get(roomId);
   if (!room) return 'room not found';
   if (room.status !== 'Active') return `${room.name} is not active`;
+  if (!pathfitRoomAllowed(cls.subject.code, room.name)) return `${PATHFIT_VENUE_RULE} (${room.name} is not one of them)`;
   const isLab = room.type === 'Laboratory' || room.type === 'Computer Lab';
   if (comp.type === 'lab' && !isLab) return `a Laboratory session needs a laboratory room (${room.name} is a ${room.type} room)`;
   if (comp.type === 'lec' && isLab && cls.subject.labHours <= 0) return `${cls.subject.code} is lecture-only, so it can't use a laboratory room`;
@@ -1018,10 +1100,13 @@ function roomProblem(ctx: PlacementContext, cls: PlannedClass, comp: PlannedComp
 function alternativeRooms(ctx: PlacementContext, cls: PlannedClass, comp: PlannedComponent, wantedId: number): RoomInfo[] {
   const want = requiredRoomType(cls, comp) ?? ctx.rooms.get(wantedId)?.type ?? 'Lecture';
   const fits = (r: RoomInfo) => r.id !== wantedId && r.status === 'Active'
-    && (r.type === want || (want === 'Laboratory' && r.type === 'Computer Lab'));
+    && (r.type === want || (want === 'Laboratory' && r.type === 'Computer Lab'))
+    && pathfitRoomAllowed(cls.subject.code, r.name);
   const letters = (s: string) => s.toUpperCase().replace(/[^A-Z]/g, '');
   const original = ctx.rooms.get(wantedId);
   const all = [...ctx.rooms.values()].filter(fits).sort((a, b) => naturalKey(a.name).localeCompare(naturalKey(b.name)));
+  // PATHFIT: only its venues pass `fits` — they are the fallback even though they are special rooms
+  if (isPathfitSubject(cls.subject.code)) return all;
   const family = original && roomKey(original.name).kind === 'other'
     ? all.filter(r => roomKey(r.name).kind === 'other' && letters(r.name) === letters(original.name)) : [];
   const general = all.filter(r => roomKey(r.name).kind !== 'other');
@@ -1070,6 +1155,8 @@ async function workloadTotals(q: Q, plan: ImportPlan, facultyIds: Map<string, nu
 
 async function validate(
   q: Q, term: ImportTerm, plan: ImportPlan, facultyIds: Map<string, number>, report: ImportReport, contractualHours: number,
+  /** Exact Permanent caps: Regular (before deloading) and Overload */
+  caps: { regular: number; overload: number },
 ): Promise<ValidationCheck[]> {
   const checks: ValidationCheck[] = [];
   const add = (name: string, rows: Record<string, unknown>[], describe: (r: Record<string, unknown>) => string) =>
@@ -1091,7 +1178,7 @@ async function validate(
             a.day, a.start_time::text AS a_s, a.end_time::text AS a_e, b.start_time::text AS b_s, b.end_time::text AS b_e
        FROM t a JOIN t b ON a.id < b.id AND a.day = b.day AND a.${field} = b.${field} ${extra}
         AND a.start_time < b.end_time AND b.start_time < a.end_time`, p);
-  const fmtOverlap = (r: Record<string, unknown>) => `${r.day}: ${r.a_code} ${String(r.a_s).slice(0, 5)}–${String(r.a_e).slice(0, 5)} × ${r.b_code} ${String(r.b_s).slice(0, 5)}–${String(r.b_e).slice(0, 5)}`;
+  const fmtOverlap = (r: Record<string, unknown>) => `${r.day}: ${r.a_code} ${clockRange12(String(r.a_s), String(r.a_e), '–')} × ${r.b_code} ${clockRange12(String(r.b_s), String(r.b_e), '–')}`;
   add('No faculty double-booking', (await overlap('faculty_id')).rows, fmtOverlap);
   add('No block double-booking', (await overlap('block_id')).rows, fmtOverlap);
   add('No room double-booking (different faculty)', (await overlap('room_id', 'AND a.room_id IS NOT NULL AND a.faculty_id <> b.faculty_id')).rows, fmtOverlap);
@@ -1100,7 +1187,7 @@ async function validate(
      SELECT t.subject_code, t.day, t.start_time::text AS s, fa.activity, fa.start_time::text AS fs
        FROM t JOIN faculty_activities fa ON fa.faculty_id = t.faculty_id AND fa.day_of_week = t.day
         AND fa.semester = $1 AND fa.academic_year = $2 AND fa.start_time < t.end_time AND t.start_time < fa.end_time`, p)).rows,
-    r => `${r.day} ${r.subject_code} ${String(r.s).slice(0, 5)} × ${r.activity} ${String(r.fs).slice(0, 5)}`);
+    r => `${r.day} ${r.subject_code} ${clock12(String(r.s))} × ${r.activity} ${clock12(String(r.fs))}`);
   add(`Every session within ${SCHOOL_DAY_LABEL} and clear of lunch`, (await q(
     `WITH t AS (${termSessions}) SELECT subject_code, day, start_time::text AS s, end_time::text AS e FROM t
       WHERE start_time < '${minutesHHMM(SCHOOL_DAY_START_MIN)}' OR end_time > '${minutesHHMM(SCHOOL_DAY_END_MIN)}' OR (start_time < '13:00' AND end_time > '12:00')`, p)).rows,
@@ -1187,6 +1274,25 @@ async function validate(
         AND il.semester = $2 AND il.academic_year = $3
       GROUP BY f.id, f.name HAVING SUM(il.hours) > $4 + 0.001`, [ids, term.semester, term.academicYear, contractualHours])).rows,
     r => `${r.name} ${Number(r.h)} h`);
+  add(`No Permanent faculty past the Regular Load limit (${formatLoadCap(shownUnitsCap(caps.regular))} units − deloading)`, (await q(
+    `SELECT f.name, SUM(il.units) AS u,
+            GREATEST(0, $4::numeric - COALESCE((SELECT SUM(d.deducted_units) FROM instructor_load_deductions d
+              WHERE d.faculty_id = f.id AND d.semester = $2 AND d.school_year = $3), 0)) AS cap
+       FROM instructor_loads il JOIN faculty f ON f.id = il.faculty_id
+      WHERE f.id = ANY($1::int[]) AND f.employment_status = 'Permanent' AND il.load_category = 'Regular'
+        AND il.semester = $2 AND il.academic_year = $3
+      GROUP BY f.id, f.name
+     HAVING SUM(il.units) > GREATEST(0, $4::numeric - COALESCE((SELECT SUM(d.deducted_units) FROM instructor_load_deductions d
+              WHERE d.faculty_id = f.id AND d.semester = $2 AND d.school_year = $3), 0)) + 0.001`,
+    [ids, term.semester, term.academicYear, caps.regular])).rows,
+    r => `${r.name} ${Number(r.u)} of ${Number(r.cap)} units`);
+  add(`No Permanent faculty past the Overload limit (${formatLoadCap(shownUnitsCap(caps.overload))} units)`, (await q(
+    `SELECT f.name, SUM(o.units) AS u FROM overloads o JOIN faculty f ON f.id = o.faculty_id
+      WHERE f.id = ANY($1::int[]) AND f.employment_status = 'Permanent' AND o.is_praise = false
+        AND o.semester = $2 AND o.academic_year = $3
+      GROUP BY f.id, f.name HAVING SUM(o.units) > $4::numeric + 0.001`,
+    [ids, term.semester, term.academicYear, caps.overload])).rows,
+    r => `${r.name} ${Number(r.u)} units`);
   // Program is optional for faculty — only the name and the sign-in account must be there
   add('Imported faculty have a name and account', (await q(
     `SELECT f.id, f.name FROM faculty f LEFT JOIN instructor_accounts ia ON ia.faculty_id = f.id

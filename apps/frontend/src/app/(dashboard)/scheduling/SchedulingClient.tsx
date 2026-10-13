@@ -2,27 +2,29 @@
 
 import { Fragment, useEffect, useState, useCallback, useRef, useMemo, type ReactNode } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'framer-motion';
 import { useToast } from '@/context/ToastContext';
 import BackButton from '@/components/ui/BackButton';
+import { backTarget } from '@/lib/navTrail';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import TrashDropAnimation from '@/components/ui/TrashDropAnimation';
 import { useSchoolYear } from '@/context/SchoolYearContext';
 import { useRealtime } from '@/context/RealtimeContext';
 import {
-  Users, ChevronRight, BookOpen, Monitor,
+  ChevronRight, BookOpen, Monitor, Pencil,
   AlertTriangle, CheckCircle, Clock, Trash2, X,
   RefreshCw, Save, Search,
   ChevronLeft, XCircle, Loader2, AlertCircle,
-  CalendarDays, Eye, ShieldCheck, FileClock, ArrowRight, ChevronDown, Maximize2, Minimize2, DoorOpen,
+  CalendarDays, Eye, ArrowRight, DoorOpen,
 } from 'lucide-react';
 import { ListSkeleton, TableSkeleton, Skeleton } from '@/components/ui/skeletons';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
-import { EmploymentBadge, EMPLOYMENT_COLORS } from '@/components/ui/EmploymentBadge';
+import { EmploymentBadge } from '@/components/ui/EmploymentBadge';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import { useScrollLock } from '@/hooks/useScrollLock';
 import TimeSlotPicker from '@/components/ui/TimeSlotPicker';
 import CountFilterTabs from '@/components/ui/CountFilterTabs';
+import Pagination from '@/components/ui/Pagination';
 import { SearchInput } from '@/components/ui/SearchFilter';
 import RoomPicker from '@/components/ui/RoomPicker';
 import DayPicker from '@/components/ui/DayPicker';
@@ -30,9 +32,10 @@ import { TT_DAY_TONES, TT_TONE_MTH, TT_TONE_OVERLOAD, TT_TONE_SAT, TT_TONE_TF, T
 import { useDayCombinations } from '@/lib/dayCombinations';
 import { daysCode, daysLabel, matchCombination, type WeekDay } from '@shared/dayCombination';
 import { blockCode, programBlockCode } from '@shared/blockCode';
-import { LOAD_GRACE_UNITS, formatLoadCap } from '@shared/regularLoad';
+import { LOAD_GRACE_UNITS, formatLoadCap, isRegularLoadComplete } from '@shared/regularLoad';
 import { movedParts } from '@shared/loadSplit';
-import { LUNCH_END_MIN, LUNCH_START_MIN, SCHOOL_DAY_END_MIN, SCHOOL_DAY_START_MIN } from '@shared/schoolDay';
+import { LUNCH_END_MIN, LUNCH_LABEL, LUNCH_START_MIN, SCHOOL_DAY_END_MIN, SCHOOL_DAY_LABEL, SCHOOL_DAY_START_MIN } from '@shared/schoolDay';
+import { PATHFIT_VENUE_RULE, isPathfitSubject, isPathfitVenue } from '@shared/pathfitVenue';
 import { asSessionList, fmt12, normTime, parseDays } from '@/lib/scheduleTime';
 import SubjectFacultyPreview from '@/components/SubjectFacultyPreview';
 
@@ -108,7 +111,8 @@ interface SessionItem {
 }
 interface ConflictInfo {
   sessionId: string;
-  type: 'instructor' | 'room' | 'block' | 'duplicate';
+  /** 'time' — outside the school day (an older class saved past 6 PM or over lunch); the save refuses it */
+  type: 'instructor' | 'room' | 'block' | 'duplicate' | 'time';
   message: string;
   /**
    * Stable identity for counting unique conflicts.
@@ -238,7 +242,7 @@ interface TimetableBlockView {
  *  older class saved before this rule still runs later. */
 const DAY_END_MIN  = SCHOOL_DAY_END_MIN;   // 6:00 PM — latest end time for a session
 /** Lunch break for all faculty (12:00–1:00 PM) — no class may overlap it. */
-const LUNCH = { start: LUNCH_START_MIN, end: LUNCH_END_MIN, label: 'Lunch break · 12:00–1:00 PM', kind: 'Lunch' as const };
+const LUNCH = { start: LUNCH_START_MIN, end: LUNCH_END_MIN, label: `Lunch break · ${LUNCH_LABEL}`, kind: 'Lunch' as const };
 
 /** Why a time is taken — shown on struck-out times, e.g. "Instructor + Room conflict". */
 type BusyKind = 'Instructor' | 'Block' | 'Room' | 'Lunch';
@@ -763,12 +767,14 @@ function expandLoads(loads: WorkloadLoad[], isPermanent: boolean): LoadRow[] {
 
 /* ─── mini components ───────────────────────────────────────── */
 
-/* ─── Stepper: Position → Instructor → Schedule ───────────────── */
+/* ─── Stepper: Choose Faculty → Set Time & Room ───────────────── */
 const SCHEDULING_STEPS = [
-  { k: 'position', label: 'Position' },
-  { k: 'instructor', label: 'Faculty' },
-  { k: 'schedule', label: 'Schedule' },
+  { k: 'instructor', label: 'Choose Faculty' },
+  { k: 'schedule', label: 'Set Time & Room' },
 ] as const;
+
+/** Faculty cards per page in Choose Faculty (same as the other faculty lists) */
+const FACULTY_PAGE_SIZE = 10;
 
 function SchedulingStepper({ current, compact }: { current: number; compact?: boolean }) {
   return (
@@ -779,14 +785,14 @@ function SchedulingStepper({ current, compact }: { current: number; compact?: bo
         return (
           <div key={step.k} className="flex items-center flex-1 last:flex-none">
             <div className="flex items-center gap-2 min-w-0">
-              <span className={`w-7 h-7 rounded-full text-xs font-bold flex items-center justify-center shrink-0 transition-colors ${
+              <span className={`w-8 h-8 rounded-full text-sm font-bold flex items-center justify-center shrink-0 transition-colors ${
                 done ? 'bg-[#1D5BD6] text-white'
                   : active ? 'bg-white text-[#1D5BD6] border-2 border-[#1D5BD6]'
                   : 'bg-[#F1F5F9] text-[#94A3B8]'
               }`}>
                 {done ? <CheckCircle className="w-4 h-4" /> : i + 1}
               </span>
-              <span className={`text-sm font-semibold hidden sm:block ${
+              <span className={`text-[15px] font-semibold whitespace-nowrap ${
                 active ? 'text-[#0B2A5B]' : done ? 'text-[#1D5BD6]' : 'text-[#94A3B8]'
               }`}>
                 {step.label}
@@ -804,32 +810,12 @@ function SchedulingStepper({ current, compact }: { current: number; compact?: bo
   );
 }
 
-/* Position Selection while it loads: title, the two choices, Continue */
-function PositionSkeleton() {
-  return (
-    <div className="bg-white border border-[#E2E8F0] rounded-2xl p-5 sm:p-6 shadow-sm" role="status" aria-live="polite" aria-label="Loading">
-      <Skeleton className="h-5 w-40 rounded mb-4" />
-      <div className="space-y-3">
-        {Array.from({ length: 2 }, (_, i) => (
-          <div key={i} className="flex items-center gap-4 px-4 sm:px-5 py-4 rounded-xl border border-[#E2E8F0]">
-            <Skeleton className="w-10 h-10 rounded-full flex-shrink-0" />
-            <div className="flex-1 min-w-0 space-y-2">
-              <Skeleton className="h-4 w-36 rounded" />
-              <Skeleton className="h-3.5 w-[70%] rounded" />
-            </div>
-            <Skeleton className="hidden sm:block h-6 w-32 rounded-full flex-shrink-0" />
-            <Skeleton className="w-5 h-5 rounded-full flex-shrink-0" />
-          </div>
-        ))}
-      </div>
-      <Skeleton className="h-11 w-full rounded-xl mt-5" />
-    </div>
-  );
-}
-
 /* ─── FacultyGroup ──────────────────────────────────────────── */
-function FacultyGroup({ title, items, selectedId, onSelect }: {
-  title?: string; items: Faculty[]; selectedId?: number | null;
+function FacultyGroup({ items, page, pageSize, selectedId, onSelect }: {
+  items: Faculty[];
+  /** The page shown (from 1) and its size — the order is worked out over everyone first */
+  page: number; pageSize: number;
+  selectedId?: number | null;
   onSelect: (f: Faculty) => void;
 }) {
   if (items.length === 0) return null;
@@ -842,25 +828,21 @@ function FacultyGroup({ title, items, selectedId, onSelect }: {
     if (f.employment_status !== 'Permanent') return r;
     return r > -0.001 && r < LOAD_GRACE_UNITS ? 0 : Math.round((r - LOAD_GRACE_UNITS) * 100) / 100;
   };
+  /** Workload complete — the shared rule (18 of 18.25 counts for Permanent), as on Faculty Workload */
+  const isComplete = (f: Faculty) => isRegularLoadComplete(remaining(f), f.employment_status === 'Permanent');
   const sorted = [...items].sort((a, b) => {
-    const aDone = remaining(a) <= 0;
-    const bDone = remaining(b) <= 0;
+    const aDone = isComplete(a);
+    const bDone = isComplete(b);
     if (aDone !== bDone) return aDone ? 1 : -1;
     return aDone ? 0 : remaining(a) - remaining(b);
   });
   return (
-    <div className="mb-6">
-      {title && (
-      <div className="flex items-center gap-2 mb-3 px-1">
-        <Users className="w-4 h-4 text-[#64748B]" />
-        <span className="text-xs font-bold text-[#64748B] uppercase tracking-widest">{title}</span>
-        <span className="text-xs text-[#94A3B8]">({items.length})</span>
-      </div>
-      )}
+    <div className="mb-5">
       <div className="space-y-2">
-        {sorted.map(f => {
+        {sorted.slice((page - 1) * pageSize, page * pageSize).map(f => {
           const selected = f.id === selectedId;
-          const incomplete = remaining(f) > 0;
+          const complete = isComplete(f);
+          const incomplete = !complete;
           return (
           <div key={f.id}
             className={`w-full text-left border rounded-xl px-4 sm:px-5 py-3.5 transition-all duration-200 shadow-sm ${
@@ -871,12 +853,13 @@ function FacultyGroup({ title, items, selectedId, onSelect }: {
                   ? 'qr-flag-pulse border-[#FECACA] hover:border-[#F87171]'
                   : 'bg-white border-[#E2E8F0] hover:border-[#1D5BD6]'
             }`}>
-            {/* Phones: name and details on top, Remaining Load + Select on their own row
+            {/* Phones: name and details on top, Complete / Remaining Load + Select on their own row
                 (side by side they squeezed the name to "Jehu Ro…" and overlapped the position) */}
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
                 <div className="mb-1 flex items-center gap-2 flex-wrap">
                   <span className="font-bold text-[#0B2A5B] text-base break-words sm:truncate min-w-0">{f.name}</span>
+                  <EmploymentBadge status={f.employment_status} />
                   {(f.unscheduled_count ?? 0) > 0 && (
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-[#FFF7ED] text-[#C2410C] border border-[#FED7AA]"
                       title="Assigned classes that still need a day and time">
@@ -896,12 +879,21 @@ function FacultyGroup({ title, items, selectedId, onSelect }: {
                 </div>
               </div>
               <div className="flex items-center justify-between gap-3 flex-shrink-0 max-sm:pt-3 max-sm:border-t max-sm:border-[#0B2A5B]/10">
-                <div className="sm:text-right">
-                  <div className="text-xs text-[#64748B]">Remaining Load</div>
-                  <div className={`text-base font-bold ${remainingShown(f) > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                    {formatLoadCap(remainingShown(f))} {f.employment_status === 'Permanent' ? 'units' : 'hrs'}
+                {/* Complete: a green "Complete"; otherwise what is still needed */}
+                {complete ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-bold bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0]">
+                    <CheckCircle className="w-4 h-4" aria-hidden /> Complete
+                  </span>
+                ) : (
+                  <div className="sm:text-right">
+                    <div className="text-sm text-[#64748B]">Remaining Load</div>
+                    <div className="text-base font-bold text-[#B91C1C]">
+                      {formatLoadCap(remainingShown(f))} {f.employment_status === 'Permanent'
+                        ? (remainingShown(f) === 1 ? 'unit' : 'units')
+                        : (remainingShown(f) === 1 ? 'hr' : 'hrs')}
+                    </div>
                   </div>
-                </div>
+                )}
                 <button type="button" onClick={() => onSelect(f)} disabled={selected}
                   className={`flex-shrink-0 inline-flex items-center justify-center gap-1.5 min-h-[44px] px-6 sm:min-h-0 sm:px-3.5 py-1.5 rounded-lg text-sm font-semibold border transition-all duration-150 active:scale-95 cursor-pointer disabled:cursor-default ${
                     selected
@@ -932,72 +924,32 @@ const STATUS_TONES: Record<StatusTone, { text: string; head: string; badge: stri
   green:  { text: 'text-emerald-700', head: 'bg-emerald-50 border-emerald-200 hover:border-emerald-300', badge: 'bg-emerald-100 text-emerald-700 border-emerald-200', border: 'border-emerald-200' },
 };
 
-/* ─── CollapsibleSection ────────────────────────────────────────
-   Header row doubles as a Show/Hide toggle; the body slides open/closed.
-   Sections start hidden so the admin chooses what to look at. */
-function CollapsibleSection({ title, count, tone, open, onToggle, children, id, flash = false, shakeDelay }: {
-  title: string; count: number; tone: StatusTone;
-  open: boolean; onToggle: () => void; children: ReactNode;
-  /** Scroll target for the pending / done shortcuts */
-  id?: string;
-  /** Brief highlight pulse after a shortcut opens this section */
-  flash?: boolean;
-  /** Seconds — set to make the header shake while collapsed with subjects left to schedule
-   *  (staggered per section so they don't move in unison). */
-  shakeDelay?: number;
-}) {
-  const reduceMotion = useReducedMotion();
-  const t = STATUS_TONES[tone];
-  const [hovered, setHovered] = useState(false);
-  // Collapsed with subjects left → a short wiggle, then a ~3.8s rest, repeating.
-  // Pauses while hovered so it never fights the pointer.
-  const shaking = shakeDelay !== undefined && count > 0 && !open && !flash && !hovered && !reduceMotion;
-  return (
-    <div id={id} className="px-3 pt-2 pb-0.5 scroll-mt-2">
-      <motion.button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        onHoverStart={() => setHovered(true)}
-        onHoverEnd={() => setHovered(false)}
-        animate={shaking
-          ? { x: [0, -3, 3, -2, 2, -1, 1, 0], rotate: [0, -0.6, 0.6, -0.4, 0.4, 0, 0, 0] }
-          : { x: 0, rotate: 0 }}
-        transition={shaking
-          ? { duration: 0.7, ease: 'easeInOut', repeat: Infinity, repeatDelay: 3.8, delay: shakeDelay }
-          : { duration: 0.2 }}
-        className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl border hover:shadow-sm transition-[box-shadow,border-color,background-color] group ${t.head} ${flash ? 'qr-section-flash' : ''}`}
-      >
-        <span className={`text-[13px] font-bold uppercase tracking-widest ${t.text}`}>{title}</span>
-        <span className={`text-xs font-bold border rounded-full px-2 py-0.5 tabular-nums ${t.badge}`}>{count}</span>
-        <span className="ml-auto inline-flex items-center gap-1 text-xs font-semibold text-[#1D5BD6] group-hover:text-[#164BB5]">
-          {open ? 'Hide' : 'Show'}
-          <motion.span
-            animate={{ rotate: open ? 180 : 0 }}
-            transition={reduceMotion ? { duration: 0 } : { duration: 0.3, ease: [0.45, 0, 0.55, 1] }}
-            className="inline-flex"
-          >
-            <ChevronDown className="w-4 h-4" />
-          </motion.span>
-        </span>
-      </motion.button>
-      <AnimatePresence initial={false}>
-        {open && (
-          <motion.div
-            key="body"
-            initial={reduceMotion ? false : { height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={reduceMotion ? { opacity: 0 } : { height: 0, opacity: 0 }}
-            transition={reduceMotion ? { duration: 0 } : { duration: 0.35, ease: [0.45, 0, 0.55, 1] }}
-            className="overflow-hidden"
-          >
-            <div className="pt-1.5 pb-1">{children}</div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
+/* Motion for this page — calm and unhurried (user, 2026-10-12): the editor, the
+   list fold and the page slides ease in and out over half a second (SETTLE),
+   small things settle with a soft ease-out (GLIDE), exits ease in (LEAVE), and
+   buttons give a little press. */
+const GLIDE = [0.22, 1, 0.36, 1] as const;
+const SETTLE = [0.4, 0, 0.2, 1] as const;
+const LEAVE = [0.4, 0, 1, 1] as const;
+/** Slow – fast – slow (easeInOutCubic): the list widening / narrowing and the editor leaving */
+const FLOW = [0.65, 0, 0.35, 1] as const;
+/** How long the subjects take to slide away before Back goes to the faculty list */
+const BACK_OUT_MS = 380;
+
+/** Inside the editor: the moment it starts to leave it stops taking clicks (it fades out over
+ *  the list, and stays a moment after it is invisible), and takes them again if it comes back */
+function ExitClickGuard() {
+  const isPresent = useIsPresent();
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    const panel = ref.current?.closest('aside');
+    if (panel) panel.style.pointerEvents = isPresent ? '' : 'none';
+  }, [isPresent]);
+  return <span ref={ref} hidden />;
 }
+
+/** At most this many sessions a week for one part of a class (user rule: 2 on 2026-10-11, 4 since 2026-10-12) */
+const MAX_SESSIONS = 4;
 
 /** Section heading in the scheduling form (Meeting days · Sessions per week · Session schedule) */
 function StepLabel({ children, className = '' }: { children: ReactNode; className?: string }) {
@@ -1028,129 +980,272 @@ function groupByClass(rows: LoadRow[]): ClassGroup[] {
     || (a.load.program_code ?? '').localeCompare(b.load.program_code ?? '', undefined, opts));
 }
 
-/** One part of a class (Lecture / Laboratory) — selecting it opens it in the scheduling form */
-function PartButton({ row, active, onSelect }: { row: LoadRow; active: boolean; onSelect: (row: LoadRow) => void }) {
+/** A part's saved meetings in one or two short lines: "Mon / Thu · 4:00 PM – 5:00 PM" and the room(s) */
+function partSchedule(row: LoadRow): { when: string[]; rooms: string[] } | null {
+  const own = asSessionList<WorkloadSession>(row.load.sessions)
+    .filter(x => (x.type === 'lab' ? 'lab' : 'lec') === row.component && x.day && x.start_time);
+  if (own.length === 0) return null;
+  const byTime = new Map<string, string[]>();
+  for (const x of own) {
+    const k = `${normTime(x.start_time)}|${normTime(x.end_time)}`;
+    byTime.set(k, [...(byTime.get(k) ?? []), x.day]);
+  }
+  const when = [...byTime.entries()].map(([k, days]) => {
+    const [st, et] = k.split('|');
+    const inWeekOrder = [...WEEK_DAYS.filter(d => days.includes(d)), ...days.filter(d => !(WEEK_DAYS as readonly string[]).includes(d))];
+    return `${inWeekOrder.map(d => DAY_SHORT[d] ?? d).join(' / ')} · ${fmt12(st)} – ${fmt12(et)}`;
+  });
+  return { when, rooms: roomNamesOf(own.map(x => x.room_name)) };
+}
+
+/** One part of a class (Lecture / Laboratory) inside its class's entry: the part, its schedule and
+ *  its one action. A part not scheduled yet opens on a click ("Set schedule"); a scheduled one
+ *  only with its Edit button (user rule). Wide list: its three cells join the class grid. */
+function PartLine({ row, active, first, onOpen }: { row: LoadRow; active: boolean; first: boolean; onOpen: (row: LoadRow) => void }) {
   const reduceMotion = useReducedMotion();
+  // A soft lift on hover and a press on click, in CSS (plain buttons are cheap to create by the dozen)
+  const press = 'transition-[transform,background-color,border-color,box-shadow] duration-200 ease-out motion-safe:hover:-translate-y-px motion-safe:active:translate-y-0 motion-safe:active:scale-95';
   const lec = row.component === 'lec';
   const Icon = lec ? BookOpen : Monitor;
-  const white = active ? { color: '#FFFFFF' } : undefined;
+  const sched = partSchedule(row);
+  const clickable = !row.isScheduled && !active;
+  const name = `${row.load.subject_code} ${lec ? 'Lecture' : 'Laboratory'}`;
   return (
-    <motion.button
-      type="button"
-      onClick={e => { e.stopPropagation(); onSelect(row); }}
-      aria-pressed={active}
-      title={`Schedule the ${lec ? 'Lecture' : 'Laboratory'} part`}
-      whileHover={reduceMotion || active ? undefined : { y: -1 }}
-      whileTap={reduceMotion ? undefined : { scale: 0.96 }}
-      transition={{ duration: 0.15 }}
-      className={`inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border text-[12.5px] font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D5BD6]/40 ${
-        active
-          ? lec ? 'bg-[#1D5BD6] border-[#1D5BD6] shadow-[0_6px_14px_-8px_rgba(29,91,214,0.9)]' : 'bg-amber-500 border-amber-500 shadow-[0_6px_14px_-8px_rgba(217,119,6,0.9)]'
-          : lec ? 'bg-[#EFF6FF] text-[#1D5BD6] border-[#BFDBFE] hover:border-[#1D5BD6]' : 'bg-amber-50 text-amber-700 border-amber-200 hover:border-amber-500'
-      }`}
-      style={white}
+    <div
+      onClick={clickable ? () => onOpen(row) : undefined}
+      className={`grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 mt-2.5 @2xl:mt-0 @2xl:contents ${
+        first ? '' : 'pt-2.5 border-t border-dashed border-[#E2E8F0]'
+      } ${clickable ? '[&>*]:cursor-pointer' : ''}`}
     >
-      <Icon className="w-3.5 h-3.5" style={white} />
-      {lec ? 'Lecture' : 'Laboratory'}
-      <span className={`font-semibold tabular-nums ${active ? '' : 'opacity-75'}`} style={white}>· {fmtHrs(row.displayHours)}</span>
-      {row.splitLabel && (
-        <span
-          className={`text-[10.5px] font-bold px-1.5 py-px rounded-full border ${
+      {/* The part and its hours */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className={`inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border text-[14px] font-bold whitespace-nowrap ${
+          lec ? 'bg-[#EFF6FF] text-[#1D5BD6] border-[#BFDBFE]' : 'bg-amber-50 text-amber-700 border-amber-200'
+        }`}>
+          <Icon className="w-4 h-4" aria-hidden /> {lec ? 'Lecture' : 'Laboratory'}
+          <span className="font-semibold opacity-75 tabular-nums">· {fmtHrs(row.displayHours)}</span>
+        </span>
+        {row.splitLabel && (
+          <span className={`text-[12px] font-bold px-2 py-0.5 rounded-full border ${
             row.splitLabel === 'Overload' ? 'bg-orange-50 text-orange-700 border-orange-200'
               : row.splitLabel === 'Praise' ? 'bg-yellow-50 text-yellow-800 border-yellow-300'
               : 'bg-slate-50 text-slate-500 border-slate-200'
-          }`}
-        >
-          {row.splitLabel}
-        </span>
-      )}
-    </motion.button>
+          }`}>{row.splitLabel}</span>
+        )}
+      </div>
+      {/* Its schedule */}
+      <div className="col-start-1 @2xl:col-start-auto min-w-0 text-[14px] leading-snug">
+        {sched ? (
+          <>
+            {sched.when.map(w => <div key={w} className="font-semibold text-[#0B2A5B] tabular-nums truncate">{w}</div>)}
+            <div className={sched.rooms.length ? 'text-[#475569] truncate' : 'text-[#B45309] font-semibold'}>
+              {sched.rooms.length ? sched.rooms.join(', ') : 'No room yet'}
+            </div>
+          </>
+        ) : row.isScheduled ? (
+          <span className="font-semibold text-emerald-700">Scheduled</span>
+        ) : (
+          <span className="font-semibold text-[#B45309]">Not scheduled yet</span>
+        )}
+      </div>
+      {/* The one action */}
+      <div className="col-start-2 row-start-1 row-span-2 @2xl:col-start-auto @2xl:row-start-auto @2xl:row-span-1 justify-self-end self-center">
+        {active ? (
+          <motion.span
+            initial={reduceMotion ? false : { opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1, transition: { duration: 0.35, ease: GLIDE } }}
+            className="inline-flex items-center gap-1 h-9 px-3 rounded-lg bg-[#1D5BD6] text-[14px] font-bold shadow-[0_6px_14px_-8px_rgba(29,91,214,0.9)]"
+            style={{ color: '#FFFFFF' }}
+          >
+            <Pencil className="w-4 h-4" aria-hidden /> Editing
+          </motion.span>
+        ) : row.isScheduled ? (
+          <button
+            type="button"
+            onClick={e => { e.stopPropagation(); onOpen(row); }}
+            aria-label={`Edit the schedule of ${name}`}
+            title="Change this class's day, time or room"
+            className={`inline-flex items-center gap-1 h-9 px-3 rounded-lg border border-[#BFD3F5] bg-white text-[14px] font-bold text-[#1D5BD6] hover:bg-[#EFF5FF] hover:border-[#1D5BD6] hover:shadow-[0_6px_14px_-10px_rgba(29,91,214,0.8)] ${press}`}
+          >
+            <Pencil className="w-4 h-4" aria-hidden /> Edit
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={e => { e.stopPropagation(); onOpen(row); }}
+            aria-label={`Set the schedule of ${name}`}
+            className={`group/set inline-flex items-center gap-0.5 h-9 px-2 rounded-lg text-[14px] font-bold text-[#1D5BD6] whitespace-nowrap hover:bg-[#EFF5FF] ${press}`}
+          >
+            Set schedule <ChevronRight className="w-4 h-4 transition-transform duration-300 group-hover/set:translate-x-0.5" aria-hidden />
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 
-/* ─── LoadSection ───────────────────────────────────────────── */
-function LoadSection({ title, tone, rows, selLoadKey, onSelect, onPreview, emptyMessage, open, onToggle, expanded = false, id, flash, shakeDelay }: {
-  title: string; tone: StatusTone;
-  rows: LoadRow[];
-  selLoadKey: string | undefined;
-  onSelect: (row: LoadRow) => void;
-  onPreview: (row: LoadRow) => void;
-  emptyMessage?: string;
-  open: boolean; onToggle: () => void;
-  /** Panel expanded: long subject names wrap instead of truncating. */
-  expanded?: boolean;
-  id?: string;
-  flash?: boolean;
-  shakeDelay?: number;
+/** One class (subject + block) in the list: its subject once, its Lecture / Laboratory parts beside it */
+function ClassRow({ group, activeKey, onOpen, onPreview, flashKey = null }: {
+  group: ClassGroup; activeKey: string | undefined; onOpen: (row: LoadRow) => void;
+  /** Clicking the subject shows everyone teaching it (same as the editor's eye) */
+  onPreview: (group: ClassGroup) => void;
+  /** The part just closed in the editor — its class glows softly once, so the eye finds it */
+  flashKey?: string | null;
 }) {
+  const load = group.load;
+  const hasActive = group.rows.some(r => r.key === activeKey);
+  const flash = !!flashKey && group.rows.some(r => r.key === flashKey);
   return (
-    <CollapsibleSection title={title} count={rows.length} tone={tone} open={open} onToggle={onToggle} id={id} flash={flash} shakeDelay={shakeDelay}>
-      {/* No inner height cap — the full-height column scrolls, so more rows fit on screen */}
-      <div className={`rounded-xl border ${STATUS_TONES[tone].border} bg-white overflow-hidden flex flex-col shadow-sm`}>
-        {rows.length === 0 ? (
-          <div className="px-4 py-5 text-sm text-[#94A3B8] italic text-center">
-            {emptyMessage ?? 'No subjects assigned.'}
-          </div>
-        ) : (
-        <>
-        <div>
-        {/* One card per class (subject + block); its Lecture / Laboratory parts are the
-            buttons inside — half the cards to scan, and Lec + Lab subjects read at a glance */}
-        {groupByClass(rows).map(g => {
-          const load = g.load;
-          const hasActive = g.rows.some(r => r.key === selLoadKey);
-          const single = g.rows.length === 1;
-          return (
-            <div
-              key={g.key}
-              onClick={single ? () => onSelect(g.rows[0]) : undefined}
-              className={[
-                'px-3 py-2.5 border-b border-[#EEF2F7] last:border-0 transition-colors',
-                single ? 'cursor-pointer' : '',
-                hasActive ? 'bg-[#F2F7FF] shadow-[inset_3px_0_0_#1D5BD6]' : 'hover:bg-[#F8FAFC]',
-              ].join(' ')}
+    <div data-flash={flash || undefined} className={`relative isolate px-4 py-3 border-b border-[#EEF2F7] last:border-0 transition-[background-color,box-shadow] duration-300 hover:bg-[#FAFCFF] @2xl:grid @2xl:grid-cols-[minmax(0,1.5fr)_minmax(11.5rem,1fr)_minmax(0,1.7fr)_7.5rem] @2xl:items-center @2xl:gap-x-4 @2xl:gap-y-3 ${
+      hasActive ? 'bg-[#EFF6FF] shadow-[inset_4px_0_0_#1D5BD6]' : ''
+    }`}>
+      {flash && (
+        // Behind the row's text (isolate + -z-10): a soft blue wash and edge mark that fade away
+        <motion.span
+          aria-hidden
+          className="pointer-events-none absolute inset-0 -z-10 bg-[#EFF6FF] shadow-[inset_4px_0_0_#1D5BD6]"
+          initial={{ opacity: 1 }}
+          animate={{ opacity: 0 }}
+          transition={{ duration: 1.6, delay: 1.1, ease: SETTLE }}
+        />
+      )}
+      {/* The subject — once for the class, beside all of its parts; a click shows who teaches it */}
+      <button
+        type="button"
+        onClick={() => onPreview(group)}
+        title="See who teaches this subject and when"
+        aria-label={`See who teaches ${load.subject_code}`}
+        className="group/subj block w-full min-w-0 text-left rounded-lg -mx-2 px-2 py-1 hover:bg-[#F1F6FF] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1D5BD6]/40 transition-colors cursor-pointer"
+        style={{ gridRow: `span ${group.rows.length}` }}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-base font-bold text-[#0B2A5B] leading-tight truncate group-hover/subj:text-[#1D5BD6] transition-colors">{load.subject_code}</span>
+          {load.block_name && (
+            <span
+              className="flex-shrink-0 text-[13px] font-bold px-2 py-0.5 rounded-md bg-[#1E4FB8] leading-tight"
+              // White set inline — the light-mode rule repaints `text-white` as dark ink
+              style={{ color: '#FFFFFF' }}
+              title={[load.program_code, load.year_level, `Block ${load.block_name}`].filter(Boolean).join(' · ')}
             >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <span className="text-[14px] font-bold text-[#0B2A5B] leading-tight truncate">{load.subject_code}</span>
-                    {load.block_name && (
-                      <span
-                        className="flex-shrink-0 text-[11px] font-bold px-2 py-0.5 rounded-md bg-[#1E4FB8] leading-tight"
-                        // White set inline — the light-mode rule repaints `text-white` as dark ink
-                        style={{ color: '#FFFFFF' }}
-                        title={[load.program_code, load.year_level, `Block ${load.block_name}`].filter(Boolean).join(' · ')}
-                      >
-                        {blockCode(load.year_level, load.block_name)}
-                      </span>
-                    )}
-                  </div>
-                  {/* Darker, larger title — the light grey was hard to read (older users) */}
-                  <div className={`mt-0.5 text-[13px] font-medium text-[#334155] leading-snug ${expanded ? 'break-words' : 'truncate'}`} title={load.subject_name}>{load.subject_name}</div>
-                </div>
-                <button
-                  type="button"
-                  title="View schedule details"
-                  aria-label={`View schedule details for ${load.subject_code}`}
-                  onClick={e => { e.stopPropagation(); onPreview(g.rows.find(r => r.key === selLoadKey) ?? g.rows[0]); }}
-                  className="flex-shrink-0 w-8 h-8 rounded-lg border border-[#BFD3F5] bg-[#EFF5FF] text-[#1D5BD6] hover:bg-[#DCE8FC] hover:border-[#93B4EA] hover:text-[#164BB5] shadow-[0_1px_2px_rgba(29,91,214,0.12)] flex items-center justify-center transition"
-                >
-                  <Eye className="w-4 h-4" />
-                </button>
-              </div>
+              {blockCode(load.year_level, load.block_name)}
+            </span>
+          )}
+        </div>
+        <div className="mt-0.5 text-[14px] text-[#334155] leading-snug truncate" title={load.subject_name}>{load.subject_name}</div>
+      </button>
+      {group.rows.map((row, i) => (
+        <PartLine key={row.key} row={row} first={i === 0} active={row.key === activeKey} onOpen={onOpen} />
+      ))}
+    </div>
+  );
+}
 
-              {/* Parts — pick one to schedule it */}
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {g.rows.map(row => <PartButton key={row.key} row={row} active={row.key === selLoadKey} onSelect={onSelect} />)}
-              </div>
-            </div>
+/** The folded list while a subject is being edited: each class small — its code and block,
+ *  then its parts as chips. The open part is filled in; a part not scheduled yet opens on a
+ *  click, a scheduled one through its pencil chip (Edit). */
+function CompactClassRow({ group, activeKey, onOpen, onPreview }: {
+  group: ClassGroup; activeKey: string | undefined; onOpen: (row: LoadRow) => void; onPreview: (group: ClassGroup) => void;
+}) {
+  const load = group.load;
+  const hasActive = group.rows.some(r => r.key === activeKey);
+  return (
+    <div
+      data-active-class={hasActive || undefined}
+      className={`px-3 py-2.5 border-b border-[#EEF2F7] last:border-0 transition-[background-color,box-shadow] duration-300 ${hasActive ? 'bg-[#EFF6FF] shadow-[inset_4px_0_0_#1D5BD6]' : ''}`}
+    >
+      <button
+        type="button"
+        onClick={() => onPreview(group)}
+        title="See who teaches this subject and when"
+        aria-label={`See who teaches ${load.subject_code}`}
+        className="group/subj block w-full min-w-0 text-left rounded-md -mx-1 px-1 hover:bg-[#F1F6FF] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1D5BD6]/40 transition-colors cursor-pointer"
+      >
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="text-[15px] font-bold text-[#0B2A5B] leading-tight truncate group-hover/subj:text-[#1D5BD6] transition-colors">{load.subject_code}</span>
+          {load.block_name && (
+            <span
+              className="flex-shrink-0 text-[12px] font-bold px-1.5 py-0.5 rounded-md bg-[#1E4FB8] leading-tight"
+              // White set inline — the light-mode rule repaints `text-white` as dark ink
+              style={{ color: '#FFFFFF' }}
+            >
+              {blockCode(load.year_level, load.block_name)}
+            </span>
+          )}
+        </div>
+        <div className="text-[13px] text-[#475569] leading-snug truncate" title={load.subject_name}>{load.subject_name}</div>
+      </button>
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        {group.rows.map(row => {
+          const lec = row.component === 'lec';
+          const Icon = lec ? BookOpen : Monitor;
+          const active = row.key === activeKey;
+          const name = `${row.load.subject_code} ${lec ? 'Lecture' : 'Laboratory'}`;
+          return (
+            <button
+              key={row.key}
+              type="button"
+              onClick={() => { if (!active) onOpen(row); }}
+              aria-pressed={active}
+              aria-label={active ? `${name} — being edited` : `${row.isScheduled ? 'Edit' : 'Set'} the schedule of ${name}`}
+              title={active ? 'Being edited' : row.isScheduled ? `Edit the ${lec ? 'Lecture' : 'Laboratory'}` : `Schedule the ${lec ? 'Lecture' : 'Laboratory'}`}
+              className={`inline-flex items-center gap-1 h-8 px-2 rounded-lg border text-[13px] font-bold whitespace-nowrap transition-colors ${
+                active
+                  ? `${lec ? 'bg-[#1D5BD6] border-[#1D5BD6]' : 'bg-amber-500 border-amber-500'} cursor-default`
+                  : lec ? 'bg-[#EFF6FF] text-[#1D5BD6] border-[#BFDBFE] hover:border-[#1D5BD6]' : 'bg-amber-50 text-amber-700 border-amber-200 hover:border-amber-500'
+              }`}
+              style={active ? { color: '#FFFFFF' } : undefined}
+            >
+              <Icon className="w-3.5 h-3.5" aria-hidden />
+              {lec ? 'Lec' : 'Lab'}
+              {/* Scheduled: a pencil (this chip is its Edit); not yet: an amber dot */}
+              {!active && (row.isScheduled
+                ? <Pencil className="w-3.5 h-3.5 opacity-80" aria-hidden />
+                : <span className="w-2 h-2 rounded-full bg-[#F59E0B]" aria-hidden />)}
+            </button>
           );
         })}
-        </div>
-        </>
-        )}
       </div>
-    </CollapsibleSection>
+    </div>
+  );
+}
+
+/** One load (Regular / Overload / Praise) as a list of rows, always open */
+function SubjectSection({ title, tone, rows, activeKey, onOpen, onPreview, flashKey = null, empty, compact = false }: {
+  title: string; tone: StatusTone; rows: LoadRow[]; activeKey: string | undefined;
+  onOpen: (row: LoadRow) => void; onPreview: (group: ClassGroup) => void; flashKey?: string | null; empty: string;
+  /** Folded beside the editor: small entries, no column names */
+  compact?: boolean;
+}) {
+  const t = STATUS_TONES[tone];
+  return (
+    <section className={`rounded-xl border ${t.border} bg-white overflow-hidden shadow-sm`}>
+      <div className={`flex items-center gap-2 ${compact ? 'px-3 py-2' : 'px-4 py-2.5'} border-b ${t.head.split(' ').filter(c => !c.startsWith('hover:')).join(' ')}`}>
+        <h3 className={`${compact ? 'text-[13px] tracking-wider' : 'text-[14px] tracking-widest'} font-bold uppercase ${t.text}`}>{title}</h3>
+        <span className={`text-[13px] font-bold border rounded-full px-2 py-0.5 tabular-nums ${t.badge}`}>{rows.length}</span>
+      </div>
+      {/* Column names on a wide list */}
+      {rows.length > 0 && !compact && (
+        <div className="hidden @2xl:grid grid-cols-[minmax(0,1.5fr)_minmax(11.5rem,1fr)_minmax(0,1.7fr)_7.5rem] gap-x-4 px-4 py-2 bg-[#F8FAFC] border-b border-[#EEF2F7] text-[12px] font-bold uppercase tracking-wider text-[#64748B]">
+          <span>Subject</span><span>Part</span><span>Schedule</span><span className="sr-only">Action</span>
+        </div>
+      )}
+      {rows.length === 0
+        ? <p className="px-4 py-5 text-[14px] text-[#94A3B8] italic text-center">{empty}</p>
+        // One entry per class: Lecture before Laboratory, a subject's blocks together
+        : groupByClass(rows).map(g => compact
+          ? <CompactClassRow key={g.key} group={g} activeKey={activeKey} onOpen={onOpen} onPreview={onPreview} />
+          : <ClassRow key={g.key} group={g} activeKey={activeKey} onOpen={onOpen} onPreview={onPreview} flashKey={flashKey} />)}
+    </section>
+  );
+}
+
+/** One field of a session in the side editor: its name on the left, the control on the right */
+function SessionField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[3.25rem_minmax(0,1fr)] items-center gap-2">
+      <span className="text-[12px] font-bold uppercase tracking-wide text-[#64748B]">{label}</span>
+      <div className="min-w-0">{children}</div>
+    </div>
   );
 }
 
@@ -1178,9 +1273,6 @@ export default function SchedulingClient() {
 
   const stepParam = searchParams.get('step');
   const view: AppView = stepParam === 'schedule' ? 'schedule' : 'faculty';
-  const facultyStep: 'position' | 'instructor' =
-    stepParam === 'instructor' || stepParam === 'schedule' ? 'instructor' : 'position';
-  const positionFilter = (searchParams.get('type') as 'Permanent' | 'Contractual' | null) ?? '';
   const selFacultyId = searchParams.get('faculty');
   /** Master Schedule "Schedule" → this class opens directly for its assigned faculty. */
   const fromMsId = Number(searchParams.get('ms')) || null;
@@ -1212,33 +1304,60 @@ export default function SchedulingClient() {
   );
   const [workload, setWorkload]           = useState<WorkloadSummary | null>(null);
   const [selLoad, setSelLoad]             = useState<LoadRow | null>(null);
-  /* Assigned Subjects panel: every section starts hidden (admin clicks Show),
-     and the Lecture / Laboratory chips filter the rows in all sections. */
-  const [openSections, setOpenSections]   = useState<Record<string, boolean>>({});
+  /* Assigned Subjects list: the Lecture / Laboratory switch and the search filter every load */
   const [typeFilter, setTypeFilter]       = useState<'all' | 'lec' | 'lab'>('all');
   /** Assigned Subjects search — subject code, title or block */
   const [subjectSearch, setSubjectSearch] = useState('');
-  const [panelExpanded, setPanelExpanded] = useState(false);
   const reduceMotion = useReducedMotion();
-  function focusSection(id: string) {
-    setOpenSections({ [id]: true });
-    setFlashSection(id);
-    window.setTimeout(() => {
-      document.getElementById(`sched-sec-${id}`)?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
-    }, 120);
-    window.setTimeout(() => setFlashSection(cur => (cur === id ? null : cur)), 1700);
-  }
-  const toggleSection = (id: string) => setOpenSections(s => ({ ...s, [id]: !s[id] }));
-  /* pending / done / overload chips: open that section (others close), glide to
-     it and pulse it once so the eye lands there. */
-  const [flashSection, setFlashSection] = useState<string | null>(null);
-  useEffect(() => { setOpenSections({}); setTypeFilter('all'); setSubjectSearch(''); }, [selFacultyId]);
+  useEffect(() => { setTypeFilter('all'); setSubjectSearch(''); }, [selFacultyId]);
+  /* Closing the editor: the class just edited glows once in the list that comes back,
+     and is scrolled into sight if it isn't (the list keeps the user's place) */
+  const [closedKey, setClosedKey] = useState<string | null>(null);
+  const closedTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(closedTimer.current), []);
+  const closeEditor = useCallback((key: string | null) => {
+    setClosedKey(key);
+    setSelLoad(null);
+    window.clearTimeout(closedTimer.current);
+    closedTimer.current = window.setTimeout(() => setClosedKey(null), 3200);
+  }, []);
+  useEffect(() => {
+    if (!closedKey || selLoad) return;
+    const t = window.setTimeout(() => {
+      document.querySelector('[data-flash="true"]')?.scrollIntoView({ block: 'nearest', behavior: reduceMotion ? 'auto' : 'smooth' });
+    }, 900);
+    return () => window.clearTimeout(t);
+  }, [closedKey, selLoad, reduceMotion]);
+  // The folded list scrolls to the class being edited (after it has folded)
+  useEffect(() => {
+    if (!selLoad) return;
+    const t = window.setTimeout(() => {
+      document.querySelector('[data-active-class="true"]')?.scrollIntoView({ block: 'nearest', behavior: reduceMotion ? 'auto' : 'smooth' });
+    }, 550);
+    return () => window.clearTimeout(t);
+  }, [selLoad, reduceMotion]);
+  /* Major Lec + Lab (one room): the room picked on one part before it is saved. The class's
+     other part opens already in it — and may only use it — so the room is picked once,
+     whichever part comes first. Once saved, the saved room does this (lockedRoom). */
+  const [roomDraft, setRoomDraft] = useState<{ msId: number; part: 'lec' | 'lab'; roomId: string } | null>(null);
+  const roomDraftRef = useRef(roomDraft);
+  useEffect(() => { roomDraftRef.current = roomDraft; }, [roomDraft]);
+  useEffect(() => { setRoomDraft(null); }, [selFacultyId]);
   /* Eye preview (SubjectFacultyPreview): everyone handling the row's subject */
   const [previewRow, setPreviewRow]       = useState<LoadRow | null>(null);
   /* Timetable click: open the preview straight on this instructor's schedule
      for that subject (the back arrow still lists everyone teaching it). */
   const [previewOpenMs, setPreviewOpenMs] = useState<number | null>(null);
+  /** Opened from a class with both parts: show the whole subject (Lecture and Laboratory) */
+  const [previewWhole, setPreviewWhole] = useState(false);
+  /** A subject in the list: the same preview as the editor's eye, for the whole class */
+  function openSubjectPreview(group: ClassGroup) {
+    setPreviewOpenMs(null);
+    setPreviewWhole(group.rows.length > 1);
+    setPreviewRow(group.rows[0]);
+  }
   function openTimetableBlock(load: WorkloadLoad, component: 'lec' | 'lab') {
+    setPreviewWhole(false);
     setPreviewOpenMs(load.ms_id);
     setPreviewRow({
       key: `tt-${load.id}-${component}`, load, component,
@@ -1247,7 +1366,7 @@ export default function SchedulingClient() {
       isOverloadComponent: false, isScheduled: true, isSplitPortion: false,
     });
   }
-  const closePreview = useCallback(() => { setPreviewRow(null); setPreviewOpenMs(null); }, []);
+  const closePreview = useCallback(() => { setPreviewRow(null); setPreviewOpenMs(null); setPreviewWhole(false); }, []);
   const [panelSwitching, setPanelSwitching] = useState(false);
   const panelSwitchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [rooms, setRooms]                 = useState<Room[]>([]);
@@ -1255,11 +1374,17 @@ export default function SchedulingClient() {
   const roomsRef = useRef<Room[]>([]);
   useEffect(() => { roomsRef.current = rooms; }, [rooms]);
   const [facultySearch, setFacultySearch] = useState('');
+  /* Choose Faculty shows one page at a time; a new search, filter or term starts at page 1.
+     The direction makes the next page come in from the right, the previous from the left. */
+  const [facultyPage, setFacultyPage] = useState(1);
+  const [facultyPageDir, setFacultyPageDir] = useState<-1 | 0 | 1>(0);
+  const facultyListRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { setFacultyPage(1); setFacultyPageDir(0); }, [facultySearch, schedFilter, semester, schoolYear]);
   /* Each step (and each faculty's schedule) opens at once behind its own
      skeleton, held for the same time as every other page (LOADING_DELAY) —
      no spinner over the old step. `entering` is true from the very render the
      step changes, so the new step never flashes before its skeleton. */
-  const stepKey = view === 'schedule' ? `schedule:${selFacultyId ?? ''}` : facultyStep;
+  const stepKey = view === 'schedule' ? `schedule:${selFacultyId ?? ''}` : 'faculty';
   const [settledStep, setSettledStep] = useState<string | null>(null);
   const entering = settledStep !== stepKey;
   useEffect(() => {
@@ -1270,13 +1395,33 @@ export default function SchedulingClient() {
   const stepSkeleton = useMinLoading(entering, LOADING_DELAY) || entering;
   const [fetchingW, setFetchingW]         = useState(false);
 
-  /* Shared by every wizard Back control — goes back at once; the step it
-     lands on shows its skeleton for the usual time. */
+  /* Shared by every wizard Back control. On the click the arrow turns into a
+     spinning ring and the subjects into their skeleton (painted first), then it
+     goes back; the step it lands on shows its own skeleton for the usual time.
+     A new step ends it by itself; a timer frees it if nothing happened. */
+  const [leavingStep, setLeavingStep] = useState<string | null>(null);
+  const leaving = leavingStep === stepKey;
+  const leaveTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(leaveTimer.current), []);
+  // Once another step is on screen the leave is over. Left to the timer, coming straight back
+  // to the same faculty (Select again, or Forward) found it still leaving — hidden for seconds
+  useEffect(() => {
+    if (leavingStep === null || leavingStep === stepKey) return;
+    window.clearTimeout(leaveTimer.current);
+    setLeavingStep(null);
+  }, [leavingStep, stepKey]);
   const goBack = useCallback(() => {
-    // Opened straight from Master Schedule in a fresh tab — no history to walk.
-    if (fromMsId && window.history.length <= 1) router.replace('/master-schedule');
-    else router.back();
-  }, [router, fromMsId]);
+    if (leaving) return;
+    setLeavingStep(stepKey);
+    window.clearTimeout(leaveTimer.current);
+    leaveTimer.current = window.setTimeout(() => setLeavingStep(null), 10_000);
+    // The subjects slide away first (the arrow spins meanwhile), then the page goes back
+    window.setTimeout(() => {
+      if (backTarget() === 'back') router.back();
+      // Opened fresh (e.g. a link in a new tab) — no earlier page here: Master Schedule or the faculty list
+      else router.replace(fromMsId ? '/master-schedule' : buildStepUrl({ step: undefined, faculty: undefined, ms: undefined, type: undefined }));
+    }, reduceMotion ? 0 : BACK_OUT_MS);
+  }, [router, fromMsId, leaving, stepKey, buildStepUrl, reduceMotion]);
   const [sessions, setSessions]       = useState<SessionItem[]>([]);
   /** "<session id>:start_time" / ":room_id" set by hand on session 2+ — session 1 no longer fills them */
   const manualSessionFields = useRef(new Set<string>());
@@ -1303,7 +1448,7 @@ export default function SchedulingClient() {
   const [roomRule, setRoomRule] = useState<{
     key: string; error: string | null; move: { part: 'lec' | 'lab'; room_name: string } | null;
   } | null>(null);
-  /** Weekly Timetable modal — closed by default so Schedule Classes stays focused. */
+  /** Weekly Timetable modal — closed by default so Class Assignment stays focused. */
   const [showTimetable, setShowTimetable] = useState(false);
   const [timetableEntered, setTimetableEntered] = useState(false);
   useScrollLock(showTimetable || Boolean(deleteTarget));
@@ -1455,11 +1600,6 @@ export default function SchedulingClient() {
       toast.error('This class is no longer in this faculty’s workload.');
       return;
     }
-    const section = row.isScheduled ? 'scheduled'
-      : row.isOverloadComponent ? 'overload'
-      : row.isPraiseComponent ? 'praise-tasks'
-      : 'regular';
-    setOpenSections({ [section]: true });
     selectLoad(row);
   }, [fromMsId, view, syLoading, fetchingW, workload, selFaculty, semester, schoolYear, toast]);
 
@@ -1504,6 +1644,9 @@ export default function SchedulingClient() {
     // already uses, when this part may use it — Lec and Lab keep one room. The
     // time picker then offers only times that room is free.
     const pair = pairedRoom(selLoad.load, comp, roomsRef.current);
+    // …or, not saved yet, the room already picked for this class on either part
+    const draft = roomDraftRef.current;
+    const draftRoom = selLoad.load.one_room && draft && draft.msId === selLoad.load.ms_id ? draft.roomId : '';
     // Changing the session count keeps the rows already filled in (day, time,
     // room) — only new rows start blank; hours are re-split evenly.
     setSessions(prev => {
@@ -1519,7 +1662,7 @@ export default function SchedulingClient() {
           start_time: start,
           units: uPerSession, hours: hPerSession,
           end_time: addMinutes(start, Math.round(hPerSession * 60)),
-          type: comp, room_id: old ? old.room_id : shared || (pair ? String(pair.id) : ''),
+          type: comp, room_id: old ? old.room_id : shared || (pair ? String(pair.id) : draftRoom),
         };
       });
     });
@@ -1571,12 +1714,18 @@ export default function SchedulingClient() {
   })();
   const otherPartName = selLoad?.component === 'lab' ? 'Lecture' : 'Laboratory';
   /** …and once its other part has a room, this part must use that same room — the only one offered */
-  const lockedRoom: Room | null = (() => {
+  const savedLockedRoom: Room | null = (() => {
     if (!selLoad || !oneRoom) return null;
     const used = asSessionList<WorkloadSession>(selLoad.load.sessions)
       .find(x => (x.type === 'lab' ? 'lab' : 'lec') !== selLoad.component && x.room_id != null);
     return used ? rooms.find(r => r.id === Number(used.room_id)) ?? null : null;
   })();
+  /** Not saved yet: the room picked on the other part of this class */
+  const draftLockedRoom: Room | null = !savedLockedRoom && oneRoom && selLoad && roomDraft
+    && roomDraft.msId === selLoad.load.ms_id && roomDraft.part !== selLoad.component
+    ? rooms.find(r => String(r.id) === roomDraft.roomId) ?? null
+    : null;
+  const lockedRoom: Room | null = savedLockedRoom ?? draftLockedRoom;
 
   /** Major subject: why a room can't also take the class's other part at its
    *  saved times ('' = free). The class's own sessions don't count. */
@@ -1694,6 +1843,8 @@ export default function SchedulingClient() {
     `the ${otherPartLength} its ${otherPartName} needs${roomName ? ` in ${roomName}` : ''} on ${day}`;
   /** Picked room that can't take both parts — shown as "Busy · …" */
   const otherPartRoomClash = (day: string) => `${day} has no ${otherPartLength} left here for its ${otherPartName}`;
+  /** The same, short enough for a room card: "No 1.5 hrs on Mon for its Lab" */
+  const otherPartRoomShort = (day: string) => `No ${otherPartLength} on ${DAY_SHORT[day] ?? day} for its ${otherPartName === 'Laboratory' ? 'Lab' : 'Lecture'}`;
 
 
   /** Other classes on this day that would clash — same rules as the server
@@ -1801,6 +1952,10 @@ export default function SchedulingClient() {
     // Major subject: the room picked on any row is every row's room — no row keeps its own
     const sharedRoom = key === 'room_id' && oneRoom;
     if (idx > 0 && followed && !sharedRoom) manualSessionFields.current.add(`${id}:${key}`);
+    // …and becomes the room of its other part too (opened next, it starts in this room)
+    if (sharedRoom && selLoad && !savedLockedRoom) {
+      setRoomDraft(val ? { msId: selLoad.load.ms_id, part: selLoad.component, roomId: String(val) } : null);
+    }
 
     setSessions(prev => {
       // Picking a day — or a room — where the current time is already taken
@@ -1852,6 +2007,8 @@ export default function SchedulingClient() {
 
   function removeSession(id: string) {
     setSessions(prev => prev.filter(s => s.id !== id));
+    // The count follows the rows left, so + / − and typing keep working from it
+    setManualCount(Math.max(1, sessions.filter(s => s.id !== id).length));
     setSessionConflicts([]); setConflictsVerified(false);
   }
 
@@ -1883,12 +2040,16 @@ export default function SchedulingClient() {
   const daysRuleError = pairDays && selLoad && allDaysSet && sessions.length > 0 && myDays.join() !== pairDays.join()
     ? `${selLoad.load.subject_code} is a Major subject, so its Lecture and Laboratory must meet on the same days. Its ${otherPartName} is on ${pairDaysText} — use ${pairDaysText} for the ${selLoad.label === 'Lab' ? 'Laboratory' : 'Lecture'} too (the times may differ).`
     : null;
-  const roomRuleError = !oneRoom || !selLoad ? null
+  /* PATHFIT meets only in the CCA Gym or the SAO Room (same check as the save) */
+  const pathfitRoomError = selLoad && isPathfitSubject(selLoad.load.subject_code)
+    && chosenRoomIds.some(id => !isPathfitVenue(rooms.find(r => String(r.id) === String(id))?.room_name))
+    ? PATHFIT_VENUE_RULE : null;
+  const roomRuleError = pathfitRoomError ?? (!oneRoom || !selLoad ? null
     : daysRuleError ?? (chosenRoomIds.length > 1
       ? `${selLoad.load.subject_code} is a Major subject, so its Lecture and Laboratory must use the same room. Choose one room for every session.`
       : lockedRoom && chosenRoomIds.length === 1 && chosenRoomIds[0] !== String(lockedRoom.id)
         ? `${selLoad.load.subject_code} is a Major subject, so its Lecture and Laboratory must use the same room. Its ${otherPartName} is in ${lockedRoom.room_name} — choose ${lockedRoom.room_name} for the ${selLoad.label === 'Lab' ? 'Laboratory' : 'Lecture'} too.`
-        : ruleNow?.error ?? null);
+        : ruleNow?.error ?? null));
 
   /* The semester's day combinations (Settings → Day Combinations) are quick
      picks only — any days can be scheduled (programs use their own patterns). */
@@ -1899,6 +2060,15 @@ export default function SchedulingClient() {
   const allowedDays = pairDays ? new Set<string>(pairDays) : null;
 
   /** Use a combination: one session per day, in week order (times/rooms kept per row) */
+  /** Sessions per week as shown (saved rows can be more than the limit until changed) */
+  const shownCount = sessions.length > 0 ? sessions.length : manualCount;
+  /** Typing in the count: '' while the box is cleared, then the typed number takes over */
+  const [countText, setCountText] = useState<string | null>(null);
+  function setSessionCount(n: number) {
+    const next = Math.min(MAX_SESSIONS, Math.max(1, Math.round(n) || 1));
+    if (next !== shownCount || next !== manualCount) setManualCount(next);
+  }
+
   function applyCombination(days: readonly string[]) {
     if (!selLoad) return;
     setError('');
@@ -1922,6 +2092,18 @@ export default function SchedulingClient() {
       if (!a.day) continue;
       const aStart = timeToMinutes(a.start_time);
       const aEnd   = sessionEndMinutes(a.start_time, a.end_time); // midnight-aware
+      // Outside the school day — the save refuses it, so it must move first
+      const outside = aStart < SCHOOL_DAY_START_MIN ? 'starts before 7:00 AM'
+        : aEnd > DAY_END_MIN ? 'ends after 6:00 PM'
+        : aStart < LUNCH.end && aEnd > LUNCH.start ? `overlaps the lunch break (${LUNCH_LABEL})` : null;
+      if (outside) {
+        found.push({
+          sessionId: a.id,
+          type: 'time',
+          message: `Session ${i + 1} (${a.day}, ${fmt12(a.start_time)}–${fmt12(a.end_time)}) ${outside}. Classes meet ${SCHOOL_DAY_LABEL} — choose a time inside the school day.`,
+          conflictKey: makeConflictKey('time', a.id, 'school-day', a.day, a.start_time, a.end_time),
+        });
+      }
       for (let j = 0; j < i; j++) {
         const b = sessions[j];
         if (b.day !== a.day) continue;
@@ -1971,6 +2153,10 @@ export default function SchedulingClient() {
         }),
       });
       const data = await res.json();
+      // The server refused the sessions (e.g. a time outside the school day) — show why, never "verified"
+      if (res.status === 400 && typeof data.error === 'string' && !found.some(c => c.type === 'time')) {
+        found.push({ sessionId: 'server', type: 'time', message: data.error, conflictKey: 'time:server' });
+      }
       setRoomRule(data.room_rule ? { key: checkedKey, error: data.room_rule.error ?? null, move: data.room_rule.move ?? null } : null);
       if (Array.isArray(data.conflicts)) {
         for (const c of data.conflicts) {
@@ -2065,6 +2251,8 @@ export default function SchedulingClient() {
       }
       const result = await res.json().catch(() => null) as { moved?: { part: 'lec' | 'lab'; room_name: string } | null } | null;
       const saved = selLoad;
+      // Saved: from now on the saved room keeps the class's parts together
+      setRoomDraft(d => (d && d.msId === saved.load.ms_id ? null : d));
       // Major subject: the other part followed into the same room
       const moved = result?.moved ? ` The ${result.moved.part === 'lab' ? 'Laboratory' : 'Lecture'} is now in ${result.moved.room_name} too.` : '';
       setSuccess(`Schedule saved for ${saved.load.subject_code} (${saved.label}) — ${blockCode(saved.load.year_level, saved.load.block_name)}.${moved}`);
@@ -2074,7 +2262,7 @@ export default function SchedulingClient() {
       setSaveSuccess(true);
       setTimeout(() => {
         setSaveSuccess(false);
-        setSelLoad(null); setSessions([]);
+        closeEditor(saved.key); setSessions([]);
         toast.success(`Schedule saved for ${saved.load.subject_code} — ${blockCode(saved.load.year_level, saved.load.block_name)}.${moved}`);
       }, 1300);
     } catch { setError('Connection error.'); toast.error('Connection error. Please try again.'); }
@@ -2121,7 +2309,9 @@ export default function SchedulingClient() {
   const subjectHasLab = toNum(selLoad?.load.laboratory_hours) > 0;
   // A Major subject's Lecture shares its Laboratory's room, so it is a laboratory too —
   // and once the other part has a room, that room is the only one offered
-  const activeRooms  = lockedRoom ? [lockedRoom]
+  // PATHFIT → only the CCA Gym and the SAO Room
+  const activeRooms  = selLoad && isPathfitSubject(selLoad.load.subject_code) ? rooms.filter(r => isPathfitVenue(r.room_name))
+    : lockedRoom ? [lockedRoom]
     : selLoad?.component === 'lab' || oneRoom ? labRooms
     : subjectHasLab ? [...lectureRooms, ...labRooms] : lectureRooms;
   /** The class's other part's room — offered first in the Room picker */
@@ -2138,9 +2328,14 @@ export default function SchedulingClient() {
       scheduled: true,
     };
     parts[other] = { names: roomNamesOf(otherSessions.map(s => s.room_name)), scheduled: otherSessions.length > 0 };
+    /** Not saved yet: the room the other part will use — this part's room (one room for both), else the one picked before */
+    const otherDraftId = oneRoom && parts[other].names.length === 0
+      ? sessions.find(x => x.room_id)?.room_id || (roomDraft && roomDraft.msId === selLoad.load.ms_id ? roomDraft.roomId : '')
+      : '';
+    const otherDraft = otherDraftId ? rooms.find(r => String(r.id) === otherDraftId)?.room_name ?? null : null;
     const both = parts.lec.names.length > 0 && parts.lab.names.length > 0;
     const same = both && parts.lec.names.length === 1 && parts.lab.names.length === 1 && parts.lec.names[0] === parts.lab.names[0];
-    return { parts, same, different: both && !same };
+    return { parts, same, different: both && !same, otherDraft };
   })();
   const showFacultySkeleton = useMinLoading(
     // Wait for the real remaining loads on first load so cards don't flash red
@@ -2160,9 +2355,8 @@ export default function SchedulingClient() {
       return s ? { ...withN, remaining_regular_load: s.remaining_load } : withN;
     });
     const searched = facultyWithLoad.filter(f =>
-      f.employment_status === positionFilter &&
-      (f.name.toLowerCase().includes(facultySearch.toLowerCase()) ||
-      f.employee_id.toLowerCase().includes(facultySearch.toLowerCase()))
+      f.name.toLowerCase().includes(facultySearch.toLowerCase()) ||
+      f.employee_id.toLowerCase().includes(facultySearch.toLowerCase())
     );
     /* Unscheduled = has classes still needing a day/time. Scheduled = has classes,
        all with a day/time. Faculty with no classes yet appear only under All. */
@@ -2173,105 +2367,32 @@ export default function SchedulingClient() {
     const unscheduledCount = searched.filter(isUnscheduled).length;
     const filtered = searched.filter(f =>
       schedFilter === 'all' || (schedFilter === 'scheduled' ? isScheduled(f) : isUnscheduled(f)));
-    const totalPermanent   = facultyList.filter(f => f.employment_status === 'Permanent').length;
-    const totalContractual = facultyList.filter(f => f.employment_status === 'Contractual').length;
-    /** Classes (summed over the position's faculty) that still have no day/time */
-    const toSchedule = (pos: string) => facultyList
-      .filter(f => f.employment_status === pos)
-      .reduce((sum, f) => sum + (unscheduledMap[f.id] ?? 0), 0);
-    const stepIndex = facultyStep === 'instructor' ? 1 : 0;
+    const facultyPageCount = Math.max(1, Math.ceil(filtered.length / FACULTY_PAGE_SIZE));
+    const safeFacultyPage = Math.min(facultyPage, facultyPageCount);
+    function goToFacultyPage(next: number) {
+      setFacultyPageDir(next > safeFacultyPage ? 1 : -1);
+      setFacultyPage(next);
+      // From the pager at the bottom, bring the top of the list back into view
+      const top = facultyListRef.current?.getBoundingClientRect().top ?? 0;
+      if (top < 130) facultyListRef.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+    }
 
     return (
-      <div className="relative p-4 sm:p-6 max-w-3xl mx-auto w-full min-w-0">
+      <motion.div
+        className="relative p-4 sm:p-6 max-w-3xl mx-auto w-full min-w-0"
+        initial={reduceMotion ? false : { opacity: 0, x: -24 }}
+        animate={{ opacity: 1, x: 0, transition: { duration: reduceMotion ? 0 : 0.5, ease: SETTLE } }}
+      >
         <div className="mb-8">
-          {facultyStep === 'position' && <BackButton />}
-          <div className={facultyStep === 'position' ? 'mt-4 sm:mt-7' : ''}>
-            <WatermarkTitle>Schedule Classes</WatermarkTitle>
+          <BackButton />
+          <div className="mt-4 sm:mt-7">
+            <WatermarkTitle>Class Assignment</WatermarkTitle>
           </div>
         </div>
 
-        <SchedulingStepper current={stepIndex} />
+        <SchedulingStepper current={0} />
 
-        {facultyStep === 'position' ? (
-          <PageLoadTransition showSkeleton={showFacultySkeleton} skeleton={<PositionSkeleton />}>
-          <div className="bg-white border border-[#E2E8F0] rounded-2xl p-5 sm:p-6 shadow-sm">
-            <h2 className="text-base font-bold text-[#0B2A5B] mb-4">Position Selection</h2>
-
-            <div className="space-y-3">
-              {([
-                { key: 'Permanent' as const, label: 'Permanent', desc: 'Regular faculty members with permanent positions.', count: totalPermanent, pending: toSchedule('Permanent'), Icon: ShieldCheck },
-                { key: 'Contractual' as const, label: 'Contractual', desc: 'Part-time or contractual faculty members.', count: totalContractual, pending: toSchedule('Contractual'), Icon: FileClock },
-              ]).map(opt => {
-                const selected = positionFilter === opt.key;
-                const { fg, bg } = EMPLOYMENT_COLORS[opt.key];
-                return (
-                  <button key={opt.key} type="button" onClick={() => {
-                    router.replace(buildStepUrl({
-                      type: opt.key,
-                      faculty: positionFilter !== opt.key ? undefined : selFacultyId ?? undefined,
-                    }), { scroll: false });
-                  }}
-                    className={`w-full flex flex-wrap sm:flex-nowrap items-center gap-x-4 gap-y-2.5 text-left px-4 sm:px-5 py-4 rounded-xl border transition-colors ${
-                      selected ? 'ring-1' : 'border-[#E2E8F0] hover:border-[#CBD5E1]'
-                    }`}
-                    style={selected ? { borderColor: fg, backgroundColor: bg, ['--tw-ring-color' as string]: fg } : undefined}>
-                    <span className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0"
-                      style={selected ? { backgroundColor: fg, color: '#ffffff' } : { backgroundColor: bg, color: fg }}>
-                      <opt.Icon className="w-5 h-5" />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block font-bold text-[#0B2A5B]">{opt.label} <span className="font-normal text-[#94A3B8] text-sm">({opt.count})</span></span>
-                      <span className="block text-sm text-[#64748B] mt-0.5">{opt.desc}</span>
-                    </span>
-                    {/* Phone: status badge drops under the description instead of squeezing it */}
-                    <span className="order-last w-full pl-14 sm:order-none sm:w-auto sm:pl-0 flex-shrink-0 empty:hidden">
-                    {opt.pending > 0 && (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-[#FFF7ED] text-[#C2410C] border border-[#FED7AA] flex-shrink-0"
-                        title="Assigned classes in this group that still need a day and time">
-                        <span className="relative flex w-2 h-2">
-                          <span className="absolute inline-flex w-full h-full rounded-full bg-[#F97316] opacity-60 animate-ping" />
-                          <span className="relative inline-flex w-2 h-2 rounded-full bg-[#EA580C]" />
-                        </span>
-                        {opt.pending} {opt.pending === 1 ? 'class' : 'classes'} to schedule
-                      </span>
-                    )}
-                    {opt.pending === 0 && !summariesLoading && (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] flex-shrink-0"
-                        title="Every assigned class in this group has a day and time">
-                        <CheckCircle className="w-3.5 h-3.5" /> All scheduled
-                      </span>
-                    )}
-                    </span>
-                    <span className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
-                      selected ? '' : 'border-[#CBD5E1]'
-                    }`}
-                      style={selected ? { borderColor: fg, backgroundColor: fg } : undefined}>
-                      {selected && <CheckCircle className="w-4 h-4 text-white" />}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <button type="button" disabled={!positionFilter}
-              onClick={() => router.push(buildStepUrl({ step: 'instructor' }))}
-              className="w-full mt-5 inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-sm font-semibold qr-btn-soft disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
-              Continue to Faculty Selection <ArrowRight className="w-4 h-4" />
-            </button>
-          </div>
-          </PageLoadTransition>
-        ) : (
           <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 sm:p-6 shadow-sm">
-            <button type="button" onClick={goBack}
-              className="inline-flex items-center gap-2 -ml-2.5 mb-2.5 min-h-10 px-3 py-2 rounded-xl text-[15px] font-semibold text-[#1D5BD6] hover:text-[#164BB5] hover:bg-[#EFF6FF] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
-              <ChevronLeft className="w-5 h-5" /> Back
-            </button>
-            <div className="flex items-center justify-between gap-3 mb-4">
-              <div>
-                <h2 className="text-base font-bold text-[#0B2A5B]">Select Faculty</h2>
-              </div>
-            </div>
-
             {/* Phones: two equal boxes side by side */}
             <div className="grid grid-cols-2 gap-3 mb-4 sm:flex sm:items-center sm:flex-wrap">
               <div className="flex flex-col gap-1.5 min-w-0">
@@ -2312,34 +2433,47 @@ export default function SchedulingClient() {
               showSkeleton={showFacultySkeleton}
               skeleton={<ListSkeleton rows={6} />}
             >
-              <motion.div
-                // Re-animate the list on every filter switch
-                key={schedFilter}
-                initial={reduceMotion ? false : { opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
-              >
-                <FacultyGroup
-                  title={positionFilter}
-                  items={filtered}
-                  selectedId={selFaculty?.id}
-                  // Opens at once — the schedule shows its skeleton while it loads
-                  onSelect={f => router.push(buildStepUrl({ step: 'schedule', faculty: String(f.id) }))}
-                />
-                {filtered.length === 0 && (
-                  <div className="text-center py-16 text-[#94A3B8] text-sm">
-                    {schedFilter === 'unscheduled' && searched.length > 0
-                      ? 'No classes left to schedule.'
-                      : schedFilter === 'scheduled' && searched.length > 0
-                        ? 'No faculty has every class scheduled yet.'
-                        : 'No faculty found.'}
-                  </div>
-                )}
-              </motion.div>
+              <div ref={facultyListRef} className="scroll-mt-32 overflow-x-clip -mx-1 px-1">
+                <motion.div
+                  // A new page eases in from the side it came from; a filter or search fades up
+                  key={`${schedFilter}-${safeFacultyPage}`}
+                  initial={reduceMotion ? false : facultyPageDir === 0 ? { opacity: 0, y: 8 } : { opacity: 0, x: 28 * facultyPageDir }}
+                  animate={{ opacity: 1, x: 0, y: 0 }}
+                  transition={{ duration: 0.35, ease: [0.4, 0, 0.2, 1] }}
+                >
+                  <FacultyGroup
+                    items={filtered}
+                    page={safeFacultyPage}
+                    pageSize={FACULTY_PAGE_SIZE}
+                    selectedId={selFaculty?.id}
+                    // Opens at once — the schedule shows its skeleton while it loads
+                    onSelect={f => router.push(buildStepUrl({ step: 'schedule', faculty: String(f.id), type: undefined }))}
+                  />
+                  {filtered.length === 0 && (
+                    <div className="text-center py-16 text-[#94A3B8] text-sm">
+                      {schedFilter === 'unscheduled' && searched.length > 0
+                        ? 'No classes left to schedule.'
+                        : schedFilter === 'scheduled' && searched.length > 0
+                          ? 'No faculty has every class scheduled yet.'
+                          : 'No faculty found.'}
+                    </div>
+                  )}
+                </motion.div>
+              </div>
+              {/* Outside the sliding list, so it stays put and its highlight slides to the new page */}
+              <Pagination
+                className="pt-4 border-t border-[#E2E8F0]"
+                layoutId="scheduling-faculty-page"
+                page={safeFacultyPage}
+                pageCount={facultyPageCount}
+                onChange={goToFacultyPage}
+                total={filtered.length}
+                pageSize={FACULTY_PAGE_SIZE}
+                noun="faculty"
+              />
             </PageLoadTransition>
           </div>
-        )}
-      </div>
+      </motion.div>
     );
   }
 
@@ -2367,20 +2501,11 @@ export default function SchedulingClient() {
   const typeOk = (r: LoadRow) => typeFilter === 'all' || r.component === typeFilter;
   /** Rows shown in a section: the Lecture / Laboratory switch, then the search */
   const byType = (rows: LoadRow[]) => rows.filter(r => typeOk(r) && (!subjectQuery || matchesQuery(r, subjectQuery)));
-  /** Typing a search opens every section that has a match (sections start hidden) */
-  function onSubjectSearch(value: string) {
-    setSubjectSearch(value);
-    const q = searchKey(value);
-    if (!q) return;
-    const hit = (rows: LoadRow[]) => rows.some(r => typeOk(r) && matchesQuery(r, q));
-    setOpenSections(s => ({
-      ...s,
-      regular: !!s.regular || hit(pendingRows),
-      overload: !!s.overload || hit(overloadRows),
-      praise: !!s.praise || hit(praiseRows),
-      scheduled: !!s.scheduled || hit(scheduledRows),
-    }));
-  }
+  /* The list groups by load — Regular, Overload, Praise — scheduled or not */
+  const regularAll  = allRows.filter(r => !r.isOverloadComponent && !r.isPraiseComponent);
+  const overloadAll = allRows.filter(r => r.isOverloadComponent);
+  const praiseAll   = allRows.filter(r => r.isPraiseComponent);
+  const toSchedule  = pendingRows.length + overloadRows.length + praiseRows.length;
   const noMatch = subjectQuery ? 'No subjects match your search.' : null;
 
   interface TimetableBlock {
@@ -2484,19 +2609,38 @@ export default function SchedulingClient() {
         </div>
       )}
 
-      {/* ── Instructor header — phones only (desktop shows it above the right column) ── */}
-      <div className="lg:hidden mb-3">
+      {/* ── Header: back to the faculty list, the faculty, the term — one for every screen ── */}
+      <div className="mb-3">
         {/* ── Header / Breadcrumb ─────────────────────── */}
         <div className="flex-shrink-0 bg-white border border-[#E2E8F0] rounded-2xl px-4 sm:px-6 py-3 shadow-sm">
           <div className="flex items-center justify-between gap-3 min-w-0">
             <div className="flex items-center gap-2 min-w-0">
-              <button type="button" onClick={goBack} className="text-[#64748B] hover:text-[#0B2A5B] transition disabled:opacity-50 disabled:cursor-not-allowed">
-                <ChevronLeft className="w-5 h-5" />
-              </button>
+              <motion.button
+                type="button"
+                onClick={goBack}
+                aria-busy={leaving}
+                aria-label={leaving ? 'Going back…' : `Back to ${fromMsId ? 'Master Schedule' : 'All Faculty'}`}
+                whileHover={reduceMotion || leaving ? undefined : { x: -3 }}
+                whileTap={reduceMotion || leaving ? undefined : { scale: 0.9 }}
+                transition={{ duration: 0.25, ease: SETTLE }}
+                className={`text-[#64748B] hover:text-[#0B2A5B] transition-colors ${leaving ? 'cursor-wait' : ''}`}
+              >
+                {/* Clicked: the arrow becomes a spinning ring of the same size (nothing moves) */}
+                {leaving
+                  ? <span className="block w-5 h-5 p-0.5" aria-hidden><span className="block w-full h-full rounded-full border-[2.5px] border-[#BFD3F5] border-t-[#1D5BD6] animate-spin" /></span>
+                  : <ChevronLeft className="w-5 h-5" />}
+              </motion.button>
               <div className="flex items-center gap-1.5 text-sm text-[#64748B] min-w-0">
-                <span onClick={goBack} className="text-[#1D5BD6] hover:text-[#164BB5] cursor-pointer font-medium">
-                  {fromMsId ? 'Master Schedule' : 'Faculty'}
-                </span>
+                <button
+                  type="button"
+                  onClick={goBack}
+                  aria-busy={leaving}
+                  className={`text-[#1D5BD6] hover:text-[#164BB5] font-medium whitespace-nowrap ${leaving ? 'cursor-wait opacity-60' : 'cursor-pointer'}`}
+                  // Same size as the name beside it (the global button rule would make it 16px)
+                  style={{ fontSize: 'inherit' }}
+                >
+                  {fromMsId ? 'Master Schedule' : 'All Faculty'}
+                </button>
                 <ChevronRight className="w-4 h-4 flex-shrink-0" />
                 <span className="text-[#0B2A5B] font-semibold truncate">{selFaculty?.name}</span>
               </div>
@@ -2505,10 +2649,13 @@ export default function SchedulingClient() {
               <button
                 type="button"
                 onClick={openTimetable}
-                className="qr-glow-btn inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-semibold"
+                aria-label="View Timetable"
+                title="View Timetable"
+                className="qr-glow-btn inline-flex items-center gap-1.5 px-3 sm:px-3.5 py-2 rounded-xl text-sm font-semibold"
               >
                 <CalendarDays className="w-4 h-4" />
-                View Timetable
+                {/* Phones: the icon alone, so the faculty's name has room */}
+                <span className="hidden sm:inline">View Timetable</span>
               </button>
               <button
                 type="button"
@@ -2541,176 +2688,166 @@ export default function SchedulingClient() {
         </div>
       </div>
 
-      {/* ── Dashboard Body: Assigned Subjects (full-height left) · header + scheduling (right) ── */}
-      <div className="flex flex-1 min-h-0 min-w-0 gap-3">
+      {/* ── Body: the faculty's subjects as a list (main) · the schedule editor on the right,
+          only while a subject is open. Phones: one at a time (the editor's X goes back). ── */}
+      <motion.div
+        className="relative flex flex-1 min-h-0 min-w-0 gap-3"
+        initial={reduceMotion ? false : { opacity: 0, x: 24 }}
+        animate={leaving
+          ? { opacity: 0, x: 32, transition: { duration: reduceMotion ? 0 : BACK_OUT_MS / 1000, ease: LEAVE } }
+          : { opacity: 1, x: 0, transition: { duration: reduceMotion ? 0 : 0.5, ease: SETTLE } }}
+      >
 
-        {/* ── LEFT: Load List ───────────────────────
-            On phones, this list and the Scheduling Panel act like a
-            master/detail pair — the list takes the full screen until a
-            subject is picked, then it's hidden (back via the button in the
-            panel header) so the detail view isn't crushed into a sliver. */}
-        <div className={`${selLoad ? 'hidden lg:flex' : 'flex'} w-full ${panelExpanded ? 'lg:w-[34rem] xl:w-[40rem]' : 'lg:w-72 xl:w-80'} lg:transition-[width] lg:duration-500 lg:ease-in-out flex-shrink-0 rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] shadow-sm flex-col overflow-hidden min-h-0`}>
-          <div className="flex-shrink-0 px-4 py-4 border-b border-[#E2E8F0] bg-white space-y-3">
-            {/* Row 1 — title left, Expand / Collapse right (desktop; phones already use full width) */}
-            <div className="flex items-center justify-between gap-2">
+        {/* ── Assigned subjects ── */}
+        {/* While a subject is open it folds to about a quarter — the subjects stay in sight
+            (the one being edited marked), and the editor gets the rest */}
+        <div className={`${selLoad ? 'hidden lg:flex lg:basis-[300px] xl:basis-[340px]' : 'flex lg:basis-full'} w-full lg:w-auto lg:flex-none lg:transition-[flex-basis] lg:duration-[600ms] lg:ease-[cubic-bezier(0.65,0,0.35,1)] min-w-0 min-h-0 flex-col rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] shadow-sm overflow-hidden`}>
+          <div className={`flex-shrink-0 ${selLoad ? 'px-3' : 'px-4'} py-3 border-b border-[#E2E8F0] bg-white flex flex-wrap items-center gap-x-4 gap-y-2.5 transition-[padding] duration-500`}>
+            <div className="flex items-center gap-2.5 min-w-0 mr-auto">
               <h2 className="text-sm font-bold text-[#0B2A5B] uppercase tracking-widest">Assigned Subjects</h2>
-              <button
-                type="button"
-                onClick={() => setPanelExpanded(v => !v)}
-                aria-pressed={panelExpanded}
-                title={panelExpanded ? 'Collapse the list' : 'Expand to see every subject in full'}
-                className="hidden lg:inline-flex items-center gap-1 h-7 px-2.5 rounded-lg text-xs font-semibold text-[#1D5BD6] border border-[#BFDBFE] bg-white hover:bg-[#EFF6FF] transition-colors flex-shrink-0"
-              >
-                {panelExpanded
-                  ? <><Minimize2 className="w-3.5 h-3.5" /> Collapse</>
-                  : <><Maximize2 className="w-3.5 h-3.5" /> Expand</>}
-              </button>
-            </div>
-            {/* Status counts (same-size chips, colour = meaning) */}
-            <div>
               {workload && (
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  {/* Pending works like a warning light: grey when there's nothing pending,
-                      lights up red (soft glow) as soon as any subject needs a schedule */}
-                  <button
-                    type="button"
-                    onClick={() => focusSection('regular')}
-                    title={pendingRows.length > 0 ? 'Open the subjects waiting for a schedule' : 'Nothing pending'}
-                    className={`inline-flex items-center h-6 px-2 rounded-full text-xs font-semibold border tabular-nums transition-all duration-300 hover:-translate-y-px hover:shadow-sm active:scale-95 ${
-                      pendingRows.length > 0
-                        ? 'text-red-600 bg-red-50 border-red-200 qr-attn-tile'
-                        : 'text-[#94A3B8] bg-[#F4F7FC] border-[#E3E9F3]'
-                    }`}
-                  >
-                    {pendingRows.length} pending
-                  </button>
-                  {overloadRows.length > 0 && (
-                    <button type="button" onClick={() => focusSection('overload')} title="Open the overload subjects" className="inline-flex items-center h-6 px-2 rounded-full text-xs font-semibold text-orange-700 bg-orange-50 border border-orange-200 tabular-nums transition-all duration-300 hover:-translate-y-px hover:shadow-sm active:scale-95">{overloadRows.length} overload</button>
-                  )}
-                  {praiseRows.length + praise.length > 0 && (
-                    <button type="button" onClick={() => focusSection('praise')} title="Open the Praise Load subjects" className="inline-flex items-center h-6 px-2 rounded-full text-xs font-semibold text-yellow-800 bg-yellow-50 border border-yellow-300 tabular-nums transition-all duration-300 hover:-translate-y-px hover:shadow-sm active:scale-95">{praiseRows.length + praise.length} praise</button>
-                  )}
-                  <button type="button" onClick={() => focusSection('scheduled')} title="Open the scheduled subjects" className="inline-flex items-center h-6 px-2 rounded-full text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 tabular-nums transition-all duration-300 hover:-translate-y-px hover:shadow-sm active:scale-95">{scheduledRows.length} done</button>
-                </div>
+                <>
+                  <span className={`inline-flex items-center h-6 px-2 rounded-full text-xs font-semibold border tabular-nums whitespace-nowrap ${
+                    toSchedule > 0 ? 'text-red-600 bg-red-50 border-red-200' : 'text-[#94A3B8] bg-[#F4F7FC] border-[#E3E9F3]'
+                  }`}>{toSchedule} to schedule</span>
+                  <span className="inline-flex items-center h-6 px-2 rounded-full text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 tabular-nums whitespace-nowrap">{scheduledRows.length} done</span>
+                </>
               )}
             </div>
-
-            {/* Row 2 — even three-way switch: All | Lecture | Laboratory.
-                Filters every section below (Praise isn't lecture/lab, so it's unaffected). */}
-            <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-[#F1F5F9] border border-[#E2E8F0]" role="group" aria-label="Filter by type">
-              {([
-                { id: 'all' as const, label: 'All',        Icon: null,     on: 'bg-white text-[#0B2A5B] shadow-sm' },
-                { id: 'lec' as const, label: 'Lecture',    Icon: BookOpen, on: 'bg-white text-[#1D5BD6] shadow-sm' },
-                { id: 'lab' as const, label: 'Laboratory', Icon: Monitor,  on: 'bg-white text-amber-600 shadow-sm' },
-              ]).map(t => {
-                const active = typeFilter === t.id;
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    aria-pressed={active}
-                    onClick={() => {
-                      setTypeFilter(t.id);
-                      // Keep the form in step with the list: a Lab part can't stay open under "Lecture"
-                      if (selLoad && t.id !== 'all' && selLoad.component !== t.id) setSelLoad(null);
-                    }}
-                    title={t.id === 'all' ? 'Show all subjects' : `Show ${t.label} subjects only`}
-                    className={`inline-flex items-center justify-center gap-1.5 h-8 rounded-lg text-[13px] font-semibold transition-all duration-200 ${
-                      active ? t.on : 'text-[#64748B] hover:text-[#0B2A5B] hover:bg-white/60'
-                    }`}
-                  >
-                    {t.Icon && <t.Icon className="w-3.5 h-3.5" />}
-                    {t.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Row 3 — find a subject fast when the list is long (code, title or block) */}
-            {allRows.length > 0 && (
-              <SearchInput
-                value={subjectSearch}
-                onChange={onSubjectSearch}
-                placeholder="Find subject or block — e.g. CHEM 1, 2A"
-                className="w-full"
-              />
+            {/* All | Lecture | Laboratory — filters every load below (hidden while folded);
+                it fades in once the list has widened, and out at once when it folds */}
+            <AnimatePresence initial={false}>
+            {!selLoad && (
+            <motion.div
+              key="type-filter"
+              className="w-full sm:w-[340px]"
+              initial={reduceMotion ? false : { opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0, transition: { duration: reduceMotion ? 0 : 0.4, ease: GLIDE, delay: reduceMotion ? 0 : 0.32 } }}
+              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, transition: { duration: 0.12, ease: LEAVE } }}
+            >
+              <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-[#F1F5F9] border border-[#E2E8F0]" role="group" aria-label="Filter by type">
+                {([
+                  { id: 'all' as const, label: 'All',        Icon: null,     on: 'text-[#0B2A5B]' },
+                  { id: 'lec' as const, label: 'Lecture',    Icon: BookOpen, on: 'text-[#1D5BD6]' },
+                  { id: 'lab' as const, label: 'Laboratory', Icon: Monitor,  on: 'text-amber-600' },
+                ]).map(t => {
+                  const active = typeFilter === t.id;
+                  return (
+                    <motion.button
+                      key={t.id}
+                      type="button"
+                      aria-pressed={active}
+                      // Shown only with no subject open, so nothing open can fall outside the filter
+                      onClick={() => setTypeFilter(t.id)}
+                      title={t.id === 'all' ? 'Show all subjects' : `Show ${t.label} subjects only`}
+                      whileTap={reduceMotion ? undefined : { scale: 0.95 }}
+                      transition={{ duration: 0.22, ease: SETTLE }}
+                      className={`relative inline-flex items-center justify-center h-9 rounded-lg text-[14px] font-semibold transition-colors duration-300 ${
+                        active ? t.on : 'text-[#64748B] hover:text-[#0B2A5B] hover:bg-white/50'
+                      }`}
+                    >
+                      {active && (
+                        <motion.span
+                          layoutId="sched-type-filter"
+                          aria-hidden
+                          className="absolute inset-0 rounded-lg bg-white shadow-[0_2px_8px_-3px_rgba(11,42,91,0.25)]"
+                          transition={{ duration: reduceMotion ? 0 : 0.42, ease: SETTLE }}
+                        />
+                      )}
+                      <span className="relative inline-flex items-center gap-1.5">
+                        {t.Icon && <t.Icon className="w-4 h-4" />}
+                        {t.label}
+                      </span>
+                    </motion.button>
+                  );
+                })}
+              </div>
+            </motion.div>
             )}
+            {allRows.length > 0 && !selLoad && (
+              <motion.div
+                key="subject-search"
+                className="w-full sm:w-72"
+                initial={reduceMotion ? false : { opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0, transition: { duration: reduceMotion ? 0 : 0.4, ease: GLIDE, delay: reduceMotion ? 0 : 0.38 } }}
+                exit={reduceMotion ? { opacity: 0 } : { opacity: 0, transition: { duration: 0.12, ease: LEAVE } }}
+              >
+                <SearchInput
+                  value={subjectSearch}
+                  onChange={setSubjectSearch}
+                  placeholder="Find subject or block — e.g. CHEM 1, 2A"
+                  className="w-full"
+                />
+              </motion.div>
+            )}
+            </AnimatePresence>
           </div>
 
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto @container">
             <PageLoadTransition
               showSkeleton={showWorkloadSkeleton}
               skeleton={
                 <div className="p-4">
-                  <TableSkeleton rows={6} cols={3} />
+                  <TableSkeleton rows={6} cols={4} />
                 </div>
               }
             >
-              <>
-                <LoadSection
-                  expanded={panelExpanded}
-                  title="Regular Load"
-                  id="sched-sec-regular"
-                  flash={flashSection === 'regular'}
-                  shakeDelay={0}
-                  tone="blue"
-                  rows={byType(pendingRows)}
-                  selLoadKey={selLoad?.key}
-                  onSelect={selectLoad}
-                  onPreview={setPreviewRow}
-                  emptyMessage={noMatch ?? (typeFilter === 'all' ? 'No subjects waiting for a schedule.' : `No ${typeFilter === 'lec' ? 'Lecture' : 'Laboratory'} subjects here.`)}
-                  open={!!openSections.regular}
-                  onToggle={() => toggleSection('regular')}
-                />
-                {/* Overload / Praise only appear when this instructor actually has some
-                    (checked before the Lecture/Lab filter, so filtering never hides the section) */}
-                {overloadRows.length > 0 && (
-                <LoadSection
-                  expanded={panelExpanded}
-                  title="Overload"
-                  id="sched-sec-overload"
-                  flash={flashSection === 'overload'}
-                  shakeDelay={0.6}
-                  tone="orange"
-                  rows={byType(overloadRows)}
-                  selLoadKey={selLoad?.key}
-                  onSelect={selectLoad}
-                  onPreview={setPreviewRow}
-                  emptyMessage={noMatch ?? `No ${typeFilter === 'lec' ? 'Lecture' : 'Laboratory'} overload subjects.`}
-                  open={!!openSections.overload}
-                  onToggle={() => toggleSection('overload')}
-                />
+              <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                // A new type, or folding / unfolding: the old rows fade out, the new ones fade in
+                // a moment later — by then the list has the width they are laid out for
+                key={`${typeFilter}|${selLoad ? 'folded' : 'full'}`}
+                initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0, transition: { duration: reduceMotion ? 0 : 0.45, ease: GLIDE, delay: reduceMotion ? 0 : 0.14 } }}
+                exit={reduceMotion ? { opacity: 1 } : { opacity: 0, transition: { duration: 0.16, ease: LEAVE } }}
+                className={`${selLoad ? 'p-2.5 space-y-3' : 'p-3 sm:p-4 space-y-4'}`}
+              >
+                {regularAll.length > 0 && (
+                  <SubjectSection
+                    title="Regular Load"
+                    compact={!!selLoad}
+                    tone="blue"
+                    rows={byType(regularAll)}
+                    activeKey={selLoad?.key}
+                    onOpen={selectLoad}
+                    onPreview={openSubjectPreview}
+                    flashKey={selLoad ? null : closedKey}
+                    empty={noMatch ?? `No ${typeFilter === 'lec' ? 'Lecture' : 'Laboratory'} subjects here.`}
+                  />
                 )}
-                {praiseRows.length > 0 && (
-                <LoadSection
-                  expanded={panelExpanded}
-                  title="Praise Load"
-                  id="sched-sec-praise"
-                  flash={flashSection === 'praise'}
-                  shakeDelay={1.2}
-                  tone="gold"
-                  rows={byType(praiseRows)}
-                  selLoadKey={selLoad?.key}
-                  onSelect={selectLoad}
-                  onPreview={setPreviewRow}
-                  emptyMessage={noMatch ?? `No ${typeFilter === 'lec' ? 'Lecture' : 'Laboratory'} Praise Load subjects.`}
-                  open={!!openSections.praise}
-                  onToggle={() => toggleSection('praise')}
-                />
+                {overloadAll.length > 0 && (
+                  <SubjectSection
+                    title="Overload"
+                    compact={!!selLoad}
+                    tone="orange"
+                    rows={byType(overloadAll)}
+                    activeKey={selLoad?.key}
+                    onOpen={selectLoad}
+                    onPreview={openSubjectPreview}
+                    flashKey={selLoad ? null : closedKey}
+                    empty={noMatch ?? `No ${typeFilter === 'lec' ? 'Lecture' : 'Laboratory'} overload subjects.`}
+                  />
+                )}
+                {praiseAll.length > 0 && (
+                  <SubjectSection
+                    title="Praise Load"
+                    compact={!!selLoad}
+                    tone="gold"
+                    rows={byType(praiseAll)}
+                    activeKey={selLoad?.key}
+                    onOpen={selectLoad}
+                    onPreview={openSubjectPreview}
+                    flashKey={selLoad ? null : closedKey}
+                    empty={noMatch ?? `No ${typeFilter === 'lec' ? 'Lecture' : 'Laboratory'} Praise Load subjects.`}
+                  />
                 )}
                 {/* Praise tasks (not subjects) — nothing to schedule, listed for reference */}
-                {praise.length > 0 && (
-                <CollapsibleSection
-                  title="Praise Tasks"
-                  id={praiseRows.length > 0 ? 'sched-sec-praise-tasks' : 'sched-sec-praise'}
-                  flash={praiseRows.length === 0 && flashSection === 'praise'}
-                  count={praise.length}
-                  tone="gold"
-                  open={!!openSections['praise-tasks'] || (praiseRows.length === 0 && !!openSections.praise)}
-                  onToggle={() => toggleSection(praiseRows.length > 0 ? 'praise-tasks' : 'praise')}
-                >
-                  <div className={`rounded-xl border border-yellow-300 bg-white overflow-hidden flex flex-col shadow-sm ${panelExpanded ? '' : 'max-h-[360px]'}`}>
-                    <div className="text-[13px] font-bold text-[#64748B] uppercase tracking-wide px-4 py-2 bg-[#F8FAFC] border-b border-[#E2E8F0] flex-shrink-0 sticky top-0 z-10">Task</div>
+                {praise.length > 0 && !selLoad && (
+                  <section className="rounded-xl border border-yellow-300 bg-white overflow-hidden shadow-sm">
+                    <div className="flex items-center gap-2 px-4 py-2.5 border-b bg-yellow-50 border-yellow-300">
+                      <h3 className="text-[14px] font-bold uppercase tracking-widest text-yellow-700">Praise Tasks</h3>
+                      <span className="text-[13px] font-bold border rounded-full px-2 py-0.5 tabular-nums bg-yellow-100 text-yellow-800 border-yellow-300">{praise.length}</span>
+                    </div>
                     <div className="overflow-y-auto flex-1 overscroll-contain">
                       {praise.map(p => (
                         <div key={p.id} className="px-4 py-3 border-b border-[#F1F5F9] last:border-0">
@@ -2719,542 +2856,430 @@ export default function SchedulingClient() {
                           <div className="text-xs text-[#64748B] mt-0.5">{Number(p.equivalent_units ?? p.units ?? 0).toFixed(2)} units</div>
                         </div>
                       ))}
-                    </div>
-                  </div>
-                </CollapsibleSection>
+                    </div>                  </section>
                 )}
-                <LoadSection
-                  expanded={panelExpanded}
-                  title="Scheduled"
-                  id="sched-sec-scheduled"
-                  flash={flashSection === 'scheduled'}
-                  tone="green"
-                  rows={byType(scheduledRows)}
-                  selLoadKey={selLoad?.key}
-                  onSelect={selectLoad}
-                  onPreview={setPreviewRow}
-                  emptyMessage={noMatch ?? 'Nothing scheduled yet.'}
-                  open={!!openSections.scheduled}
-                  onToggle={() => toggleSection('scheduled')}
-                />
                 {loads.length === 0 && !fetchingW && (
                   <div className="flex flex-col items-center justify-center py-14 px-4 text-center">
-                    <p className="text-[13px] text-[#64748B]">No subjects assigned yet.</p>
+                    <p className="text-[15px] text-[#64748B]">No subjects assigned yet.</p>
                   </div>
                 )}
-              </>
+              </motion.div>
+              </AnimatePresence>
             </PageLoadTransition>
           </div>
         </div>
 
-        {/* ── RIGHT column: instructor header on top, scheduling panel below ── */}
-        <div className={`${selLoad ? 'flex' : 'hidden lg:flex'} flex-1 min-w-0 lg:min-w-[560px] min-h-0 flex-col gap-3`}>
-          <div className="hidden lg:block">
-            {/* ── Header / Breadcrumb ─────────────────────── */}
-            <div className="flex-shrink-0 bg-white border border-[#E2E8F0] rounded-2xl px-4 sm:px-6 py-3 shadow-sm">
-              <div className="flex items-center justify-between gap-3 min-w-0">
-                <div className="flex items-center gap-2 min-w-0">
-                  <button type="button" onClick={goBack} className="text-[#64748B] hover:text-[#0B2A5B] transition disabled:opacity-50 disabled:cursor-not-allowed">
-                    <ChevronLeft className="w-5 h-5" />
-                  </button>
-                  <div className="flex items-center gap-1.5 text-sm text-[#64748B] min-w-0">
-                    <span onClick={goBack} className="text-[#1D5BD6] hover:text-[#164BB5] cursor-pointer font-medium">
-                      {fromMsId ? 'Master Schedule' : 'Faculty'}
-                    </span>
-                    <ChevronRight className="w-4 h-4 flex-shrink-0" />
-                    <span className="text-[#0B2A5B] font-semibold truncate">{selFaculty?.name}</span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <button
-                    type="button"
-                    onClick={openTimetable}
-                    className="qr-glow-btn inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-semibold"
-                  >
-                    <CalendarDays className="w-4 h-4" />
-                    View Timetable
-                  </button>
-                  <button
-                    type="button"
-                    onClick={fetchWorkload}
-                    title="Refresh"
-                    className="p-2 rounded-lg hover:bg-[#F1F5F9] text-[#64748B] hover:text-[#0B2A5B] transition border border-transparent hover:border-[#E2E8F0]"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Context strip */}
-              <div className="flex items-center gap-2 mt-2.5 px-3.5 py-2.5 rounded-xl bg-[#EFF6FF] border border-[#BFDBFE] flex-wrap text-sm">
-                <CalendarDays className="w-4 h-4 text-[#1D5BD6] flex-shrink-0" />
-                <span className="font-bold text-[#1D5BD6]">{semester || '—'} · {schoolYear || '—'}</span>
-                {selFaculty && (
-                  <>
-                    <span className="text-[#93C5FD]">•</span>
-                    <EmploymentBadge status={selFaculty.employment_status} />
-                    {selFaculty.specialization && (
-                      <>
-                        <span className="text-[#93C5FD]">•</span>
-                        <span className="text-[#1D5BD6] truncate">{selFaculty.specialization}</span>
-                      </>
-                    )}
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-          {/* ── CENTER: Scheduling Panel ───────────────
-              Hidden on phones until a subject is selected (see LEFT panel
-              note) — once visible it gets the full screen width instead of
-              being squeezed next to the list. lg:min-w keeps it from being
-              crushed by the sidebar once both show side by side on desktop. */}
-          <div className={`flex flex-1 min-h-0 min-w-0 overflow-y-auto flex-col bg-[#F8FAFC] rounded-2xl border border-[#E2E8F0] shadow-sm`}>
-            {selLoad && (
-              <button
-                type="button"
-                onClick={() => setSelLoad(null)}
-                className="lg:hidden flex-shrink-0 flex items-center gap-1.5 px-4 py-3 text-[13px] font-semibold text-[#1D5BD6] border-b border-[#E2E8F0] bg-white"
-              >
-                <ChevronLeft className="w-4 h-4" /> Back to subject list
-              </button>
-            )}
-            {!selLoad ? (
-              <div className="flex flex-col items-center justify-center flex-1 text-center px-8 py-20">
-                <h3 className="text-base font-semibold text-[#0B2A5B]">No subject selected.</h3>
-              </div>
-            ) : panelSwitching ? (
-              <div className="p-4 space-y-3 max-w-6xl" role="status" aria-live="polite" aria-label="Loading subject">
-                {/* Subject header skeleton */}
-                <div className="bg-white rounded-xl border border-[#E2E8F0] overflow-hidden shadow-sm">
-                  <div className="px-4 py-2 border-b border-[#E2E8F0] flex items-center gap-2.5">
-                    <Skeleton className="w-8 h-8 rounded-lg flex-shrink-0" />
-                    <div className="flex-1 min-w-0 space-y-1.5">
-                      <Skeleton className="h-4 w-40 rounded" />
-                      <Skeleton className="h-3 w-56 rounded" />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-3 divide-x divide-[#E2E8F0]">
-                    {Array.from({ length: 3 }, (_, i) => (
-                      <div key={i} className="px-4 py-2 flex flex-col items-center gap-1.5">
-                        <Skeleton className="h-3 w-16 rounded" />
-                        <Skeleton className="h-4 w-10 rounded" />
-                      </div>
-                    ))}
-                  </div>
-                  <div className="px-4 py-1.5 bg-[#F8FAFC] border-t border-[#E2E8F0]">
-                    <Skeleton className="h-3 w-72 rounded" />
-                  </div>
-                </div>
-
-                {/* Sessions card skeleton */}
-                <div className="bg-white rounded-xl border border-[#E2E8F0] p-3 shadow-sm flex items-center gap-3">
-                  <Skeleton className="h-4 w-20 rounded" />
-                  <Skeleton className="h-7 w-24 rounded-lg" />
-                </div>
-
-                {/* Session schedule table skeleton */}
-                <TableSkeleton rows={2} cols={6} />
-              </div>
-            ) : (
-              <div className="p-4 space-y-3 max-w-6xl">
-
-                {/* Subject — what is being scheduled, in one card: identity left, totals right */}
-                <div className={`bg-white rounded-xl border border-[#E2E8F0] shadow-sm overflow-hidden border-l-[4px] ${
-                  selLoad.component === 'lec' ? 'border-l-[#1D5BD6]' : 'border-l-amber-500'
-                }`}>
-                  <div className="px-4 sm:px-5 py-4 flex flex-col md:flex-row md:items-center gap-4">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-lg font-bold text-[#0B2A5B] leading-tight">{selLoad.load.subject_code}</span>
-                        {selLoad.load.block_name && (
-                          <span
-                            className="text-[12px] font-bold px-2 py-0.5 rounded-md bg-[#1E4FB8] leading-tight"
-                            // White set inline — the light-mode rule repaints `text-white` as dark ink
-                            style={{ color: '#FFFFFF' }}
-                            title={`Block ${selLoad.load.block_name}`}
-                          >
-                            {blockCode(selLoad.load.year_level, selLoad.load.block_name)}
-                          </span>
-                        )}
-                        <span className={`inline-flex items-center gap-1 text-[12px] font-bold px-2 py-0.5 rounded-full border ${
-                          selLoad.component === 'lec'
-                            ? 'bg-[#EFF6FF] text-[#1D5BD6] border-[#BFDBFE]'
-                            : 'bg-amber-50 text-amber-700 border-amber-200'
-                        }`}>
-                          {selLoad.component === 'lec' ? <BookOpen className="w-3.5 h-3.5" /> : <Monitor className="w-3.5 h-3.5" />}
-                          {selLoad.label === 'Lec' ? 'Lecture' : 'Laboratory'}
+        {/* ── Schedule editor: a narrow column on the right, fields one under another ── */}
+        {/* popLayout: a closing editor leaves the row at once and fades out on top,
+            so the list unfolds smoothly instead of squeezing it. It is out of sight by 0.42 s
+            but only removed at 0.85 s, once everything else has settled (removing the large
+            form mid-glide drops a frame); ExitClickGuard lets clicks through meanwhile */}
+        <AnimatePresence initial={false} mode="popLayout">
+          {selLoad && (
+            <motion.aside
+              key="editor"
+              initial={reduceMotion ? false : { opacity: 0, x: 40, scale: 0.985 }}
+              animate={{ opacity: 1, x: 0, scale: 1, transition: { duration: reduceMotion ? 0 : 0.55, ease: SETTLE } }}
+              exit={reduceMotion ? { opacity: 0 } : {
+                opacity: 0, x: 36, scale: 0.985,
+                transition: { duration: 0.85, ease: FLOW, opacity: { duration: 0.42, ease: FLOW } },
+              }}
+              style={{ transformOrigin: '100% 50%' }}
+              aria-label="Schedule editor"
+              className="flex w-full lg:w-auto lg:flex-1 min-h-0 min-w-0 flex-col rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] shadow-sm overflow-hidden"
+            >
+              <ExitClickGuard />
+              {/* What is being scheduled, and the way out */}
+              <div className={`flex-shrink-0 px-4 py-3 border-b border-[#E2E8F0] bg-white border-l-[4px] ${
+                selLoad.component === 'lec' ? 'border-l-[#1D5BD6]' : 'border-l-amber-500'
+              }`}>
+                <div className="flex items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-lg font-bold text-[#0B2A5B] leading-tight">{selLoad.load.subject_code}</span>
+                      {selLoad.load.block_name && (
+                        <span
+                          className="text-[13px] font-bold px-2 py-0.5 rounded-md bg-[#1E4FB8] leading-tight"
+                          // White set inline — the light-mode rule repaints `text-white` as dark ink
+                          style={{ color: '#FFFFFF' }}
+                          title={`Block ${selLoad.load.block_name}`}
+                        >
+                          {blockCode(selLoad.load.year_level, selLoad.load.block_name)}
                         </span>
-                        {selLoad.splitLabel && (
-                          <span className={`text-[12px] font-bold px-2 py-0.5 rounded-full border ${
-                            selLoad.splitLabel === 'Overload' ? 'bg-orange-50 text-orange-700 border-orange-200'
-                              : selLoad.splitLabel === 'Praise' ? 'bg-yellow-50 text-yellow-800 border-yellow-300'
-                              : 'bg-slate-50 text-slate-500 border-slate-200'
-                          }`}>{selLoad.splitLabel}</span>
-                        )}
-                      </div>
-                      <div className="mt-1 text-[14px] text-[#475569] leading-snug truncate" title={selLoad.load.subject_name}>{selLoad.load.subject_name}</div>
-                      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-[#64748B]">
-                        {[selFaculty?.name, selLoad.load.program_code, selLoad.load.year_level, selLoad.load.block_semester, `${toNum(selLoad.componentUnits).toFixed(2)} units`]
-                          .filter(Boolean)
-                          .map((t, i) => (
-                            <Fragment key={i}>
-                              {i > 0 && <span className="text-[#CBD5E1]" aria-hidden>•</span>}
-                              <span className={i === 0 && selFaculty?.name ? 'font-semibold text-[#0B2A5B]' : undefined}>{t}</span>
-                            </Fragment>
-                          ))}
-                      </div>
-                      {/* Lec + Lab subject: both parts' rooms side by side — one room for both where it fits */}
-                      {partRooms && (
-                        <div className="mt-2.5 flex flex-wrap items-center gap-2">
-                          {(['lec', 'lab'] as const).map(part => {
-                            const p = partRooms.parts[part];
-                            const editing = part === selLoad.component;
-                            return (
-                              <span
-                                key={part}
-                                className={`inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border text-[13px] ${
-                                  part === 'lec' ? 'bg-[#EFF6FF] border-[#BFDBFE] text-[#1D5BD6]' : 'bg-amber-50 border-amber-200 text-amber-700'
-                                } ${editing ? 'ring-2 ring-offset-1 ring-[#1D5BD6]/25' : ''}`}
-                                title={editing ? 'The part you are scheduling' : `Saved ${part === 'lec' ? 'Lecture' : 'Laboratory'} room`}
-                              >
-                                {part === 'lec' ? <BookOpen className="w-3.5 h-3.5" /> : <Monitor className="w-3.5 h-3.5" />}
-                                <span className="font-bold">{part === 'lec' ? 'Lec:' : 'Lab:'}</span>
-                                <span className="font-semibold text-[#0B2A5B]">
-                                  {p.names.length ? p.names.join(', ') : p.scheduled ? 'No room yet' : 'Not scheduled yet'}
-                                </span>
-                              </span>
-                            );
-                          })}
-                          {partRooms.same && <span className="text-[12.5px] font-semibold text-emerald-700">Same room</span>}
-                          {partRooms.different && (oneRoom
-                            ? <span className="text-[12.5px] font-semibold text-red-700">Must use one room</span>
-                            : <span className="text-[12.5px] font-semibold text-amber-700">Different rooms</span>)}
-                        </div>
                       )}
-                    </div>
-                    {/* Totals for this part */}
-                    <div className="grid grid-cols-3 gap-2 md:w-[330px] flex-shrink-0">
-                      {[
-                        { label: 'Total', value: fmtHrs(toNum(selLoad.componentHours)) },
-                        { label: 'Sessions', value: String(sessions.length || manualCount) },
-                        {
-                          label: 'Each',
-                          value: sessions.length === 0 ? '—'
-                            : sessions.every(s => Math.abs(toNum(s.hours) - toNum(sessions[0].hours)) < 0.001) ? fmtHrs(toNum(sessions[0].hours)) : 'Varies',
-                        },
-                      ].map(({ label, value }) => (
-                        <div key={label} className="rounded-lg bg-[#F8FAFC] border border-[#E8EEF6] px-2.5 py-2 text-center">
-                          <div className="text-[11px] font-semibold uppercase tracking-wide text-[#64748B]">{label}</div>
-                          <div className="text-[15px] font-bold text-[#0B2A5B] tabular-nums mt-0.5 whitespace-nowrap">{value}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                {error && (
-                  <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-xl text-[13px] flex gap-2">
-                    <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" /> {error}
-                  </div>
-                )}
-                {success && (
-                  <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-2 rounded-xl text-[13px] flex gap-2">
-                    <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" /> {success}
-                  </div>
-                )}
-
-                {/* Meeting days (the semester's day combinations) and sessions per week */}
-                <div className="bg-white rounded-xl border border-[#E2E8F0] p-4 shadow-sm space-y-3">
-                  <div className="flex flex-col sm:flex-row sm:items-end gap-4 sm:gap-10">
-                  {dayCombos.length > 0 && (
-                    <div className="min-w-0">
-                    <StepLabel>Meeting days</StepLabel>
-                    <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Day combination">
-                      {dayCombos.map(c => {
-                        const on = currentCombo === c;
-                        // Major Lec + Lab: only its other part's days
-                        const locked = !!pairDays && c.days.join() !== pairDays.join();
-                        return (
-                          <motion.button
-                            key={c.id}
-                            type="button"
-                            onClick={() => applyCombination(c.days)}
-                            disabled={locked}
-                            whileTap={reduceMotion || locked ? undefined : { scale: 0.95 }}
-                            aria-pressed={on}
-                            title={locked ? `Its ${otherPartName} is on ${pairDaysText} — both parts use the same days` : daysLabel(c.days)}
-                            className={`relative h-10 min-w-[56px] px-4 rounded-lg border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                              on ? 'border-[#0B2A5B]' : 'bg-white border-[#D6E0EF] text-[#0B2A5B] hover:border-[#9DB8E8] hover:bg-[#F8FAFE] disabled:hover:border-[#D6E0EF] disabled:hover:bg-white'
-                            }`}
-                            style={on ? { color: '#FFFFFF' } : undefined}
-                          >
-                            {on && (
-                              <motion.span layoutId="sched-day-combo" aria-hidden className="absolute inset-[-1px] rounded-lg bg-[#0B2A5B]"
-                                transition={{ duration: reduceMotion ? 0 : 0.3, ease: [0.4, 0, 0.2, 1] }} />
-                            )}
-                            <span className="relative">{daysCode(c.days)}</span>
-                          </motion.button>
-                        );
-                      })}
-                    </div>
-                    {pairDays && (
-                      <p className="mt-1.5 text-xs font-medium text-[#475569]">Same days as its {otherPartName}: <b className="text-[#0B2A5B]">{pairDaysText}</b> · times may differ</p>
-                    )}
-                    </div>
-                  )}
-                  <div>
-                    <StepLabel>Sessions per week</StepLabel>
-                    {/* One joined stepper: − count + */}
-                    <div className="inline-flex items-stretch h-10 rounded-lg border border-[#D6E0EF] bg-white overflow-hidden">
-                      <motion.button type="button" onClick={() => setManualCount(c => Math.max(1, c - 1))}
-                        whileTap={reduceMotion ? undefined : { scale: 0.92 }}
-                        aria-label="Fewer sessions" title="Fewer sessions"
-                        className="w-10 flex items-center justify-center text-[#475569] hover:bg-[#F1F5F9] transition-colors text-lg font-bold">−</motion.button>
-                      <span className="w-12 flex items-center justify-center text-base font-bold text-[#0B2A5B] border-x border-[#E2E8F0] tabular-nums" aria-live="polite">
-                        {sessions.length > 0 ? sessions.length : manualCount}
+                      <span className={`inline-flex items-center gap-1.5 text-[13px] font-bold px-2 py-0.5 rounded-full border ${
+                        selLoad.component === 'lec' ? 'bg-[#EFF6FF] text-[#1D5BD6] border-[#BFDBFE]' : 'bg-amber-50 text-amber-700 border-amber-200'
+                      }`}>
+                        {selLoad.component === 'lec' ? <BookOpen className="w-3.5 h-3.5" /> : <Monitor className="w-3.5 h-3.5" />}
+                        {selLoad.label === 'Lec' ? 'Lecture' : 'Laboratory'}
                       </span>
-                      <motion.button type="button" onClick={() => setManualCount(c => c + 1)}
-                        whileTap={reduceMotion ? undefined : { scale: 0.92 }}
-                        aria-label="More sessions" title="More sessions"
-                        className="w-10 flex items-center justify-center text-[#475569] hover:bg-[#F1F5F9] transition-colors text-lg font-bold">+</motion.button>
-                    </div>
-                  </div>
-                  </div>
-                </div>
-
-                {/* SESSION TABLE */}
-                {sessions.length > 0 && (
-                  <div className="bg-white rounded-xl border border-[#E2E8F0] overflow-hidden shadow-sm">
-                    <div className="px-4 py-3 border-b border-[#E2E8F0] flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-                      <StepLabel className="!mb-0">Session schedule</StepLabel>
-                      {oneRoom ? (
-                        <span className="text-xs text-[#64748B]">
-                          {sessions.length > 1 ? 'Session 1’s time fills the others · ' : ''}
-                          {lockedRoom
-                            ? <>Major subject — same room as its {otherPartName}: <b className="text-[#0B2A5B]">{lockedRoom.room_name}</b></>
-                            : otherPartSessionMin
-                              ? <>Major subject — one room for both parts. Only rooms with {otherPartLength} still free for its {otherPartName} on the same days are shown.</>
-                              : 'Major subject — one room for every Lecture and Laboratory session.'}
-                        </span>
-                      ) : sessions.length > 1 && (
-                        <span className="text-xs text-[#64748B]">Session 1&apos;s time and room fill the others — change any row on its own.</span>
+                      {selLoad.splitLabel && (
+                        <span className={`text-[13px] font-bold px-2 py-0.5 rounded-full border ${
+                          selLoad.splitLabel === 'Overload' ? 'bg-orange-50 text-orange-700 border-orange-200'
+                            : selLoad.splitLabel === 'Praise' ? 'bg-yellow-50 text-yellow-800 border-yellow-300'
+                            : 'bg-slate-50 text-slate-500 border-slate-200'
+                        }`}>{selLoad.splitLabel}</span>
                       )}
                     </div>
+                    <div className="mt-1 text-[14px] text-[#475569] leading-snug truncate" title={selLoad.load.subject_name}>
+                      {[selLoad.load.program_code, selLoad.load.subject_name].filter(Boolean).join(' · ')}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setPreviewWhole(false); setPreviewRow(selLoad); }}
+                    title="See everyone teaching this subject"
+                    aria-label={`View schedule details for ${selLoad.load.subject_code}`}
+                    className="flex-shrink-0 w-9 h-9 rounded-lg border border-[#BFD3F5] bg-[#EFF5FF] text-[#1D5BD6] hover:bg-[#DCE8FC] flex items-center justify-center transition"
+                  >
+                    <Eye className="w-4 h-4" />
+                  </button>
+                  <motion.button
+                    type="button"
+                    onClick={() => closeEditor(selLoad.key)}
+                    title="Close"
+                    aria-label="Close the schedule editor"
+                    whileTap={reduceMotion ? undefined : { scale: 0.9 }}
+                    transition={{ duration: 0.22, ease: SETTLE }}
+                    className="group/x flex-shrink-0 w-9 h-9 rounded-lg border border-[#E2E8F0] bg-white text-[#475569] hover:bg-[#F1F5F9] hover:text-[#0B2A5B] flex items-center justify-center transition-colors duration-300"
+                  >
+                    <X className="w-5 h-5 transition-transform duration-300 ease-out group-hover/x:rotate-90" />
+                  </motion.button>
+                </div>
+              </div>
 
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-[13px]">
-                        <thead>
-                          <tr className="bg-[#F8FAFC] text-[11px] font-bold text-[#64748B] uppercase tracking-wider border-b border-[#E2E8F0]">
-                            <th className="px-4 py-2.5 text-left w-32">Session</th>
-                            <th className="px-3 py-2.5 text-left">Day</th>
-                            <th className="px-3 py-2.5 text-left">Time</th>
-                            <th className="px-3 py-2.5 text-left">Room</th>
-                            <th className="px-3 py-2.5 w-12"><span className="sr-only">Remove</span></th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[#F1F5F9]">
-                          {sessions.map((sess, i) => {
-                            const rowConflicts = sessionConflicts.filter(c => c.sessionId === sess.id);
-                            const hasRowConflict = rowConflicts.length > 0;
+              {/* Days, sessions and each session's day / time / room — one under another */}
+              <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3 @container">
+                {panelSwitching ? (
+                <div className="space-y-3" role="status" aria-live="polite" aria-label="Loading subject">
+                  {/* Subject header skeleton */}
+                  <div className="bg-white rounded-xl border border-[#E2E8F0] overflow-hidden shadow-sm px-4 sm:px-5 py-4 space-y-2">
+                    <Skeleton className="h-5 w-48 rounded" />
+                    <Skeleton className="h-4 w-64 rounded" />
+                    <Skeleton className="h-4 w-56 rounded" />
+                  </div>
+
+                  {/* Sessions card skeleton */}
+                  <div className="bg-white rounded-xl border border-[#E2E8F0] p-3 shadow-sm flex items-center gap-3">
+                    <Skeleton className="h-4 w-20 rounded" />
+                    <Skeleton className="h-7 w-24 rounded-lg" />
+                  </div>
+
+                  {/* Session schedule table skeleton */}
+                  <TableSkeleton rows={2} cols={6} />
+                </div>
+                ) : (
+                  <>
+                    {/* Lec + Lab subject: both parts' rooms side by side — one room for both where it fits */}
+                    {partRooms && (
+                      <div className="flex flex-col items-stretch @lg:flex-row @lg:flex-wrap @lg:items-center gap-2">
+                        {(['lec', 'lab'] as const).map(part => {
+                          const p = partRooms.parts[part];
+                          const editing = part === selLoad.component;
+                          return (
+                            <span
+                              key={part}
+                              className={`flex items-center gap-2 min-h-10 px-3 py-1.5 rounded-lg border text-[15px] ${
+                                part === 'lec' ? 'bg-[#EFF6FF] border-[#BFDBFE] text-[#1D5BD6]' : 'bg-amber-50 border-amber-200 text-amber-700'
+                              } ${editing ? 'ring-2 ring-offset-1 ring-[#1D5BD6]/25' : ''}`}
+                              title={editing ? 'The part you are scheduling' : `Saved ${part === 'lec' ? 'Lecture' : 'Laboratory'} room`}
+                            >
+                              {part === 'lec' ? <BookOpen className="w-4 h-4" /> : <Monitor className="w-4 h-4" />}
+                              <span className="font-bold">{part === 'lec' ? 'Lecture' : 'Laboratory'}</span>
+                              <span className="font-semibold text-[#0B2A5B]">
+                                {p.names.length ? `in ${p.names.join(', ')}`
+                                  : !editing && partRooms.otherDraft ? `· ${partRooms.otherDraft} (not saved yet)`
+                                  : p.scheduled ? '· no room yet' : '· not scheduled yet'}
+                              </span>
+                            </span>
+                          );
+                        })}
+                        {partRooms.same && <span className="text-[14px] font-semibold text-emerald-700">Same room</span>}
+                        {partRooms.different && (oneRoom
+                          ? <span className="text-[14px] font-semibold text-red-700">Must use one room</span>
+                          : <span className="text-[14px] font-semibold text-amber-700">Different rooms</span>)}
+                      </div>
+                    )}
+                    {error && (
+                      <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-xl text-[13px] flex gap-2">
+                        <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" /> {error}
+                      </div>
+                    )}
+                    {success && (
+                      <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-2 rounded-xl text-[13px] flex gap-2">
+                        <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" /> {success}
+                      </div>
+                    )}
+
+
+                    {/* Meeting days and sessions per week, side by side */}
+                    <div className="grid gap-3 @lg:grid-cols-[minmax(0,1fr)_auto] items-stretch">
+                    {/* Meeting days (the semester's day combinations) */}
+                    {dayCombos.length > 0 && (
+                      <div className="bg-white rounded-xl border border-[#E2E8F0] p-3 shadow-sm">
+                        <StepLabel>Meeting days</StepLabel>
+                        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Day combination">
+                          {dayCombos.map(c => {
+                            const on = currentCombo === c;
+                            // Major Lec + Lab: only its other part's days
+                            const pairLocked = !!pairDays && c.days.join() !== pairDays.join();
+                            // More days than sessions allowed (e.g. MWF): can't be used
+                            const tooMany = c.days.length > MAX_SESSIONS;
+                            const locked = pairLocked || tooMany;
                             return (
-                            <tr key={sess.id} className={`transition-colors ${hasRowConflict ? 'bg-red-50 shadow-[inset_3px_0_0_#EF4444]' : 'hover:bg-[#F8FAFC]'}`}>
-                              {/* Session number and its length */}
-                              <td className="px-4 py-3">
-                                <div className="flex items-center gap-2.5">
-                                  <span className={`w-7 h-7 rounded-full flex items-center justify-center text-[13px] font-bold flex-shrink-0 ${
-                                    hasRowConflict ? 'bg-red-100 text-red-700' : 'bg-[#EAF1FD] text-[#1D5BD6]'
-                                  }`}>{i + 1}</span>
-                                  <div className="leading-tight">
-                                    <div className="text-[13px] font-semibold text-[#334155] whitespace-nowrap tabular-nums">{fmtHrs(toNum(sess.hours))}</div>
-                                    {hasRowConflict && (
-                                      <div className="mt-0.5 inline-flex items-center gap-1 text-[11px] font-semibold text-red-600">
-                                        <AlertCircle className="w-3 h-3" /> Conflict
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              </td>
-                              <td className="px-3 py-3">
-                                <DayPicker
-                                  value={sess.day}
-                                  onChange={d => updateSession(sess.id, 'day', d)}
-                                  days={WEEK_DAYS.filter(d => !allowedDays || allowedDays.has(d)).map(d => {
-                                    const other = sessions.findIndex(o => o.id !== sess.id && o.day === d);
-                                    return {
-                                      day: d,
-                                      classes: instructorBusy.get(d)?.length ?? 0,
-                                      freeStarts: freeStartTimes({ ...sess, day: d }).length,
-                                      accent: timetableLayout.toneOf(d).bar,
-                                      usedBy: other >= 0 ? `Session ${other + 1}` : undefined,
-                                    };
-                                  })}
-                                />
-                              </td>
-                              <td className="px-3 py-3">
-                                <div className="flex items-center gap-2">
-                                  {/* Only times the instructor is free on this day can be picked;
-                                      busy ones stay visible (struck through) so gaps make sense. */}
-                                  <TimeSlotPicker
-                                    value={sess.start_time}
-                                    onChange={v => updateSession(sess.id, 'start_time', v)}
-                                    slots={slotConflicts(sess).map(x => ({ value: x.value, free: !x.conflict, conflict: x.conflict || undefined }))}
-                                    busy={dayBusy(sess)}
-                                    breaks={[LUNCH]}
-                                    durationMin={Math.round(toNum(sess.hours) * 60)}
-                                    day={sess.day}
-                                  />
-                                  <span className="text-[#CBD5E1] text-[13px]">→</span>
-                                  <span className="text-[#475569] text-xs font-semibold whitespace-nowrap flex items-center gap-1">
-                                    <Clock className="w-3.5 h-3.5 text-[#94A3B8]" /> {fmt12(sess.end_time)}
-                                  </span>
-                                </div>
-                              </td>
-                              <td className="px-3 py-3">
-                                <RoomPicker
-                                  value={sess.room_id}
-                                  onChange={v => updateSession(sess.id, 'room_id', v)}
-                                  rooms={activeRooms
-                                    .map(r => {
-                                      // Major subject: one room for both parts, so a room is only offered
-                                      // when its other part still fits there on every session day
-                                      const misfit = otherPartSessionMin ? sessions.find(s => !otherPartFits(s, r.id)) : undefined;
-                                      return { r, misfit };
-                                    })
-                                    // Rooms that can't take both parts aren't shown — unless already picked (then say why)
-                                    .filter(({ r, misfit }) => !misfit || String(r.id) === sess.room_id)
-                                    .map(({ r, misfit }) => ({
-                                      ...r,
-                                      busyWith: roomBusyWith(sess, r.id) || otherPartBusyWith(r.id)
-                                        || (misfit ? otherPartRoomClash(misfit.day) : '') || null,
-                                    }))}
-                                  preferred={pairRoom ? { id: pairRoom.id, label: selLoad.component === 'lab' ? "Lecture's room" : "Laboratory's room" } : null}
-                                  component={selLoad.component}
-                                  day={sess.day}
-                                  timeLabel={sess.start_time ? `${fmt12(sess.start_time)} – ${fmt12(sess.end_time)}` : undefined}
-                                  warnEmpty={selLoad.component === 'lab'}
-                                />
-                              </td>
-                              <td className="px-3 py-3 text-center">
-                                <motion.button type="button" onClick={() => removeSession(sess.id)}
-                                  whileTap={reduceMotion ? undefined : { scale: 0.9 }}
-                                  aria-label={`Remove session ${i + 1}`} title={`Remove session ${i + 1}`}
-                                  className="w-9 h-9 rounded-lg border border-transparent text-[#94A3B8] hover:text-red-600 hover:bg-red-50 hover:border-red-200 flex items-center justify-center transition-colors mx-auto">
-                                  <Trash2 className="w-4 h-4" />
-                                </motion.button>
-                              </td>
-                            </tr>
+                              <motion.button
+                                key={c.id}
+                                type="button"
+                                onClick={() => applyCombination(c.days)}
+                                disabled={locked}
+                                whileTap={reduceMotion || locked ? undefined : { scale: 0.95 }}
+                                aria-pressed={on}
+                                title={pairLocked ? `Its ${otherPartName} is on ${pairDaysText} — both parts use the same days`
+                                  : tooMany ? `${daysLabel(c.days)} — up to ${MAX_SESSIONS} sessions a week` : daysLabel(c.days)}
+                                className={`relative h-10 min-w-[56px] px-4 rounded-lg border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                                  on ? 'border-[#0B2A5B]' : 'bg-white border-[#D6E0EF] text-[#0B2A5B] hover:border-[#9DB8E8] hover:bg-[#F8FAFE] disabled:hover:border-[#D6E0EF] disabled:hover:bg-white'
+                                }`}
+                                style={on ? { color: '#FFFFFF' } : undefined}
+                              >
+                                {on && (
+                                  <motion.span layoutId="sched-day-combo" aria-hidden className="absolute inset-[-1px] rounded-lg bg-[#0B2A5B]"
+                                    transition={{ duration: reduceMotion ? 0 : 0.3, ease: [0.4, 0, 0.2, 1] }} />
+                                )}
+                                <span className="relative">{daysCode(c.days)}</span>
+                              </motion.button>
                             );
                           })}
-                        </tbody>
-                      </table>
+                        </div>
+                        {pairDays && (
+                          <p className="mt-1.5 text-xs font-medium text-[#475569]">Same days as its {otherPartName}: <b className="text-[#0B2A5B]">{pairDaysText}</b> · times may differ</p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Sessions per week */}
+                    <div className="bg-white rounded-xl border border-[#E2E8F0] p-3 shadow-sm">
+                      <StepLabel>Sessions per week</StepLabel>
+                      {/* One joined stepper: − count + — the count can also be typed (1 to MAX_SESSIONS) */}
+                      <div className="inline-flex items-stretch h-10 rounded-lg border border-[#D6E0EF] bg-white overflow-hidden">
+                        <motion.button type="button" onClick={() => setSessionCount(shownCount - 1)}
+                          disabled={shownCount <= 1}
+                          whileTap={reduceMotion || shownCount <= 1 ? undefined : { scale: 0.92 }}
+                          aria-label="Fewer sessions" title="Fewer sessions"
+                          className="w-10 flex items-center justify-center text-[#475569] hover:bg-[#F1F5F9] transition-colors text-lg font-bold disabled:opacity-35 disabled:cursor-not-allowed disabled:hover:bg-transparent">−</motion.button>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          aria-label={`Sessions per week (1 to ${MAX_SESSIONS})`}
+                          title={`Type 1 to ${MAX_SESSIONS} — up to ${MAX_SESSIONS} sessions a week`}
+                          value={countText ?? String(shownCount)}
+                          onFocus={e => e.currentTarget.select()}
+                          onChange={e => {
+                            // The last digit typed wins; past the limit it stops at the limit
+                            const d = e.target.value.replace(/\D/g, '').slice(-1);
+                            if (!d) { setCountText(''); return; }
+                            setCountText(null);
+                            setSessionCount(Number(d));
+                          }}
+                          onBlur={() => setCountText(null)}
+                          onKeyDown={e => {
+                            if (e.key === 'ArrowUp') { e.preventDefault(); setSessionCount(shownCount + 1); }
+                            if (e.key === 'ArrowDown') { e.preventDefault(); setSessionCount(shownCount - 1); }
+                            if (e.key === 'Enter') e.currentTarget.blur();
+                          }}
+                          className="w-12 text-center text-base font-bold text-[#0B2A5B] border-x border-[#E2E8F0] tabular-nums bg-white focus:outline-none focus:bg-[#EFF6FF]"
+                        />
+                        <motion.button type="button" onClick={() => setSessionCount(shownCount + 1)}
+                          disabled={shownCount >= MAX_SESSIONS}
+                          whileTap={reduceMotion || shownCount >= MAX_SESSIONS ? undefined : { scale: 0.92 }}
+                          aria-label="More sessions" title={shownCount >= MAX_SESSIONS ? `Up to ${MAX_SESSIONS} sessions a week` : 'More sessions'}
+                          className="w-10 flex items-center justify-center text-[#475569] hover:bg-[#F1F5F9] transition-colors text-lg font-bold disabled:opacity-35 disabled:cursor-not-allowed disabled:hover:bg-transparent">+</motion.button>
+                      </div>
+                      {oneRoom && <p className="mt-2 text-xs text-[#64748B] leading-snug max-w-[16rem]">
+                        {lockedRoom
+                          ? <>Major subject — same room as its {otherPartName}: <b className="text-[#0B2A5B]">{lockedRoom.room_name}</b></>
+                          : otherPartSessionMin
+                            ? <>Major subject — one room for both parts. A room needs {otherPartLength} free for its {otherPartName} on the same days.</>
+                            : 'Major subject — one room for every Lecture and Laboratory session.'}
+                      </p>}
                     </div>
-                  </div>
-                )}
-
-                {selLoad.isScheduled && (
-                  <div className="bg-[#EFF6FF] border border-[#BFDBFE] text-[#1D5BD6] px-4 py-3 rounded-xl text-[13px] flex items-center gap-2">
-                    <RefreshCw className="w-4 h-4 flex-shrink-0" />
-                    Rescheduling {selLoad.label === 'Lab' ? 'Laboratory' : 'Lecture'} — saving will replace the existing {selLoad.label === 'Lab' ? 'Laboratory' : 'Lecture'} schedule only.
-                  </div>
-                )}
-
-                {hasLabRoomMissing && sessions.length > 0 && (
-                  <div className="bg-amber-50 border border-amber-200 text-amber-700 px-4 py-3 rounded-xl text-[13px] flex items-center gap-2">
-                    <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-                    No room assigned yet. You can assign a room later.
-                  </div>
-                )}
-
-                {sessionConflicts.length > 0 && (
-                  <div className="bg-red-50 border border-red-200 rounded-xl p-4 space-y-3">
-                    <div className="flex items-center gap-2 text-[13px] font-bold text-red-700">
-                      <XCircle className="w-4 h-4 flex-shrink-0" />
-                      {uniqueConflictCount} Conflict{uniqueConflictCount !== 1 ? 's' : ''} Detected — resolve before saving
                     </div>
-                    {(['instructor', 'room', 'block', 'duplicate'] as ConflictInfo['type'][]).map(type => {
-                      const group = sessionConflicts.filter(c => c.type === type);
-                      if (group.length === 0) return null;
-                      const uniqueInGroup = new Set(group.map(c => c.conflictKey)).size;
-                      const cfg = {
-                        instructor: { label: 'Faculty Conflict', color: 'text-red-700',    dot: 'bg-red-500' },
-                        room:       { label: 'Room Conflict',       color: 'text-amber-700',  dot: 'bg-amber-500' },
-                        block:      { label: 'Block Conflict',      color: 'text-amber-700',  dot: 'bg-amber-500'  },
-                        duplicate:  { label: 'Duplicate Session',   color: 'text-purple-700', dot: 'bg-purple-500' },
-                      }[type];
+
+                    {/* The sessions side by side (one under another on a phone); in each, day, time and room */}
+                    <div className="grid gap-3 @lg:grid-cols-2 items-start">
+                    {sessions.map((sess, i) => {
+                      const rowConflicts = sessionConflicts.filter(c => c.sessionId === sess.id);
+                      const hasRowConflict = rowConflicts.length > 0;
                       return (
-                        <div key={type} className="space-y-1">
-                          <div className="flex items-center gap-1.5 text-[11px] font-bold text-[#64748B] uppercase tracking-wide">
-                            <span className={`w-2 h-2 rounded-full flex-shrink-0 ${cfg.dot}`} />
-                            {cfg.label}
-                            {uniqueInGroup > 1 ? ` (${uniqueInGroup})` : ''}
+                        <div key={sess.id} className={`rounded-xl border p-3 space-y-2.5 shadow-sm transition-colors ${
+                          hasRowConflict ? 'border-red-200 bg-red-50/70 shadow-[inset_3px_0_0_#EF4444]' : 'border-[#E2E8F0] bg-white'
+                        }`}>
+                          <div className="flex items-center gap-2.5">
+                            <span className={`w-7 h-7 rounded-full flex items-center justify-center text-[13px] font-bold flex-shrink-0 ${
+                              hasRowConflict ? 'bg-red-100 text-red-700' : 'bg-[#EAF1FD] text-[#1D5BD6]'
+                            }`}>{i + 1}</span>
+                            <div className="min-w-0 flex-1 leading-tight">
+                              <div className="text-[15px] font-bold text-[#0B2A5B]">
+                                Session {i + 1} <span className="font-semibold text-[#64748B] tabular-nums">· {fmtHrs(toNum(sess.hours))}</span>
+                              </div>
+                              {hasRowConflict && (
+                                <div className="mt-0.5 inline-flex items-center gap-1 text-[12px] font-semibold text-red-600">
+                                  <AlertCircle className="w-3.5 h-3.5" /> {rowConflicts.every(c => c.type === 'time') ? 'Outside hours' : 'Conflict'}
+                                </div>
+                              )}
+                            </div>
+                            <motion.button type="button" onClick={() => removeSession(sess.id)}
+                              whileTap={reduceMotion ? undefined : { scale: 0.9 }}
+                              aria-label={`Remove session ${i + 1}`} title={`Remove session ${i + 1}`}
+                              className="w-9 h-9 rounded-lg border border-transparent text-[#94A3B8] hover:text-red-600 hover:bg-red-50 hover:border-red-200 flex items-center justify-center transition-colors">
+                              <Trash2 className="w-4 h-4" />
+                            </motion.button>
                           </div>
-                          {group.map((c, i) => (
-                            <div key={`${c.conflictKey}-${i}`} className={`text-xs pl-3.5 leading-relaxed ${cfg.color}`}>{c.message}</div>
-                          ))}
+                          <SessionField label="Day">
+                            <DayPicker
+                              value={sess.day}
+                              onChange={d => updateSession(sess.id, 'day', d)}
+                              days={WEEK_DAYS.filter(d => !allowedDays || allowedDays.has(d)).map(d => {
+                                const other = sessions.findIndex(o => o.id !== sess.id && o.day === d);
+                                return {
+                                  day: d,
+                                  classes: instructorBusy.get(d)?.length ?? 0,
+                                  freeStarts: freeStartTimes({ ...sess, day: d }).length,
+                                  accent: timetableLayout.toneOf(d).bar,
+                                  usedBy: other >= 0 ? `Session ${other + 1}` : undefined,
+                                };
+                              })}
+                            />
+                          </SessionField>
+                          <SessionField label="Time">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <TimeSlotPicker
+                                value={sess.start_time}
+                                onChange={v => updateSession(sess.id, 'start_time', v)}
+                                slots={slotConflicts(sess).map(x => ({ value: x.value, free: !x.conflict, conflict: x.conflict || undefined }))}
+                                busy={dayBusy(sess)}
+                                breaks={[LUNCH]}
+                                durationMin={Math.round(toNum(sess.hours) * 60)}
+                                day={sess.day}
+                              />
+                              <span className="text-[#CBD5E1] text-[13px]">→</span>
+                              <span className="text-[#475569] text-xs font-semibold whitespace-nowrap flex items-center gap-1">
+                                <Clock className="w-3.5 h-3.5 text-[#94A3B8]" /> {fmt12(sess.end_time)}
+                              </span>
+                            </div>
+                          </SessionField>
+                          <SessionField label="Room">
+                            <RoomPicker
+                              value={sess.room_id}
+                              onChange={v => updateSession(sess.id, 'room_id', v)}
+                              rooms={activeRooms
+                                .map(r => {
+                                  // Major subject: one room for both parts, so a room is only offered
+                                  // when its other part still fits there on every session day
+                                  const misfit = otherPartSessionMin ? sessions.find(s => !otherPartFits(s, r.id)) : undefined;
+                                  return { r, misfit };
+                                })
+                                // Rooms that can't take both parts can't be picked: listed greyed out with the
+                                // reason under the picker's folded line — unless already picked (then "Busy · why")
+                                .map(({ r, misfit }) => {
+                                  const picked = String(r.id) === sess.room_id;
+                                  return {
+                                    ...r,
+                                    unavailable: misfit && !picked ? otherPartRoomShort(misfit.day) : null,
+                                    busyWith: roomBusyWith(sess, r.id) || otherPartBusyWith(r.id)
+                                      || (misfit ? otherPartRoomClash(misfit.day) : '') || null,
+                                  };
+                                })}
+                              unavailableHint={otherPartSessionMin
+                                ? `Its ${otherPartName} needs ${otherPartLength} free in the same room on these days.`
+                                : undefined}
+                              preferred={pairRoom ? { id: pairRoom.id, label: selLoad.component === 'lab' ? 'Its Lecture is here' : 'Its Laboratory is here' } : null}
+                              component={selLoad.component}
+                              day={sess.day}
+                              timeLabel={sess.start_time ? `${fmt12(sess.start_time)} – ${fmt12(sess.end_time)}` : undefined}
+                              warnEmpty={selLoad.component === 'lab'}
+                            />
+                          </SessionField>
                         </div>
                       );
                     })}
-                  </div>
-                )}
-                {/* Major subject: one room for the Lecture and the Laboratory */}
-                {roomRuleError && sessions.length > 0 && (
-                  <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-[13px] flex items-start gap-2" role="alert">
-                    <XCircle className="w-4 h-4 flex-shrink-0 mt-0.5" /> {roomRuleError}
-                  </div>
-                )}
-                {!roomRuleError && ruleNow?.move && sessions.length > 0 && (
-                  <div className="bg-[#EFF6FF] border border-[#BFDBFE] text-[#1D5BD6] px-4 py-3 rounded-xl text-[13px] flex items-start gap-2">
-                    <ArrowRight className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                    Saving also puts the {ruleNow.move.part === 'lab' ? 'Laboratory' : 'Lecture'} in {ruleNow.move.room_name} — it has no room yet, and a Major subject keeps both in one room.
-                  </div>
-                )}
-                {sessionConflicts.length === 0 && conflictsVerified && sessions.length > 0 && !roomRuleError && (
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 text-xs text-emerald-700 flex items-center gap-2">
-                    <CheckCircle className="w-3.5 h-3.5" /> All sessions verified — no conflicts detected.
-                  </div>
-                )}
-                {!conflictsVerified && sessions.length > 0 && allDaysSet && (
-                  <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl px-4 py-2.5 text-xs text-[#64748B] flex items-center gap-2">
-                    {checkingConflicts
-                      ? <><Loader2 className="w-3.5 h-3.5 animate-spin text-[#1D5BD6]" /> Checking for conflicts…</>
-                      : <><Search className="w-3.5 h-3.5" /> Checking for conflicts… or click &quot;Check Conflicts&quot; below.</>
-                    }
-                  </div>
-                )}
+                    </div>
 
-                {/* Actions — checks on the left, the one main action (Save) on the right */}
-                <div className="bg-white rounded-xl border border-[#E2E8F0] shadow-sm p-3 flex flex-col sm:flex-row sm:items-center gap-3">
-                  <div className="flex items-center gap-2 flex-wrap">
-                  <button onClick={runConflictCheck} disabled={sessions.length === 0 || checkingConflicts}
-                    className={[
-                      'flex items-center gap-2 px-4 py-2.5 rounded-xl border text-sm font-semibold transition',
-                      'disabled:opacity-40 disabled:cursor-not-allowed',
-                      conflictsVerified && !hasConflicts && sessions.length > 0
-                        ? 'border-emerald-200 text-emerald-700 bg-emerald-50 hover:bg-emerald-100'
-                        : conflictsVerified && hasConflicts
-                          ? 'border-red-200 text-red-700 bg-red-50 hover:bg-red-100'
-                          : 'border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#F8FAFC]',
-                    ].join(' ')}>
-                    {checkingConflicts
-                      ? <><Loader2 className="w-4 h-4 animate-spin" /> Checking…</>
-                      : conflictsVerified && !hasConflicts && sessions.length > 0
-                        ? <><CheckCircle className="w-4 h-4" /> No Conflicts</>
-                        : conflictsVerified && hasConflicts
-                          ? <><XCircle className="w-4 h-4" /> {uniqueConflictCount} Conflict{uniqueConflictCount !== 1 ? 's' : ''}</>
-                          : <><Search className="w-4 h-4" /> Check Conflicts</>
-                    }
-                  </button>
+                    {hasLabRoomMissing && sessions.length > 0 && (
+                      <div className="bg-amber-50 border border-amber-200 text-amber-700 px-4 py-3 rounded-xl text-[13px] flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                        No room assigned yet. You can assign a room later.
+                      </div>
+                    )}
 
+                    {sessionConflicts.length > 0 && (
+                      <div className="bg-red-50 border border-red-200 rounded-xl p-4 space-y-3">
+                        <div className="flex items-center gap-2 text-[13px] font-bold text-red-700">
+                          <XCircle className="w-4 h-4 flex-shrink-0" />
+                          {uniqueConflictCount} Conflict{uniqueConflictCount !== 1 ? 's' : ''} Detected — resolve before saving
+                        </div>
+                        {(['time', 'instructor', 'room', 'block', 'duplicate'] as ConflictInfo['type'][]).map(type => {
+                          const group = sessionConflicts.filter(c => c.type === type);
+                          if (group.length === 0) return null;
+                          const uniqueInGroup = new Set(group.map(c => c.conflictKey)).size;
+                          const cfg = {
+                            time:       { label: 'Outside School Hours', color: 'text-red-700', dot: 'bg-red-500' },
+                            instructor: { label: 'Faculty Conflict', color: 'text-red-700',    dot: 'bg-red-500' },
+                            room:       { label: 'Room Conflict',       color: 'text-amber-700',  dot: 'bg-amber-500' },
+                            block:      { label: 'Block Conflict',      color: 'text-amber-700',  dot: 'bg-amber-500'  },
+                            duplicate:  { label: 'Duplicate Session',   color: 'text-purple-700', dot: 'bg-purple-500' },
+                          }[type];
+                          return (
+                            <div key={type} className="space-y-1">
+                              <div className="flex items-center gap-1.5 text-[11px] font-bold text-[#64748B] uppercase tracking-wide">
+                                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${cfg.dot}`} />
+                                {cfg.label}
+                                {uniqueInGroup > 1 ? ` (${uniqueInGroup})` : ''}
+                              </div>
+                              {group.map((c, i) => (
+                                <div key={`${c.conflictKey}-${i}`} className={`text-xs pl-3.5 leading-relaxed ${cfg.color}`}>{c.message}</div>
+                              ))}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {/* Major subject: one room for the Lecture and the Laboratory */}
+                    {roomRuleError && sessions.length > 0 && (
+                      <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-[13px] flex items-start gap-2" role="alert">
+                        <XCircle className="w-4 h-4 flex-shrink-0 mt-0.5" /> {roomRuleError}
+                      </div>
+                    )}
+                    {!roomRuleError && ruleNow?.move && sessions.length > 0 && (
+                      <div className="bg-[#EFF6FF] border border-[#BFDBFE] text-[#1D5BD6] px-4 py-3 rounded-xl text-[13px] flex items-start gap-2">
+                        <ArrowRight className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                        Saving also puts the {ruleNow.move.part === 'lab' ? 'Laboratory' : 'Lecture'} in {ruleNow.move.room_name} — it has no room yet, and a Major subject keeps both in one room.
+                      </div>
+                    )}
+                    {sessionConflicts.length === 0 && conflictsVerified && sessions.length > 0 && !roomRuleError && (
+                      <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 text-xs text-emerald-700 flex items-center gap-2">
+                        <CheckCircle className="w-3.5 h-3.5" /> All sessions verified — no conflicts detected.
+                      </div>
+                    )}
+                    {!conflictsVerified && sessions.length > 0 && allDaysSet && (
+                      <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl px-4 py-2.5 text-xs text-[#64748B] flex items-center gap-2">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-[#1D5BD6]" /> Checking for conflicts…
+                      </div>
+                    )}
+
+                  </>
+                )}
+              </div>
+
+              {/* Clear and Save, always in sight at the bottom — conflicts are checked by themselves as the sessions change */}
+              {!panelSwitching && (
+                <div className="flex-shrink-0 border-t border-[#E2E8F0] bg-white p-3 flex items-stretch gap-2">
                   <button onClick={handleClear} disabled={sessions.length === 0}
-                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-[#E2E8F0] text-sm font-semibold text-[#475569] bg-white hover:bg-[#F8FAFC] disabled:opacity-40 disabled:cursor-not-allowed transition">
+                    className="flex-shrink-0 flex items-center justify-center gap-2 px-4 sm:px-5 py-3 rounded-xl border border-[#E2E8F0] text-sm font-semibold text-[#475569] bg-white hover:bg-[#F8FAFC] disabled:opacity-40 disabled:cursor-not-allowed transition">
                     <RefreshCw className="w-4 h-4" /> Clear All
                   </button>
-                  </div>
-
                   <button onClick={handleSave} disabled={!canSave || checkingConflicts}
                     className={[
-                      'sm:ml-auto sm:min-w-[300px] flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-sm font-bold text-white transition',
+                      'flex-1 min-w-0 flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-sm font-bold text-white transition',
                       !canSave || checkingConflicts ? 'bg-[#CBD5E1] cursor-not-allowed' : 'qr-btn-soft',
                     ].join(' ')}>
                     {saving
@@ -3262,20 +3287,18 @@ export default function SchedulingClient() {
                       : hasConflicts
                         ? <><AlertTriangle className="w-4 h-4" /> Resolve Conflicts First</>
                         : roomRuleError
-                          ? <><AlertTriangle className="w-4 h-4" /> {daysRuleError || /same days/.test(roomRuleError) ? 'Use the Same Days First' : 'Use One Room First'}</>
+                          ? <><AlertTriangle className="w-4 h-4" /> {pathfitRoomError ? 'Choose CCA Gym or SAO Room' : daysRuleError || /same days/.test(roomRuleError) ? 'Use the Same Days First' : 'Use One Room First'}</>
                         : selLoad.isScheduled
-                          ? <><RefreshCw className="w-4 h-4" /> Reschedule {selLoad.label} — {selLoad.load.subject_code}</>
-                          : <><Save className="w-4 h-4" /> Save {selLoad.label} Schedule — {selLoad.load.subject_code}</>
+                          ? <><RefreshCw className="w-4 h-4" /> <span className="truncate">Reschedule {selLoad.label} — {selLoad.load.subject_code}</span></>
+                          : <><Save className="w-4 h-4" /> <span className="truncate">Save {selLoad.label} Schedule — {selLoad.load.subject_code}</span></>
                     }
                   </button>
                 </div>
-
-                <div className="pb-4" />
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+              )}
+            </motion.aside>
+          )}
+        </AnimatePresence>
+      </motion.div>
 
       {/* ── Delete Confirmation Modal ──────────────── */}
       {deleteTarget && (
@@ -3454,7 +3477,7 @@ export default function SchedulingClient() {
           subject, shared with the Master Schedule ── */}
       <SubjectFacultyPreview
         subject={previewRow
-          ? { code: previewRow.load.subject_code, name: previewRow.load.subject_name, component: previewRow.component }
+          ? { code: previewRow.load.subject_code, name: previewRow.load.subject_name, component: previewWhole ? null : previewRow.component }
           : null}
         semester={semester}
         academicYear={schoolYear}

@@ -21,6 +21,7 @@ import { useSchoolYear } from '@/context/SchoolYearContext';
 import { useRealtime } from '@/context/RealtimeContext';
 import { SearchInput, FilterSelect } from '@/components/ui/SearchFilter';
 import { ListSkeleton, CardSkeleton, Skeleton } from '@/components/ui/skeletons';
+import Pagination from '@/components/ui/Pagination';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { EmploymentBadge, EMPLOYMENT_COLORS, employmentColors } from '@/components/ui/EmploymentBadge';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
@@ -1211,14 +1212,14 @@ export default function FacultyPage() {
                   <div className="min-w-0 flex-1">
                     <p className="font-semibold text-base break-words leading-snug" style={{ color: '#0B2A5B' }}>{f.name}</p>
                     {f.specialization && (
-                      <p className="text-xs mt-0.5 break-words" style={{ color: '#1D5BD6' }}>{f.specialization}</p>
+                      <p className="text-sm mt-0.5 break-words" style={{ color: '#1D5BD6' }}>{f.specialization}</p>
                     )}
                     <p className="text-sm mt-1 break-words" style={{ color: '#64748B' }}>
                       {f.position ?? 'Rank not set'}
                       {f.program_code ? ` · ${f.program_code}` : ''}
                     </p>
                     {f.program_name && (
-                      <p className="text-xs mt-0.5 break-words" style={{ color: '#94A3B8' }}>{f.program_name}</p>
+                      <p className="text-sm mt-0.5 break-words" style={{ color: '#64748B' }}>{f.program_name}</p>
                     )}
                   </div>
                   {userRole === 'admin' && (
@@ -1244,7 +1245,7 @@ export default function FacultyPage() {
                     </div>
                   )}
                 </div>
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs" style={{ color: '#64748B' }}>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm" style={{ color: '#64748B' }}>
                   <span>{f.designation_type}</span>
                   <span className="font-bold" style={{ color: employmentColors(empStatus).fg }}>
                     {isPermanent
@@ -1265,7 +1266,7 @@ export default function FacultyPage() {
                 {['Name', 'Program', 'Position', 'Designation', 'Max Load', 'Actions'].map(h => (
                   <th
                     key={h}
-                    className={`${h === 'Max Load' ? 'text-center' : 'text-left'} px-5 py-3.5 text-xs font-semibold uppercase tracking-wide whitespace-nowrap text-[#64748B]`}
+                    className={`${h === 'Max Load' ? 'text-center' : 'text-left'} px-5 py-3.5 text-sm font-semibold uppercase tracking-wide whitespace-nowrap text-[#64748B]`}
                   >
                     {h}
                   </th>
@@ -1308,26 +1309,26 @@ export default function FacultyPage() {
                         )}
                       </p>
                       {f.specialization && (
-                        <p className="text-xs mt-0.5" style={{ color: '#1D5BD6' }}>{f.specialization}</p>
+                        <p className="text-sm mt-0.5" style={{ color: '#1D5BD6' }}>{f.specialization}</p>
                       )}
                     </td>
                     <td className="px-5 py-4">
                       {f.program_code
                         ? (
                           <div>
-                            <span className="font-semibold text-xs" style={{ color: '#0B2A5B' }}>{f.program_code}</span>
+                            <span className="font-semibold text-sm" style={{ color: '#0B2A5B' }}>{f.program_code}</span>
                             {f.program_name && (
-                              <p className="text-[11px] leading-tight mt-0.5 max-w-[200px] break-words" style={{ color: '#64748B' }}>{f.program_name}</p>
+                              <p className="text-sm leading-snug mt-0.5 max-w-[220px] break-words" style={{ color: '#64748B' }}>{f.program_name}</p>
                             )}
                           </div>
                         )
                         // Program is optional — none is not a problem
-                        : <span className="text-xs" style={{ color: '#94A3B8' }}>—</span>}
+                        : <span className="text-sm" style={{ color: '#94A3B8' }}>—</span>}
                     </td>
                     <td className="px-5 py-4 font-medium" style={{ color: '#0B2A5B' }}>
-                      {f.position ?? <span className="text-xs italic font-medium" style={{ color: '#D97706' }}>Not set</span>}
+                      {f.position ?? <span className="text-sm italic font-medium" style={{ color: '#D97706' }}>Not set</span>}
                     </td>
-                    <td className="px-5 py-4 text-xs" style={{ color: '#64748B' }}>{f.designation_type}</td>
+                    <td className="px-5 py-4 text-sm" style={{ color: '#64748B' }}>{f.designation_type}</td>
                     <td className="px-5 py-4 text-center font-bold" style={{ color: employmentColors(empStatus).fg }}>
                       {isPermanent
                         ? `${formatLoadCap(shownUnitsCap(parseFloat(String(f.remaining_regular_load))))} units`
@@ -1344,7 +1345,7 @@ export default function FacultyPage() {
                             style={{ color: '#1D5BD6' }}
                             title="Edit"
                           >
-                            <Pencil className="w-3.5 h-3.5" />
+                            <Pencil className="w-4 h-4" />
                           </button>
                           <button
                             type="button"
@@ -1353,11 +1354,11 @@ export default function FacultyPage() {
                             style={{ color: '#EF4444' }}
                             title="Delete Faculty"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
                       ) : (
-                        <span className="text-xs italic" style={{ color: '#94A3B8' }}>View only</span>
+                        <span className="text-sm italic" style={{ color: '#94A3B8' }}>View only</span>
                       )}
                     </td>
                   </tr>
@@ -1366,37 +1367,16 @@ export default function FacultyPage() {
             </tbody>
           </table>
         </div>
-        {filtered.length > 0 && (
-          <div className="px-5 py-3 border-t border-[color:var(--border)] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-            <p className="text-xs text-[#64748B]">
-              Showing {(safePage - 1) * FACULTY_PAGE_SIZE + 1}
-              –{Math.min(safePage * FACULTY_PAGE_SIZE, filtered.length)} of {filtered.length} faculty
-            </p>
-            {totalPages > 1 && (
-              <div className="flex items-center gap-2 self-end sm:self-auto">
-                <button
-                  type="button"
-                  onClick={() => goToPage(Math.max(1, safePage - 1))}
-                  disabled={safePage === 1}
-                  className="inline-flex items-center justify-center min-h-9 px-3 rounded-lg border border-[#E2E8F0] bg-white text-xs font-semibold text-[#475569] hover:bg-[#F8FAFC] hover:border-[#CBD5E1] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                >
-                  Previous
-                </button>
-                <span className="text-xs font-medium text-[#0B2A5B] tabular-nums px-1 whitespace-nowrap">
-                  Page {safePage} of {totalPages}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => goToPage(Math.min(totalPages, safePage + 1))}
-                  disabled={safePage === totalPages}
-                  className="inline-flex items-center justify-center min-h-9 px-3 rounded-lg border border-[#E2E8F0] bg-white text-xs font-semibold text-[#475569] hover:bg-[#F8FAFC] hover:border-[#CBD5E1] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                >
-                  Next
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+        <Pagination
+          className="px-4 sm:px-5 py-4 border-t border-[color:var(--border)]"
+          layoutId="faculty-profiles-page"
+          page={safePage}
+          pageCount={totalPages}
+          onChange={goToPage}
+          total={filtered.length}
+          pageSize={FACULTY_PAGE_SIZE}
+          noun="faculty"
+        />
       </div>
       </PageLoadTransition>
 

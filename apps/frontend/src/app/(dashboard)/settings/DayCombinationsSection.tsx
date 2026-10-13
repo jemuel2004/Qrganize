@@ -5,28 +5,51 @@
  * of the active school year + semester, saved per term. They are quick picks in
  * Scheduling and the day sections of the workload forms — not a limit: classes
  * may meet on any days (each program follows its own patterns).
+ *
+ * NSTP (every Saturday, its time and the handler's typed name) is set here too
+ * — Class Program only, for every term (NstpSettings). One Save saves both.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { CalendarDays, Info, Loader2, Plus, Trash2 } from 'lucide-react';
 import { useSchoolYear } from '@/context/SchoolYearContext';
 import { useToast } from '@/context/ToastContext';
+import { useSaveSuccess } from '@/components/ui/SaveSuccessOverlay';
+import SettingsSaveCheck from './SettingsSaveCheck';
 import { useRealtime } from '@/context/RealtimeContext';
 import { fetchDayCombinations, invalidateDayCombinations } from '@/lib/dayCombinations';
 import {
   DAY_COMBINATION_PRESETS, WEEK_DAYS, daysCode, daysKey, daysLabel, shortDay, sortDays, type WeekDay,
 } from '@shared/dayCombination';
+import { EMPTY_NSTP, cleanHandlerName, validateNstpSchedule, type NstpSchedule } from '@shared/nstp';
+import NstpSettings from './NstpSettings';
 
 interface Row { key: string; days: WeekDay[]; is_active: boolean }
 
 const EASE = [0.4, 0, 0.2, 1] as const;
 const WHITE = { color: '#FFFFFF' } as const;
 const toRow = (days: WeekDay[], is_active = true): Row => ({ key: daysKey(days), days, is_active });
+/** NSTP as compared for unsaved changes (extra spaces in the name don't count) */
+const nstpKey = (n: NstpSchedule) => JSON.stringify([n.start_time || null, n.end_time || null, cleanHandlerName(n.handler_name)]);
 
-export default function DayCombinationsSection() {
+async function fetchNstp(): Promise<NstpSchedule | null> {
+  const res = await fetch('/api/settings/nstp', { cache: 'no-store' }).catch(() => null);
+  if (!res?.ok) return null;
+  const d = await res.json().catch(() => null) as Partial<NstpSchedule> | null;
+  if (!d) return null;
+  return { start_time: d.start_time ?? null, end_time: d.end_time ?? null, handler_name: d.handler_name ?? '' };
+}
+
+export default function DayCombinationsSection({ onClose }: {
+  /** Closes the Settings window — after a save, once the check has played */
+  onClose?: () => void;
+}) {
   const reduceMotion = useReducedMotion();
   const toast = useToast();
+  /** The green check after a save — same as the other Settings sections */
+  const success = useSaveSuccess();
+  const [successTitle, setSuccessTitle] = useState('Saved');
   const { schoolYear, semester } = useSchoolYear();
   const [rows, setRows] = useState<Row[] | null>(null);
   const [saved, setSaved] = useState<string>('');
@@ -47,13 +70,30 @@ export default function DayCombinationsSection() {
     return () => { alive = false; };
   }, [schoolYear, semester]);
 
-  const dirty = rows !== null && JSON.stringify(rows) !== saved;
+  /* NSTP — every Saturday; the time and handler (every term) */
+  const [nstp, setNstp] = useState<NstpSchedule | null>(null);
+  const [nstpSaved, setNstpSaved] = useState<NstpSchedule | null>(null);
+  const nstpDirty = nstp !== null && nstpSaved !== null && nstpKey(nstp) !== nstpKey(nstpSaved);
+  const nstpDirtyRef = useRef(nstpDirty);
+  useEffect(() => { nstpDirtyRef.current = nstpDirty; }, [nstpDirty]);
+  const loadNstp = useCallback(async () => {
+    const n = await fetchNstp();
+    if (!n) { setNstpSaved(s => s ?? { ...EMPTY_NSTP }); setNstp(s => s ?? { ...EMPTY_NSTP }); return; }
+    setNstpSaved(n);
+    // Unsaved changes win — it only follows while nothing is being changed
+    if (!nstpDirtyRef.current) setNstp(n);
+  }, []);
+  useEffect(() => { void loadNstp(); }, [loadNstp]);
 
-  // Live updates: another admin saved this term's combinations. Unsaved edits
-  // here always win — the list only follows while nothing is being edited.
-  const dirtyRef = useRef(dirty);
-  useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
+  const combosDirty = rows !== null && JSON.stringify(rows) !== saved;
+  const dirty = combosDirty || nstpDirty;
+
+  // Live updates: another admin saved this term's combinations or NSTP. Unsaved
+  // edits here always win — each part only follows while it isn't being edited.
+  const dirtyRef = useRef(combosDirty);
+  useEffect(() => { dirtyRef.current = combosDirty; }, [combosDirty]);
   useRealtime(['settings'], () => {
+    if (!nstpDirtyRef.current && !saving) void loadNstp();
     if (!schoolYear || !semester || dirtyRef.current || saving) return;
     invalidateDayCombinations();
     return fetchDayCombinations(semester, schoolYear).then(d => {
@@ -89,24 +129,45 @@ export default function DayCombinationsSection() {
 
   async function save() {
     if (!rows) return;
+    // NSTP is checked first, so nothing is half saved
+    const nstpChecked = nstpDirty && nstp ? validateNstpSchedule(nstp) : null;
+    if (nstpChecked && !nstpChecked.ok) { setError(nstpChecked.error); return; }
     setSaving(true);
     setError('');
     try {
-      const res = await fetch('/api/settings/day-combinations', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          academic_year: schoolYear, semester,
-          combinations: rows.map(r => ({ days: r.days, is_active: r.is_active })),
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) { setError(data.error || 'Could not save the day combinations.'); return; }
-      const list = (data.combinations ?? []).map((c: { days: WeekDay[]; is_active: boolean }) => toRow(c.days, c.is_active));
-      setRows(list);
-      setSaved(JSON.stringify(list));
-      invalidateDayCombinations(); // Scheduling / workload forms pick up the new list
-      toast.success('Day combinations saved.');
+      if (combosDirty) {
+        const res = await fetch('/api/settings/day-combinations', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            academic_year: schoolYear, semester,
+            combinations: rows.map(r => ({ days: r.days, is_active: r.is_active })),
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { setError(data.error || 'Could not save the day combinations.'); return; }
+        const list = (data.combinations ?? []).map((c: { days: WeekDay[]; is_active: boolean }) => toRow(c.days, c.is_active));
+        setRows(list);
+        setSaved(JSON.stringify(list));
+        invalidateDayCombinations(); // Scheduling / workload forms pick up the new list
+      }
+      if (nstpChecked?.ok) {
+        const res = await fetch('/api/settings/nstp', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(nstpChecked.value),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { setError(data.error || 'Could not save NSTP.'); return; }
+        const next: NstpSchedule = { start_time: data.start_time ?? null, end_time: data.end_time ?? null, handler_name: data.handler_name ?? '' };
+        setNstpSaved(next);
+        setNstp(next);
+      }
+      const what = combosDirty && nstpChecked ? 'Day combinations and NSTP' : nstpChecked ? 'NSTP' : 'Day combinations';
+      // The check draws itself first, then the toast says what it means
+      setSuccessTitle(`${what} saved`);
+      // The window steps aside and the check plays on its own, then the window closes
+      success.play(() => { onClose?.(); toast.success(`${what} saved.`); }, { keep: !!onClose });
     } catch {
       setError('Connection error. Please try again.');
     } finally {
@@ -123,7 +184,8 @@ export default function DayCombinationsSection() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="relative space-y-6">
+      {success.shown && <SettingsSaveCheck title={successTitle} />}
       {/* Term + status */}
       <div className="flex flex-wrap items-center gap-3">
         <span className="inline-flex items-center gap-2 h-10 px-3.5 rounded-xl border border-[#D6E0EF] bg-white text-[15px] font-semibold text-[#0B2A5B]">
@@ -266,17 +328,12 @@ export default function DayCombinationsSection() {
         Quick picks in Scheduling and the day sections of the workload forms. Classes can still meet on any days.
       </p>
 
+      {/* NSTP — every Saturday, Class Program only; saved with the combinations */}
+      <NstpSettings value={nstp} onChange={n => { setNstp(n); setError(''); }} />
+
       {error && <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</p>}
 
       <div className="flex justify-end gap-3 pt-4 border-t border-[#EEF2F8]">
-        <button
-          type="button"
-          disabled={!dirty || saving}
-          onClick={() => { setRows(JSON.parse(saved)); setError(''); }}
-          className="h-11 px-5 rounded-xl text-sm font-semibold border border-[#D6E0EF] text-[#0B2A5B] bg-white hover:bg-[#F8FAFC] disabled:opacity-40 transition-colors"
-        >
-          Discard
-        </button>
         <motion.button
           type="button"
           whileTap={reduceMotion ? undefined : { scale: 0.97 }}

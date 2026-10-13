@@ -1,5 +1,5 @@
 import { query } from '@/database/db';
-import { formatLoadCap, overloadUnitsCap, shownUnitsCap, shownUnitsLeft } from '@shared/regularLoad';
+import { formatLoadCap, overloadUnitsCap, shownUnitsCap } from '@shared/regularLoad';
 import { getWorkloadPolicy } from '@/services/workloadPolicy';
 import { ensurePraiseSplitColumn } from '@/services/praiseSplit';
 
@@ -18,10 +18,12 @@ export async function overloadCapError(opts: {
   academicYear: string;
   addUnits: number;
   replacingMsIds?: number[];
+  /** A transaction client — to check under the same lock as the save */
+  q?: (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>;
 }): Promise<string | null> {
   if (!opts.isPermanent || opts.addUnits <= 0.001) return null;
   await ensurePraiseSplitColumn();
-  const res = await query(
+  const res = await (opts.q ?? query)(
     `SELECT COALESCE(SUM(units), 0) AS total
        FROM overloads
       WHERE faculty_id = $1
@@ -30,13 +32,11 @@ export async function overloadCapError(opts: {
         AND NOT (master_schedule_id = ANY($4::int[]))`,
     [opts.facultyId, opts.semester, opts.academicYear, opts.replacingMsIds ?? []],
   );
-  const current = parseFloat(res.rows[0]?.total) || 0;
+  const current = parseFloat(String(res.rows[0]?.total ?? 0)) || 0;
   const after = current + opts.addUnits;
   const cap = overloadUnitsCap(await getWorkloadPolicy());
   if (after <= cap + 0.001) return null;
   if (cap === 0) return 'Overload is turned off in Settings → Workload Limits, so this subject can\'t go to Overload.';
-  // Shown as 6, not 6.25 (shared display rule) — the check above keeps the exact cap
-  const left = shownUnitsLeft(cap - current);
-  return `Overload limit is ${formatLoadCap(shownUnitsCap(cap))} units. This faculty already has ${current.toFixed(2)} units of Overload `
-    + `(${left.toFixed(2)} left); adding ${opts.addUnits.toFixed(2)} would make ${after.toFixed(2)}.`;
+  // Shown as 8, not 8.25 (shared display rule) — the check above keeps the exact cap
+  return `Overload is already ${current.toFixed(2)} of ${formatLoadCap(shownUnitsCap(cap))} units — adding ${opts.addUnits.toFixed(2)} would make ${after.toFixed(2)}.`;
 }

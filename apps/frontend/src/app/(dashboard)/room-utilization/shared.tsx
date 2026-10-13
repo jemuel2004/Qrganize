@@ -16,13 +16,15 @@ export type RoomStatus = 'Occupied' | 'Available' | 'Pending' | 'No Scan';
 
 export interface UtilRoom {
   id: number; room_name: string; room_type: string; building: string | null; capacity: number | null;
-  live_status: 'Available' | 'Pending' | 'Occupied'; live_faculty: string | null;
+  live_status: 'Available' | 'Pending' | 'Occupied'; live_faculty: string | null; live_faculty_id: number | null;
 }
 export interface UtilRow {
   key: string; date: string; day: string; room_id: number; room_name: string; room_type: string;
   subject_code: string | null; subject_name: string | null; component: string | null; block: string | null;
   faculty_id: number | null; faculty_name: string | null; start: string | null; end: string | null;
   scan_time: string | null; late: boolean; status: RowStatus; hours_scheduled: number; hours_used: number;
+  /** Today: the class doesn't hold its room — released by its faculty, or no check-in within 15 minutes */
+  free_now?: 'released' | 'no_scan' | null;
 }
 export interface ScanLog {
   id: number; scan_date: string; scan_hm: string; status: string; notes: string | null;
@@ -119,10 +121,10 @@ export function RoomIcon({ type, className }: { type: string; className?: string
 export function TypePill({ type }: { type: string }) {
   const lab = type === 'Laboratory' || type === 'Computer Lab';
   return (
-    <span className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full border whitespace-nowrap ${
+    <span className={`inline-flex items-center gap-1.5 text-sm font-semibold px-3 py-0.5 rounded-full border whitespace-nowrap ${
       lab ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-[#EFF6FF] text-[#1D5BD6] border-[#BFDBFE]'
     }`}>
-      <RoomIcon type={type} className="w-3 h-3" /> {type}
+      <RoomIcon type={type} className="w-3.5 h-3.5" /> {type}
     </span>
   );
 }
@@ -135,13 +137,20 @@ const ROW_TONE: Record<RowStatus, string> = {
   Upcoming: 'bg-[#F1F5F9] text-[#64748B] border-[#E2E8F0]',
   'Walk-in': 'bg-[#EEF0FE] text-[#4338CA] border-[#C7CBFA]',
 };
+/** A class's status in plain words */
+const ROW_LABEL: Record<RowStatus, string> = {
+  Occupied: 'In use', Completed: 'Used', Pending: 'Waiting for scan', 'Not Checked': 'Not scanned', Upcoming: 'Upcoming', 'Walk-in': 'Walk-in',
+};
 export function RowStatusPill({ status }: { status: RowStatus }) {
   return (
-    <span className={`inline-flex items-center text-[11px] font-semibold px-2.5 py-0.5 rounded-full border whitespace-nowrap ${ROW_TONE[status]}`}>
-      {status === 'Completed' ? 'Used' : status}
+    <span className={`inline-flex items-center text-sm font-semibold px-3 py-1 rounded-full border whitespace-nowrap ${ROW_TONE[status]}`}>
+      {ROW_LABEL[status]}
     </span>
   );
 }
+
+/** A room's status in plain words */
+export const ROOM_LABEL: Record<RoomStatus, string> = { Occupied: 'In use', Available: 'Available', Pending: 'Waiting for scan', 'No Scan': 'Not scanned' };
 
 export const ROOM_TONE: Record<RoomStatus, { bar: string; soft: string; text: string }> = {
   Occupied: { bar: '#10B981', soft: '#ECFDF5', text: '#047857' },

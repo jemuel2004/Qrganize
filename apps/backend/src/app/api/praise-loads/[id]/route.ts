@@ -1,4 +1,6 @@
 ﻿import { NextRequest, NextResponse } from 'next/server';
+import { parseId } from '@/database/ids';
+import { cleanText } from '@/services/requestInput';
 import { query } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { withAudit } from '@/services/audit';
@@ -17,15 +19,14 @@ async function DELETE_handler(
 
     // ── Validate path param ─────────────────────────────────────────────────
     const { id: idStr } = await params;
-    const id = parseInt(idStr, 10);
-    if (!Number.isInteger(id) || id <= 0) {
+    const id = parseId(idStr);
+    if (id === null) {
       return NextResponse.json({ error: 'Invalid praise load ID.' }, { status: 400 });
     }
 
     // ── Ownership check via query param ─────────────────────────────────────
-    const facultyIdRaw = req.nextUrl.searchParams.get('faculty_id');
-    const facultyId = facultyIdRaw ? parseInt(facultyIdRaw, 10) : NaN;
-    if (!Number.isInteger(facultyId) || facultyId <= 0) {
+    const facultyId = parseId(req.nextUrl.searchParams.get('faculty_id'));
+    if (facultyId === null) {
       return NextResponse.json({ error: 'faculty_id is required.' }, { status: 400 });
     }
 
@@ -88,16 +89,16 @@ async function PUT_handler(
     }
 
     const { id: idStr } = await params;
-    const id = parseInt(idStr, 10);
-    if (!Number.isInteger(id) || id <= 0) {
+    const id = parseId(idStr);
+    if (id === null) {
       return NextResponse.json({ error: 'Invalid praise load ID.' }, { status: 400 });
     }
 
     const body = await req.json().catch(() => ({})) as {
       faculty_id?: unknown; description?: unknown; equivalent_units?: unknown;
     };
-    const facultyId = Number(body.faculty_id);
-    if (!Number.isInteger(facultyId) || facultyId <= 0) {
+    const facultyId = parseId(body.faculty_id);
+    if (facultyId === null) {
       return NextResponse.json({ error: 'faculty_id is required.' }, { status: 400 });
     }
 
@@ -114,7 +115,10 @@ async function PUT_handler(
     if ((String(raw ?? '').match(/\d/g) ?? []).length > 3 || (String(units).match(/\d/g) ?? []).length > 3) {
       return NextResponse.json({ error: 'Maximum of 3 digits only (e.g., 1.23).' }, { status: 400 });
     }
-    const description = typeof body.description === 'string' ? body.description.trim() : '';
+    const description = cleanText(body.description, 2000);
+    if (description === null) {
+      return NextResponse.json({ error: 'Check the description and try again.' }, { status: 400 });
+    }
 
     const facResult = await query(
       'SELECT employment_status, program_id FROM faculty WHERE id = $1 AND is_active IS NOT FALSE',

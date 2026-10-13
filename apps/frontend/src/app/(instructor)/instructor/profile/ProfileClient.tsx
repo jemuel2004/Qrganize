@@ -6,7 +6,7 @@ import {
   Camera, Lock, Palette, Eye, EyeOff, ShieldCheck,
   Check, X, MonitorSmartphone, Sun, Moon,
   Loader2, CheckCircle, AlertCircle, ChevronRight,
-  KeyRound,
+  KeyRound, BellRing,
 } from 'lucide-react';
 import { useInstructorProfile } from '@/context/InstructorProfileContext';
 import { useScrollLock } from '@/hooks/useScrollLock';
@@ -17,12 +17,13 @@ import { useInstructorTheme, type InstructorTheme } from '@/context/InstructorTh
 import { ProfilePictureUpload } from '@/components/ui/ProfilePictureUpload';
 import TrustedDevicesPanel from '@/components/security/TrustedDevicesPanel';
 import OtpPreferencePanel from '@/components/security/OtpPreferencePanel';
+import ClassRemindersPanel from '@/components/ui/ClassRemindersPanel';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { FormSkeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 
 /* ── Types ─────────────────────────────────────────────────────── */
-type Section = 'picture' | 'security' | 'appearance' | 'google';
+type Section = 'picture' | 'security' | 'appearance' | 'google' | 'reminders';
 type SecurityModal = null | 'password' | 'devices';
 
 /* ── Password helpers ──────────────────────────────────────────── */
@@ -48,12 +49,12 @@ function canSubmitPw(current: string, newPw: string, confirm: string) {
 /* ── Accordion wrapper ─────────────────────────────────────────── */
 /** Colour per setting (tile + pop-up banner) */
 const SECTION_TONE: Record<Section, string> = {
-  picture: '#1D5BD6', appearance: '#7C3AED', security: '#4F46E5', google: '#0284C7',
+  picture: '#1D5BD6', appearance: '#7C3AED', security: '#4F46E5', google: '#0284C7', reminders: '#1E40AF',
 };
 /** Pop-up headers are solid royal blue, like every other window in QRganize */
 const HEADER_BG = { backgroundColor: '#1D5BD6' } as const;
 
-/** A setting = a big colour tile that opens the setting in its own centred pop-up (shared with the chairs' My Account) */
+/** A setting = a big colour tile that opens the setting in its own centred pop-up (shared with the chairs' Settings) */
 function AccordionCard({ id, ...rest }: {
   id: Section;
   icon: React.ElementType;
@@ -598,6 +599,18 @@ export default function ProfileClient() {
               </p>
             </div>
           </div>
+        </AccordionCard>
+
+        {/* ── Class Reminders (notifications on this device) ───── */}
+        <AccordionCard
+          id="reminders"
+          icon={BellRing}
+          title="Class Reminders"
+          subtitle="Get a notification on this device before each class"
+          open={openSection === 'reminders'}
+          onToggle={() => toggle('reminders')}
+        >
+          <ClassRemindersPanel />
         </AccordionCard>
 
         {/* ── Password and Security ─────────────────────────────── */}

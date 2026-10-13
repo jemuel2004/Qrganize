@@ -17,6 +17,7 @@ import LoadBreakdownDonut from '@/components/charts/LoadBreakdownDonut';
 import { useScrollLock } from '@/hooks/useScrollLock';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { EmploymentBadge } from '@/components/ui/EmploymentBadge';
+import Pagination from '@/components/ui/Pagination';
 import { Skeleton, TableSkeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import { byPosition } from '@/lib/positionRank';
@@ -27,7 +28,11 @@ import {
 import { blockCode } from '@shared/blockCode';
 import { formLoadValue } from '@shared/loadSplit';
 import { useDayCombinations } from '@/lib/dayCombinations';
+import { runExport } from '@/components/ui/ExportProgress';
 import { buildOfficialGroups, matchOfficialSlot, parseTimeMinutes } from '@/lib/officialWorkloadSlots';
+
+/** Faculty per page in the list (same as Faculty Profiles and Workload) */
+const LIST_PAGE_SIZE = 10;
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -580,6 +585,23 @@ export default function FacultySchedulesClient({
 
   const visibleGroups = useMemo(() => groups.filter(matchesSearch), [groups, matchesSearch]);
 
+  /* The list shows one page at a time; a new search or filter starts again at page 1 */
+  const [listPage, setListPage] = useState(1);
+  /** Next page comes in from the right, previous from the left; 0 = a new search or filter */
+  const [listDir, setListDir] = useState<-1 | 0 | 1>(0);
+  useEffect(() => { setListPage(1); setListDir(0); }, [filters, globalYear, globalSemester]);
+  const listRef = useRef<HTMLDivElement>(null);
+  const listPageCount = Math.max(1, Math.ceil(visibleGroups.length / LIST_PAGE_SIZE));
+  const safeListPage = Math.min(listPage, listPageCount);
+  const pagedGroups = visibleGroups.slice((safeListPage - 1) * LIST_PAGE_SIZE, safeListPage * LIST_PAGE_SIZE);
+  function goToListPage(next: number) {
+    setListDir(next > safeListPage ? 1 : -1);
+    setListPage(next);
+    // From the pager at the bottom, bring the top of the list back into view
+    const top = listRef.current?.getBoundingClientRect().top ?? 0;
+    if (top < 130) listRef.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+  }
+
   /* Print Summary — the Summary of Faculty Workload for the term: every faculty with
      subjects, Permanent then Contractual, each line from their own official forms. */
   const [summaryProgress, setSummaryProgress] = useState<{ done: number; total: number; excel: boolean } | null>(null);
@@ -613,7 +635,11 @@ export default function FacultySchedulesClient({
     };
     try {
       if (excel) {
-        await downloadWorkloadSummaryExcel(opts);
+        await runExport({ kind: 'excel', detail: 'Summary of Faculty Workload' }, report =>
+          downloadWorkloadSummaryExcel({
+            ...opts,
+            onProgress: (done: number, total: number) => { opts.onProgress(done, total); report(total ? done / total : 0); },
+          }));
         toast.success('Summary of Faculty Workload downloaded as Excel.');
       } else {
         const result = await printWorkloadSummary(opts);
@@ -845,7 +871,7 @@ export default function FacultySchedulesClient({
       </div>
 
       {/* ── Instructor Summary Table ── */}
-      <div className="bg-white border border-[#E2E8F0] rounded-2xl overflow-hidden shadow-sm w-full min-w-0">
+      <div ref={listRef} className="bg-white border border-[#E2E8F0] rounded-2xl overflow-hidden shadow-sm w-full min-w-0 scroll-mt-32">
 
         <div className="px-4 sm:px-6 py-4 border-b border-[#F1F5F9] flex items-center justify-between">
           <p className="text-sm font-semibold" style={{ color: '#0B2A5B' }}>
@@ -855,10 +881,17 @@ export default function FacultySchedulesClient({
         </div>
 
         {/* Phone: one card per faculty instead of a sideways-scrolling table */}
-        <ul className="md:hidden divide-y divide-[#F1F5F9]">
+        <motion.ul
+          // A new page eases in from the side it came from, where the old one was
+          key={`m-page-${safeListPage}`}
+          initial={reduceMotion ? false : { opacity: 0, x: 28 * listDir }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ duration: 0.35, ease: [0.4, 0, 0.2, 1] }}
+          className="md:hidden divide-y divide-[#F1F5F9]"
+        >
           {visibleGroups.length === 0 ? (
             <li className="text-center py-16 px-4 text-[15px]" style={{ color: '#94A3B8' }}>No faculty found. Try adjusting your filters.</li>
-          ) : visibleGroups.map(group => {
+          ) : pagedGroups.map(group => {
             const isPermanent = group.empStatus === 'Permanent';
             // The Actual Load form's total: classes + deloading
             const totalValue = group.rows.reduce((sum, r) => sum + rowValue(r), 0)
@@ -879,7 +912,7 @@ export default function FacultySchedulesClient({
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="font-semibold text-[15px] leading-snug break-words" style={{ color: '#0B2A5B' }}>{group.facultyName}</p>
-                      <p className="text-[13px] mt-0.5 break-words" style={{ color: '#64748B' }}>{group.position || '—'}</p>
+                      <p className="text-sm mt-0.5 break-words" style={{ color: '#64748B' }}>{group.position || '—'}</p>
                     </div>
                     <EmploymentBadge status={group.empStatus} className="flex-shrink-0" />
                   </div>
@@ -899,7 +932,7 @@ export default function FacultySchedulesClient({
               </li>
             );
           })}
-        </ul>
+        </motion.ul>
 
         <div className="hidden md:block overflow-x-auto">
           <table className="w-full min-w-[720px] table-fixed text-sm">
@@ -908,7 +941,7 @@ export default function FacultySchedulesClient({
                 {SUMMARY_COLS.map(h => (
                   <th
                     key={h}
-                    className={`px-4 sm:px-5 py-3.5 text-left text-[11px] font-bold uppercase tracking-wider ${
+                    className={`px-4 sm:px-5 py-3.5 text-left text-sm font-semibold uppercase tracking-wide ${
                       h === 'View' ? 'w-[8rem]' : ''
                     }`}
                     style={{ color: '#64748B' }}
@@ -919,7 +952,13 @@ export default function FacultySchedulesClient({
               </tr>
             </thead>
 
-            <tbody className="divide-y divide-[#F1F5F9]">
+            <motion.tbody
+              key={`page-${safeListPage}`}
+              initial={reduceMotion ? false : { opacity: 0, x: 28 * listDir }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.35, ease: [0.4, 0, 0.2, 1] }}
+              className="divide-y divide-[#F1F5F9]"
+            >
               {visibleGroups.length === 0 ? (
                 <tr>
                   <td colSpan={SUMMARY_COLS.length} className="text-center py-20 text-[15px]" style={{ color: '#94A3B8' }}>
@@ -927,7 +966,7 @@ export default function FacultySchedulesClient({
                   </td>
                 </tr>
               ) : (
-                visibleGroups.map(group => {
+                pagedGroups.map(group => {
                   const isPermanent = group.empStatus === 'Permanent';
                   const regularCount  = group.rows.filter(r => r.load_category === 'Regular').length;
                   const overloadCount = group.rows.filter(r => r.load_category === 'Overload').length;
@@ -942,7 +981,7 @@ export default function FacultySchedulesClient({
                     <tr key={`grp-${group.facultyId}`} className="hover:bg-[#F8FAFC] transition-colors">
 
                       <td className="px-4 sm:px-5 py-4 min-w-0">
-                        <div className="font-semibold text-[14px] leading-snug truncate" style={{ color: '#0B2A5B' }}>{group.facultyName}</div>
+                        <div className="font-semibold text-sm leading-snug truncate" style={{ color: '#0B2A5B' }}>{group.facultyName}</div>
                       </td>
 
                       <td className="px-4 sm:px-5 py-4 text-sm min-w-0" style={{ color: '#64748B' }}>
@@ -980,9 +1019,20 @@ export default function FacultySchedulesClient({
                   );
                 })
               )}
-            </tbody>
+            </motion.tbody>
           </table>
         </div>
+
+        <Pagination
+          className="px-4 sm:px-6 py-4 border-t border-[#F1F5F9]"
+          layoutId="faculty-schedules-page"
+          page={safeListPage}
+          pageCount={listPageCount}
+          onChange={goToListPage}
+          total={visibleGroups.length}
+          pageSize={LIST_PAGE_SIZE}
+          noun="faculty"
+        />
       </div>
 
       </PageLoadTransition>

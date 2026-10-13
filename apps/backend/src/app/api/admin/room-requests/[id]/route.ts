@@ -1,11 +1,12 @@
 ﻿import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUser } from '@/auth/auth';
 import { query } from '@/database/db';
-import { applyRequestedRoom, expireStaleOccupancy, expireStaleRoomRequests } from '@/services/ensureRoomOccupancy';
+import { applyRequestedRoom, expireStaleOccupancy, expireStaleRoomRequests, holdRoomForRequest } from '@/services/ensureRoomOccupancy';
 import { createNotification } from '@/services/notifications';
 import { withAudit } from '@/services/audit';
 import { canManageRooms } from '@/services/rooms';
-import { manilaTodayAtSql } from '@/services/appTimezone';
+import { manilaDateAtSql, manilaTodayAtSql } from '@/services/appTimezone';
+import { HOLD_BEFORE_MIN, timeRange12 } from '@shared/roomRequestWindow';
 
 async function PATCH_handler(
   req: NextRequest,
@@ -31,7 +32,12 @@ async function PATCH_handler(
 
     const reqRes = await query(`
       SELECT id, master_schedule_id, original_room_id, requested_room_id,
-             faculty_id, status AS current_status
+             faculty_id, status AS current_status,
+             use_date IS NOT NULL AS today_only,
+             to_char(use_start, 'HH24:MI') AS use_start,
+             to_char(use_end,   'HH24:MI') AS use_end,
+             NOW() >= ${manilaDateAtSql('use_date', 'use_start')} - INTERVAL '${HOLD_BEFORE_MIN} minutes' AS hold_open,
+             NOW() >= ${manilaDateAtSql('use_date', 'use_end')} AS class_over
       FROM   room_change_requests
       WHERE  id = $1
     `, [rid]);
@@ -49,13 +55,36 @@ async function PATCH_handler(
       );
     }
 
-    const nextStatus = status === 'Approved' ? 'In-Use' : 'Rejected';
+    // A today-only request (one class time today): approving holds the room for
+    // that time without a QR scan — right away when the time is near, otherwise
+    // from 15 minutes before the class (Approved until then). The class's
+    // schedule never changes.
+    const todayOnly = rcr.today_only === true;
+    const approveTodayOnly = todayOnly && status === 'Approved';
+    if (approveTodayOnly) {
+      if (rcr.class_over) {
+        return NextResponse.json({ error: 'This class time has already ended.' }, { status: 409 });
+      }
+      if (rcr.hold_open && !(await holdRoomForRequest(rid))) {
+        return NextResponse.json(
+          { error: 'The requested room is currently occupied by another faculty member.' },
+          { status: 409 },
+        );
+      }
+    }
+
+    const nextStatus = status === 'Rejected' ? 'Rejected' : approveTodayOnly && !rcr.hold_open ? 'Approved' : 'In-Use';
+    const todayLabel = todayOnly ? timeRange12(rcr.use_start, rcr.use_end) : '';
+    const todayRoom = approveTodayOnly
+      ? (await query(`SELECT room_name FROM rooms WHERE id = $1`, [rcr.requested_room_id])).rows[0]?.room_name ?? 'The room'
+      : '';
 
     let roomChangeApplied = false;
 
     // The room is claimed first; the class only moves once the claim succeeds,
     // so a room someone else holds never leaves the schedule half-changed.
-    if (rcr.requested_room_id) {
+    // (A today-only approval was held above and moves nothing.)
+    if (rcr.requested_room_id && !approveTodayOnly) {
       if (status === 'Rejected') {
         await query(`
           UPDATE room_occupancy
@@ -151,9 +180,11 @@ async function PATCH_handler(
       recipientId: Number(rcr.faculty_id), recipientRole: 'instructor',
       title: status === 'Approved' ? 'Room Request Approved' : 'Room Request Rejected',
       message: status === 'Approved'
-        ? roomChangeApplied
-          ? 'Your room request was approved. The room is now occupied and your schedule has been updated. No QR scan is required.'
-          : 'Your room request was approved. The room is now occupied. No QR scan is required.'
+        ? approveTodayOnly
+          ? `Your room request was approved. ${todayRoom} is yours today, ${todayLabel}. No QR scan is required.`
+          : roomChangeApplied
+            ? 'Your room request was approved. The room is now occupied and your schedule has been updated. No QR scan is required.'
+            : 'Your room request was approved. The room is now occupied. No QR scan is required.'
         : `Your room change request was rejected.${admin_notes ? ` Reason: ${admin_notes}` : ''}`,
       type: status === 'Approved' ? 'room_request_approved' : 'room_request_rejected',
       relatedModule: 'room_request', relatedId: rid,
@@ -178,9 +209,13 @@ async function PATCH_handler(
     return NextResponse.json({
       success:             true,
       room_change_applied: roomChangeApplied,
-      occupancy_applied:   status === 'Approved',
+      occupancy_applied:   status === 'Approved' && !(approveTodayOnly && !rcr.hold_open),
       message:             status === 'Approved'
-        ? 'Request approved. The room is now occupied. QR scan is not required.'
+        ? approveTodayOnly
+          ? rcr.hold_open
+            ? `Request approved. ${todayRoom} is now held for the faculty until the class ends. QR scan is not required.`
+            : `Request approved. ${todayRoom} will be held for the faculty today, ${todayLabel}. QR scan is not required.`
+          : 'Request approved. The room is now occupied. QR scan is not required.'
         : 'Request rejected.',
     });
   } catch (error) {

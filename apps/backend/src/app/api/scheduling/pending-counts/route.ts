@@ -62,7 +62,7 @@ export async function GET(req: NextRequest) {
     // Faculty Schedules — instructors with at least one assigned load that isn't time-scheduled yet.
     const facultySchedule = Number(facultyScheduleRes.rows[0]?.count ?? 0);
 
-    // Schedule Classes — faculty with assigned classes that still have no time slot.
+    // Class Assignment — faculty with assigned classes that still have no time slot.
     const scheduleClasses = Object.values(unscheduled).filter(n => n > 0).length;
 
     return NextResponse.json({ workload, masterSchedule, facultySchedule, scheduleClasses });

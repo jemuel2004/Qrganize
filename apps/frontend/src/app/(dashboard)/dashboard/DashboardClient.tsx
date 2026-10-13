@@ -50,7 +50,7 @@ interface Analytics {
   scheduling: { unassigned: number };
   workload: { regular: number; overload: number; praise: number };
   usage_by_day: { day: string; lec: number; lab: number }[];
-  faculty_load: { status: 'complete' | 'overload' | 'in_progress' | 'not_started' }[];
+  faculty_load: { status: 'complete' | 'overload' | 'praise' | 'in_progress' | 'not_started' }[];
 }
 
 /* ─── Helpers ────────────────────────────────────────────────── */
@@ -336,8 +336,8 @@ export default function DashboardClient() {
     { label: 'Schedule Conflicts', count: an.kpis.conflicts, href: '/scheduling', icon: AlertTriangle },
     { label: 'Unassigned Subjects', count: an.scheduling.unassigned, href: '/master-schedule?status=Unassigned', icon: ClipboardList },
     { label: 'Room Requests Pending', count: st.pending_requests, href: '/room-requests', icon: DoorOpen },
-    // Opens Faculty Workload on its Unassigned button (faculty with no subject yet)
-    { label: 'Incomplete Faculty Load', count: incompleteLoad, href: '/workload?show=unassigned', icon: Users },
+    // Opens Faculty Workload on its Incomplete button (same faculty: short of load or no subject yet)
+    { label: 'Incomplete Faculty Load', count: incompleteLoad, href: '/workload?show=incomplete', icon: Users },
   ] : [];
 
   return (

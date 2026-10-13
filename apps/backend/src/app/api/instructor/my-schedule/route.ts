@@ -1,6 +1,7 @@
 ﻿import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUser } from '@/auth/auth';
 import { query } from '@/database/db';
+import { getActiveAcademicPeriod } from '@/services/activeAcademicPeriod';
 
 /**
  * GET /api/instructor/my-schedule?semester=X&academic_year=Y
@@ -23,8 +24,11 @@ export async function GET(req: NextRequest) {
 
     const facultyId = authUser.faculty_id;
     const { searchParams } = new URL(req.url);
-    const semester     = searchParams.get('semester')      || '';
-    const academicYear = searchParams.get('academic_year') || '';
+    // No term asked for: the active term only, so the week shows one semester's classes
+    const askedTerm    = searchParams.has('semester') || searchParams.has('academic_year');
+    const period       = askedTerm ? null : await getActiveAcademicPeriod();
+    const semester     = (askedTerm ? searchParams.get('semester') : period?.semester) || '';
+    const academicYear = (askedTerm ? searchParams.get('academic_year') : period?.schoolYear) || '';
 
     const conditions = ['f.id = $1', "ms.status IN ('Assigned', 'Scheduled')"];
     const values: (string | number)[] = [facultyId];
@@ -85,7 +89,9 @@ export async function GET(req: NextRequest) {
             'start_time',ss.start_time::text,
             'end_time',  ss.end_time::text,
             'room_name', sr.room_name,
-            'room_id',   ss.room_id
+            'room_id',   ss.room_id,
+            -- Lecture or Laboratory part; read through jsonb so a database without the column still works
+            'type',      to_jsonb(ss) ->> 'type'
           ) ORDER BY ss.start_time)
           FROM   schedule_sessions ss
           LEFT JOIN rooms sr ON ss.room_id = sr.id

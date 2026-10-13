@@ -2,20 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { query, transaction } from '@/database/db';
 import { getAuthUser } from '@/auth/auth';
 import { getChairAssignedProgramId, isScopedChair } from '@/services/programScope';
-import { findOverlappingSessions, findScheduleConflicts, validateSessions, type ScheduleConflict } from '@/services/scheduleConflicts';
-import { checkMajorLecLab, type MajorLecLabCheck } from '@/services/majorRoomRule';
 import { withAudit } from '@/services/audit';
-import { ensureSessionTypes } from '@/services/sessionTypeRepair';
-import { ensureFacultyActivitiesTable } from '@/database/facultyActivitiesSchema';
-
-/* Run once per cold start — avoids DDL + migration overhead on every POST */
-let schedSchemaReady   = false;
-
-async function ensureSchedSchema() {
-  if (schedSchemaReady) return;
-  await query(`ALTER TABLE schedule_sessions ADD COLUMN IF NOT EXISTS type VARCHAR(3) DEFAULT 'lec'`);
-  schedSchemaReady = true;
-}
+import { saveSchedulePart, type SchedulePartBody } from '@/services/scheduleSave';
 
 // Returns all master_schedule rows that have an assigned instructor but no saved
 // class schedule yet (status = 'Assigned').  This is the source of truth for
@@ -74,20 +62,6 @@ export async function GET(req: NextRequest) {
   }
 }
 
-function addMinutesToTime(timeStr: string, minutes: number): string {
-  const [h, m] = timeStr.split(':').map(Number);
-  const totalMinutes = h * 60 + m + minutes;
-  const newH = Math.floor(totalMinutes / 60) % 24;
-  const newM = totalMinutes % 60;
-  return `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}:00`;
-}
-
-function timeToMinutes(t: string): number {
-  const parts = t.split(':').map(Number);
-  return parts[0] * 60 + parts[1];
-}
-
-const LAB_ROOM_TYPES = ['Laboratory', 'Computer Lab'];
 
 async function POST_handler(req: NextRequest) {
   try {
@@ -95,258 +69,17 @@ async function POST_handler(req: NextRequest) {
     if (!auth || !['admin', 'department_chair', 'program_chair'].includes(auth.role ?? '')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-
     // sessions: [{ day, start_time, hours, type: 'lec'|'lab', room_id: string|null }]
     // component: 'lec' | 'lab' — which component of a Lec+Lab subject is being scheduled
-    const { master_schedule_id, day_pattern, split_type, sessions, component } = await req.json();
-
-    if (!master_schedule_id || !day_pattern || !sessions || sessions.length === 0) {
+    const body: unknown = await req.json().catch(() => null);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
       return NextResponse.json({ error: 'Schedule ID, day pattern, and sessions are required' }, { status: 400 });
     }
-
-    // Get schedule and subject details
-    const schedResult = await query(`
-      SELECT ms.*, c.total_hours, c.lecture_hours, c.laboratory_hours, c.units,
-        ms.faculty_id, b.semester, b.academic_year, b.id as block_id, b.program_id,
-        bs.block_id as bs_block_id
-      FROM master_schedule ms
-      JOIN block_subjects bs ON ms.block_subject_id = bs.id
-      JOIN curriculums c ON bs.curriculum_id = c.id
-      JOIN blocks b ON bs.block_id = b.id
-      WHERE ms.id = $1
-    `, [master_schedule_id]);
-
-    if (schedResult.rows.length === 0) return NextResponse.json({ error: 'Schedule not found' }, { status: 404 });
-    const sched = schedResult.rows[0];
-
-    if (isScopedChair(auth)) {
-      const chairProgramId = auth.id ? await getChairAssignedProgramId(Number(auth.id)) : null;
-      if (chairProgramId == null || Number(sched.program_id) !== chairProgramId) {
-        return NextResponse.json({ error: 'Schedule not found' }, { status: 404 });
-      }
-    }
-
-    if (!sched.faculty_id) return NextResponse.json({ error: 'Please assign a faculty member first' }, { status: 400 });
-
-    // Reject malformed sessions (unknown day, bad time, 0 hours) — they would
-    // match nothing and slip past every conflict check.
-    const invalidSessions = validateSessions(sessions);
-    if (invalidSessions) return NextResponse.json({ error: invalidSessions }, { status: 400 });
-
-    // The same subject can't meet twice at once (e.g. Monday 8–10 entered
-    // twice). The form flags this too; checked here for requests that skip it.
-    const selfOverlaps = findOverlappingSessions(sessions);
-    if (selfOverlaps.length > 0) {
-      return NextResponse.json({
-        error: `Schedule conflict: ${selfOverlaps[0].message}`,
-        conflicts: selfOverlaps,
-      }, { status: 409 });
-    }
-
-    const lecHours = parseFloat(sched.lecture_hours) || 0;
-    const labHours = parseFloat(sched.laboratory_hours) || 0;
-    const isLecLab = lecHours > 0 && labHours > 0;
-    const isLabOnly = labHours > 0 && lecHours === 0;
-
-    // Validate session hours match curriculum component hours
-    const totalSessionHours = sessions.reduce((sum: number, s: { hours: number }) => sum + parseFloat(String(s.hours)), 0);
-    let expectedTotal: number;
-    if (isLecLab && component) {
-      expectedTotal = component === 'lab' ? labHours : lecHours;
-    } else {
-      expectedTotal = parseFloat(sched.total_hours);
-    }
-
-    if (Math.abs(totalSessionHours - expectedTotal) > 0.01) {
-      return NextResponse.json({
-        error: `Session hours must equal ${expectedTotal.toFixed(2)} hrs. Got: ${totalSessionHours.toFixed(2)} hrs`
-      }, { status: 400 });
-    }
-
-    // ── Within-schedule session overlap detection (server-side) ─────────────
-    // Catches overlapping sessions submitted for the same schedule even before
-    // they hit the database, complementing the client-side duplicate check.
-    for (let i = 0; i < sessions.length; i++) {
-      for (let j = i + 1; j < sessions.length; j++) {
-        const a = sessions[i];
-        const b = sessions[j];
-        if (a.day !== b.day) continue;
-        const aStart = timeToMinutes(a.start_time);
-        const aEnd   = aStart + Math.round(parseFloat(String(a.hours)) * 60);
-        const bStart = timeToMinutes(b.start_time);
-        const bEnd   = bStart + Math.round(parseFloat(String(b.hours)) * 60);
-        if (aStart < bEnd && aEnd > bStart) {
-          return NextResponse.json({
-            error: `Sessions ${i + 1} and ${j + 1} overlap on ${a.day}. Each session on the same day must use a distinct, non-overlapping time slot.`
-          }, { status: 400 });
-        }
-      }
-    }
-
-    // ── Room-type validation (per session, only when a room is selected) ────
-    // Lab sessions may be saved without a room; room is optional.
-    // When a room IS provided, validate it matches the session type.
-    for (const session of sessions) {
-      const sessionRoomId = session.room_id || null;
-      if (!sessionRoomId) continue;
-      const sessionType: string = session.type || component || (isLabOnly ? 'lab' : 'lec');
-      const roomResult = await query('SELECT room_type, status FROM rooms WHERE id=$1', [sessionRoomId]);
-      if (roomResult.rows.length === 0) {
-        return NextResponse.json({ error: 'The selected room no longer exists.' }, { status: 400 });
-      }
-      if (roomResult.rows[0].status && roomResult.rows[0].status !== 'Active') {
-        return NextResponse.json({ error: 'The selected room is not active.' }, { status: 400 });
-      }
-      const isLabRoom = LAB_ROOM_TYPES.includes(roomResult.rows[0].room_type);
-      if (sessionType === 'lab' && !isLabRoom) {
-        return NextResponse.json({ error: 'Lab sessions must use a Laboratory or Computer Lab room' }, { status: 400 });
-      }
-      // The Lecture of a subject that has a lab (Major + Lab) may use a lab
-      // room; a pure lecture subject may not.
-      if (sessionType === 'lec' && isLabRoom && labHours <= 0) {
-        return NextResponse.json({ error: 'A lecture-only subject cannot use a laboratory room' }, { status: 400 });
-      }
-    }
-
-    // Component being saved — exclude only these sessions on re-save; sibling Lec/Lab must still conflict.
-    const schedulingType: string = component || (isLabOnly ? 'lab' : 'lec');
-
-    // ── Compute master_schedule time fields ─────────────────────────────────
-    const firstLecSession = sessions.find((s: { type?: string }) => (s.type || 'lec') === 'lec') || sessions[0];
-    const firstStartTime = firstLecSession.start_time;
-    const firstHoursMinutes = Math.round(parseFloat(String(firstLecSession.hours)) * 60);
-    const firstEndTime = addMinutesToTime(firstStartTime, firstHoursMinutes);
-
-    // For same-day Lec+Lab, extend master end_time to cover the full continuous block
-    const isSameDayLecLab = isLecLab && sessions.length === 2 && sessions[0].day === sessions[1].day;
-    let masterEndTime = firstEndTime;
-    if (isSameDayLecLab) {
-      const lastSession = [...sessions].sort(
-        (a: { start_time: string }, b: { start_time: string }) => a.start_time.localeCompare(b.start_time)
-      ).pop()!;
-      const lastMins = Math.round(parseFloat(String(lastSession.hours)) * 60);
-      masterEndTime = addMinutesToTime(lastSession.start_time, lastMins);
-    }
-
-    // Persist first session's room to master_schedule for workload queries
-    const masterRoomId = sessions[0]?.room_id || null;
-
-    // Ensure type column + legacy migration run once per cold start, not per request
-    await ensureSchedSchema();
-    await ensureSessionTypes();
-    await ensureFacultyActivitiesTable();
-
-    // ── Atomic save (transaction) ───────────────────────────────────────────
-    // DELETE + INSERT + UPDATE are all-or-nothing: a mid-save failure rolls
-    // back entirely instead of leaving the schedule in a partial state.
-    // For Lec+Lab subjects, only sessions of the current component type are
-    // deleted so the other component's sessions are preserved independently.
-    const outcome = await transaction<{ conflicts: ScheduleConflict[]; majorRoom?: MajorLecLabCheck }>(async (client) => {
-      // One schedule save at a time: without this, two admins saving at the
-      // same moment could both pass the conflict check and double-book an
-      // instructor, room or block. Released automatically at COMMIT/ROLLBACK.
-      await client.query(`SELECT pg_advisory_xact_lock(hashtext('qrganize:schedule-save'))`);
-
-      // First the Major Lec + Lab rule (it is about the request itself): the same
-      // days and one laboratory for both parts. A room chosen here moves the other
-      // part into it too — refused when that room is not free at the other part's
-      // times, or when the days differ from the other part's (services/majorRoomRule.ts).
-      const majorRoom = await checkMajorLecLab(
-        (text, params) => client.query(text, params),
-        {
-          masterScheduleId: Number(master_schedule_id),
-          facultyId: Number(sched.faculty_id),
-          blockId: Number(sched.bs_block_id),
-          semester: sched.semester || '',
-          academicYear: sched.academic_year || '',
-          part: schedulingType === 'lab' ? 'lab' : 'lec',
-          days: sessions.map((s: { day?: unknown }) => (s.day == null ? null : String(s.day))),
-          roomIds: sessions.map((s: { room_id?: unknown }) => s.room_id as string | number | null),
-        },
-      );
-      if (majorRoom.error) return { conflicts: [], majorRoom };
-
-      // Conflict check inside the lock — same rules as /check-conflicts
-      const conflicts = await findScheduleConflicts(
-        (text, params) => client.query(text, params),
-        {
-          masterScheduleId: Number(master_schedule_id),
-          facultyId: Number(sched.faculty_id),
-          blockId: Number(sched.bs_block_id),
-          semester: sched.semester || '',
-          academicYear: sched.academic_year || '',
-          editingType: schedulingType === 'lab' ? 'lab' : 'lec',
-          sessions,
-        },
-      );
-      if (conflicts.length > 0) return { conflicts };
-
-      await client.query(
-        'DELETE FROM schedule_sessions WHERE master_schedule_id=$1 AND type=$2',
-        [master_schedule_id, schedulingType]
-      );
-
-      for (const session of sessions) {
-        const sessionHoursMinutes = Math.round(parseFloat(String(session.hours)) * 60);
-        const sessionEndTime = addMinutesToTime(session.start_time, sessionHoursMinutes);
-        const sessionRoomId = session.room_id || null;
-        await client.query(`
-          INSERT INTO schedule_sessions (master_schedule_id, day_of_week, start_time, end_time, session_hours, room_id, type)
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
-        `, [master_schedule_id, session.day, session.start_time, sessionEndTime, session.hours, sessionRoomId, schedulingType]);
-      }
-      if (majorRoom.move) {
-        await client.query('UPDATE schedule_sessions SET room_id = $1 WHERE id = ANY($2::int[])',
-          [majorRoom.move.roomId, majorRoom.move.sessionIds]);
-      }
-
-      // For Lec+Lab subjects, only mark 'Scheduled' when both components have sessions.
-      // Single-component subjects are always 'Scheduled' after saving.
-      let newStatus = 'Scheduled';
-      if (isLecLab) {
-        const lecCheck = await client.query(
-          `SELECT 1 FROM schedule_sessions WHERE master_schedule_id=$1 AND type='lec' LIMIT 1`,
-          [master_schedule_id]
-        );
-        const labCheck = await client.query(
-          `SELECT 1 FROM schedule_sessions WHERE master_schedule_id=$1 AND type='lab' LIMIT 1`,
-          [master_schedule_id]
-        );
-        newStatus = (lecCheck.rows.length > 0 && labCheck.rows.length > 0) ? 'Scheduled' : 'Assigned';
-      }
-
-      await client.query(`
-        UPDATE master_schedule SET
-          day_pattern=$1, start_time=$2, end_time=$3, room_id=$4,
-          split_type=$5, status=$6, updated_at=NOW()
-        WHERE id=$7
-      `, [day_pattern, firstStartTime, masterEndTime, masterRoomId, split_type || 'Manual', newStatus, master_schedule_id]);
-
-      await client.query(
-        `UPDATE block_subjects SET status=$1
-         WHERE id=(SELECT block_subject_id FROM master_schedule WHERE id=$2)`,
-        [newStatus, master_schedule_id]
-      );
-      return { conflicts: [], majorRoom };
-    });
-
-    if (outcome.conflicts.length > 0) {
-      return NextResponse.json({
-        error: `Schedule conflict: ${outcome.conflicts[0].message}`,
-        conflicts: outcome.conflicts,
-      }, { status: 409 });
-    }
-    if (outcome.majorRoom?.error) {
-      return NextResponse.json({ error: outcome.majorRoom.error, room_rule_error: true }, { status: outcome.majorRoom.status ?? 400 });
-    }
-
-    const moved = outcome.majorRoom?.move;
-    return NextResponse.json({
-      success: true,
-      message: 'Schedule saved successfully',
-      // The other part followed into the same room (Major subject)
-      moved: moved ? { part: moved.part, room_name: moved.roomName } : null,
-    });
+    const scopedProgramId = isScopedChair(auth)
+      ? (auth.id ? await getChairAssignedProgramId(Number(auth.id)) : null)
+      : undefined;
+    const out = await saveSchedulePart(body as SchedulePartBody, { scopedProgramId });
+    return NextResponse.json(out.body, { status: out.status });
   } catch (error) {
     console.error('[POST /api/scheduling]', error);
     return NextResponse.json({ error: 'Failed to save schedule.' }, { status: 500 });

@@ -7,7 +7,12 @@ import { ensureAuditTable } from './auditSchema';
 import { ensureRealtimeTable } from './realtimeSchema';
 import { ensureErrorLogTable } from './errorLogSchema';
 import { ensureFacultyActivitiesTable } from './facultyActivitiesSchema';
+import { ensureRoomReleasesTable } from './roomReleasesSchema';
+import { ensurePushTables } from './pushSchema';
 import { ensureNotificationsTable } from './notificationsSchema';
+import { ensureWorkloadRemindersTable } from './workloadRemindersSchema';
+import { ensureNstpTables } from './nstpSchema';
+import { archiveNstpClassRows } from '@/services/nstp';
 import { canonicalSubjectCode, subjectKey } from '@shared/subjectCode';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -964,6 +969,36 @@ async function v52_overloadLecturePart() {
   await query(`ALTER TABLE overloads ADD COLUMN IF NOT EXISTS lec_part NUMERIC(6,2)`);
 }
 
+/** Faculty "Make Classroom Available": one class session's room freed for one date (services/roomReleases.ts) */
+async function v53_roomReleases() {
+  await ensureRoomReleasesTable();
+}
+
+/** Room requests are for today only: the date and class time the room is held for */
+async function v54_roomRequestUseWindow() {
+  await query(`ALTER TABLE room_change_requests ADD COLUMN IF NOT EXISTS use_date  DATE`);
+  await query(`ALTER TABLE room_change_requests ADD COLUMN IF NOT EXISTS use_start TIME`);
+  await query(`ALTER TABLE room_change_requests ADD COLUMN IF NOT EXISTS use_end   TIME`);
+}
+
+/** Faculty Schedules workload reminders (feature removed 2026-10-11; the table is unused) */
+async function v56_workloadReminders() {
+  await ensureWorkloadRemindersTable();
+}
+
+/** Class reminders on faculty devices: devices, settings, sent reminders, push keys */
+async function v55_classReminderPush() {
+  await ensurePushTables();
+}
+
+/** NSTP is on the Class Program only (Settings → Day Combinations → NSTP): its setting,
+ *  and its class rows taken out of the regular scheduling (archived first) */
+async function v57_nstpClassProgramOnly() {
+  await ensureNstpTables();
+  const removed = await archiveNstpClassRows();
+  if (removed > 0) console.log(`[migrate] v57: ${removed} NSTP class row(s) archived and taken out of the regular scheduling.`);
+}
+
 /** One-time: each faculty is assigned the blocks they already teach, so the new
  *  block filter on Faculty Workload doesn't hide their current classes. */
 async function v45_seedFacultyBlocks() {
@@ -1074,6 +1109,11 @@ const MIGRATIONS: Array<{ version: number; name: string; fn: () => Promise<void>
   { version: 50, name: 'faculty_activities + optional rank',      fn: v50_facultyActivitiesAndOptionalRank },
   { version: 51, name: 'scan log statuses + request session rooms', fn: v51_scanLogStatusesAndRequestSessionRooms },
   { version: 52, name: 'overloads lecture part (flexible splits)', fn: v52_overloadLecturePart },
+  { version: 53, name: 'room_releases table (faculty-released classrooms)', fn: v53_roomReleases },
+  { version: 54, name: 'room request use date + class time (today-only)', fn: v54_roomRequestUseWindow },
+  { version: 55, name: 'class reminder push (devices, settings, deliveries)', fn: v55_classReminderPush },
+  { version: 56, name: 'workload reminder states (Faculty Schedules)', fn: v56_workloadReminders },
+  { version: 57, name: 'NSTP on the Class Program only (setting + archive)', fn: v57_nstpClassProgramOnly },
 ];
 
 // ─── public entry point ───────────────────────────────────────────────────────

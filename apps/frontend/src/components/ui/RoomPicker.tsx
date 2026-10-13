@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
-import { Check, ChevronDown, DoorOpen, FlaskConical, Monitor, Users } from 'lucide-react';
+import { Ban, Check, ChevronDown, DoorOpen, FlaskConical, Monitor, Users } from 'lucide-react';
 import AnchoredPopover from './AnchoredPopover';
 
 /*
@@ -13,6 +13,10 @@ import AnchoredPopover from './AnchoredPopover';
  * booked at the session's current day/time can still be picked — the page then
  * moves the session to that room's first free time, and the Time picker greys
  * out only the room's occupied times. Free rooms are listed first.
+ *
+ * Rooms that can't be used at all (e.g. a Major subject's other part would have
+ * no time left there) aren't hidden without a word: they wait, greyed out with
+ * the reason, under one folded line at the bottom ("18 more rooms can't be used").
  */
 
 export interface RoomOption {
@@ -22,6 +26,8 @@ export interface RoomOption {
   capacity?: number | null;
   /** Set when the room is already booked at this session's current day/time */
   busyWith?: string | null;
+  /** Set when the room can't be picked at all — why (shown greyed out under the folded line) */
+  unavailable?: string | null;
 }
 
 const EASE = [0.4, 0, 0.2, 1] as const;
@@ -39,12 +45,13 @@ export default function RoomPicker({
   day,
   warnEmpty = false,
   preferred = null,
+  unavailableHint,
 }: {
   /** room id as string, '' = none */
   value: string;
   onChange: (value: string) => void;
   rooms: RoomOption[];
-  /** The room the class's other part uses (e.g. "Lecture's room") — listed first, tagged */
+  /** The room the class's other part uses (e.g. "Its Lecture is here") — listed first, tagged */
   preferred?: { id: number; label: string } | null;
   component: 'lec' | 'lab';
   /** Selected day ('' = no day yet — availability unknown) */
@@ -53,6 +60,8 @@ export default function RoomPicker({
   timeLabel?: string;
   /** Highlight the trigger when no room is chosen (Laboratory needs one) */
   warnEmpty?: boolean;
+  /** Second line of the folded "N more rooms can't be used" row — why, in general */
+  unavailableHint?: string;
 }) {
   const reduceMotion = useReducedMotion();
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -60,6 +69,7 @@ export default function RoomPicker({
   const [open, setOpen] = useState(false);
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [focusIdx, setFocusIdx] = useState(-1);
+  const [showBlocked, setShowBlocked] = useState(false);
   const close = useCallback(() => setOpen(false), []);
 
   const selected = rooms.find(r => String(r.id) === value) ?? null;
@@ -69,18 +79,24 @@ export default function RoomPicker({
   // Free rooms first, then booked; the other part's room leads its group; natural name order (Lecture-2 before Lecture-10)
   const preferredId = preferred?.id ?? null;
   const list = useMemo(() => rooms
-    .filter(r => typeFilter === 'all' || r.room_type === typeFilter)
+    .filter(r => (typeFilter === 'all' || r.room_type === typeFilter) && !r.unavailable)
     .sort((a, b) =>
       Number(!!a.busyWith) - Number(!!b.busyWith)
       || Number(b.id === preferredId) - Number(a.id === preferredId)
       || a.room_name.localeCompare(b.room_name, undefined, { numeric: true })),
   [rooms, typeFilter, preferredId]);
+  /** Rooms that can't be picked — under the folded line, with the reason */
+  const blocked = useMemo(() => rooms
+    .filter(r => (typeFilter === 'all' || r.room_type === typeFilter) && !!r.unavailable)
+    .sort((a, b) => a.room_name.localeCompare(b.room_name, undefined, { numeric: true })),
+  [rooms, typeFilter]);
 
 
   useEffect(() => {
     if (!open) return;
     setTypeFilter('all');
     setFocusIdx(-1);
+    setShowBlocked(false);
     const id = window.setTimeout(() => {
       panelRef.current?.querySelector<HTMLElement>('[data-selected="true"]')?.scrollIntoView({ block: 'nearest' });
     }, 40);
@@ -173,7 +189,7 @@ export default function RoomPicker({
         {/* Room grid */}
         <div role="listbox" aria-label="Rooms" className="overflow-y-auto overscroll-contain p-3 flex-1 min-h-0 bg-[#FAFBFD]">
           {list.length === 0 ? (
-            <p className="px-3 py-8 text-center text-[13px] text-[#94A3B8]">No rooms.</p>
+            <p className="px-3 py-8 text-center text-[13px] text-[#94A3B8]">{blocked.length ? 'No room can be used here.' : 'No rooms.'}</p>
           ) : (
             <div className="grid grid-cols-2 gap-2">
               {list.map((r, i) => {
@@ -234,19 +250,72 @@ export default function RoomPicker({
                           <Users className="w-3 h-3" /> {r.capacity}
                         </span>
                       ) : null}
-                      {busy && !isSel && <span className="truncate font-semibold text-[#B45309]">Busy · {r.busyWith}</span>}
-                      {!busy && r.id === preferredId && (
-                        <span
-                          className={`truncate font-semibold ${isSel ? '' : 'text-[#1D5BD6]'}`}
-                          style={isSel ? { color: 'rgba(255,255,255,0.9)' } : undefined}
-                        >
-                          {preferred?.label}
-                        </span>
-                      )}
+                      {busy && !isSel
+                        ? <span className="truncate font-semibold text-[#B45309]">Busy · {r.busyWith}</span>
+                        : (
+                          <span
+                            className={`inline-flex items-center gap-1 truncate ${isSel ? '' : 'text-[#64748B]'}`}
+                            style={isSel ? { color: 'rgba(255,255,255,0.85)' } : undefined}
+                          >
+                            <RoomTypeIcon type={r.room_type} className="w-3 h-3 flex-shrink-0" /> {r.room_type}
+                          </span>
+                        )}
                     </div>
+                    {!busy && r.id === preferredId && (
+                      <div
+                        className={`mt-1 text-[11px] truncate font-semibold ${isSel ? '' : 'text-[#1D5BD6]'}`}
+                        style={isSel ? { color: 'rgba(255,255,255,0.9)' } : undefined}
+                      >
+                        {preferred?.label}
+                      </div>
+                    )}
                   </motion.button>
                 );
               })}
+            </div>
+          )}
+
+          {/* The rooms that can't be used: one folded line, opened on request */}
+          {blocked.length > 0 && (
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={() => setShowBlocked(s => !s)}
+                aria-expanded={showBlocked}
+                className="w-full flex items-start gap-2 text-left rounded-xl border border-dashed border-[#CBD5E1] bg-white px-3 py-2.5 hover:border-[#9DB8E8] transition-colors"
+              >
+                <Ban className="w-4 h-4 mt-0.5 flex-shrink-0 text-[#94A3B8]" aria-hidden />
+                <span className="flex-1 min-w-0">
+                  <span className="block text-[13px] font-semibold text-[#475569]">
+                    {blocked.length} more {blocked.length === 1 ? 'room' : 'rooms'} can&apos;t be used
+                  </span>
+                  {unavailableHint && <span className="block text-[12px] text-[#64748B] leading-snug">{unavailableHint}</span>}
+                </span>
+                <motion.span animate={{ rotate: showBlocked ? 180 : 0 }} transition={{ duration: reduceMotion ? 0 : 0.2, ease: EASE }} className="inline-flex mt-0.5">
+                  <ChevronDown className="w-4 h-4 text-[#64748B]" aria-hidden />
+                </motion.span>
+              </button>
+              {showBlocked && (
+                <motion.div
+                  initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0, transition: { duration: reduceMotion ? 0 : 0.2, ease: EASE } }}
+                  className="mt-2 grid grid-cols-2 gap-2"
+                >
+                  {blocked.map(r => (
+                    <div
+                      key={r.id}
+                      role="option"
+                      aria-selected={false}
+                      aria-disabled="true"
+                      title={r.unavailable ?? undefined}
+                      className="rounded-xl border border-[#E2E8F0] bg-[#F1F5F9] px-3 py-2.5 cursor-not-allowed select-none"
+                    >
+                      <div className="text-[13px] font-bold text-[#64748B] truncate">{r.room_name}</div>
+                      <div className="mt-1 text-[11px] text-[#64748B] leading-snug line-clamp-2">{r.unavailable}</div>
+                    </div>
+                  ))}
+                </motion.div>
+              )}
             </div>
           )}
         </div>

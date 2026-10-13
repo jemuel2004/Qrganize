@@ -25,10 +25,10 @@ import {
   isPathActive,
   isSectionActive,
   PRIORITY_PREFETCH,
+  type NavBadgeCounts,
   type NavItem,
   type NavSection,
 } from '@/components/layout/adminNav';
-import type { SchedulingPendingCounts } from '@/hooks/useSchedulingPendingCounts';
 import {
   dropdownItemVariants,
   dropdownVariants,
@@ -41,7 +41,7 @@ import {
 
 interface SidebarProps {
   onNavigate?: () => void;
-  pendingCounts?: SchedulingPendingCounts;
+  pendingCounts?: NavBadgeCounts;
 }
 
 const SECTION_ICON: Record<string, LucideIcon> = {
@@ -204,7 +204,7 @@ function DesktopMenu({
   onNavigate?: () => void;
   onPrefetch: (href: string) => void;
   reduceMotion: boolean;
-  pendingCounts?: SchedulingPendingCounts;
+  pendingCounts?: NavBadgeCounts;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -306,7 +306,7 @@ function DesktopMenuItem({
   onNavigate?: () => void;
   onPrefetch: (href: string) => void;
   reduceMotion: boolean;
-  pendingCounts?: SchedulingPendingCounts;
+  pendingCounts?: NavBadgeCounts;
 }) {
   if (item.children?.length) {
     return (
@@ -482,7 +482,7 @@ export function AdminMobileNav({
   onClose: () => void;
   role: string;
   username?: string | null;
-  pendingCounts?: SchedulingPendingCounts;
+  pendingCounts?: NavBadgeCounts;
 }) {
   const pathname = usePathname();
   const navSections = getNavSections(role);

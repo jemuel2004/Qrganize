@@ -57,6 +57,9 @@ const WRITE_RULES: readonly WriteRule[] = [
   { re: /^\/api\/auth\//, topics: [] },
   { re: /^\/api\/account\/(change-password|security)(\/|$)/, topics: [] },
   { re: /^\/api\/instructor\/profile\/(password|password-otp|theme)(\/|$)/, topics: [] },
+  // Class reminders on the faculty's own devices, and the job that sends them
+  { re: /^\/api\/instructor\/class-reminders(\/|$)/, topics: [] },
+  { re: /^\/api\/cron\//, topics: [] },
   // Personal inbox — those routes bump the reader's own notifications topic
   { re: /^\/api\/notifications(\/|$)/, topics: [] },
   // Page crash reports — the error log bumps 'errors' itself once they are stored
@@ -67,6 +70,8 @@ const WRITE_RULES: readonly WriteRule[] = [
   { re: /^\/api\/(settings\/reset|setup)(\/|$)/, topics: EVERYTHING_SHARED },
   { re: /^\/api\/(settings\/school-year|school-years)(\/|$)/, topics: ['term'] },
   { re: /^\/api\/settings\/(logo|day-combinations)(\/|$)/, topics: ['settings'] },
+  // NSTP time / handler: Settings and the Class Program
+  { re: /^\/api\/settings\/nstp(\/|$)/, topics: ['settings', 'schedule'] },
   // New limits change every remaining load, status and alert
   { re: /^\/api\/settings\/workload-policy(\/|$)/, topics: ['settings', 'workload', 'faculty'] },
 
@@ -88,6 +93,8 @@ const WRITE_RULES: readonly WriteRule[] = [
   { re: /^\/api\/(qr\/scan|rooms\/occupancy)(\/|$)/, topics: ['occupancy', 'room-requests', 'schedule', 'workload'] },
   { re: /^\/api\/admin\/room-requests(\/|$)/, topics: ['room-requests', 'occupancy', 'schedule', 'workload'] },
   { re: /^\/api\/instructor\/room-requests(\/|$)/, topics: ['room-requests', 'occupancy'] },
+  // A faculty freeing their classroom for one date: room availability + their schedule's status
+  { re: /^\/api\/instructor\/room-releases(\/|$)/, topics: ['occupancy', 'schedule'] },
   { re: /^\/api\/rooms\/qr-codes(\/|$)/, topics: ['rooms'] },
   { re: /^\/api\/rooms(\/|$)/, topics: ['rooms', 'schedule', 'workload'] },
 ];

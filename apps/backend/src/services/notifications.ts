@@ -49,16 +49,17 @@ export async function createNotification(payload: NotificationPayload): Promise<
       payload.type.startsWith('room_request_') && payload.relatedId != null;
 
     if (isRoomRequestEvent) {
+      // Explicit casts: a parameter used in the list and the check must not be read as two types (42P08)
       const added = await query(`
         INSERT INTO notifications
           (recipient_id, recipient_role, title, message, type, related_module, related_id)
-        SELECT $1, $2, $3, $4, $5, $6, $7
+        SELECT $1::int, $2::varchar, $3::varchar, $4::text, $5::varchar, $6::varchar, $7::int
         WHERE NOT EXISTS (
           SELECT 1 FROM notifications
-          WHERE recipient_id   = $1
-            AND recipient_role = $2
-            AND type           = $5
-            AND related_id     = $7
+          WHERE recipient_id   = $1::int
+            AND recipient_role = $2::varchar
+            AND type           = $5::varchar
+            AND related_id     = $7::int
         )
       `, [
         payload.recipientId ?? 0,

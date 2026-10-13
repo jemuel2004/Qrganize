@@ -50,10 +50,12 @@ interface RoomRequest {
 
 type Group = 'Pending' | 'Approved' | 'Rejected';
 
-/* Status → group. Approving a request puts it straight "In-Use". */
+/* Status → group. Approving a request puts it straight "In-Use"; a request
+   that was used and has ended (Released — today-only requests end with their
+   class) stays with the approved ones. */
 function groupOf(status: string): Group {
   if (status === 'Pending' || status === 'Pending Confirmation') return 'Pending';
-  if (status === 'Approved' || status === 'In-Use') return 'Approved';
+  if (status === 'Approved' || status === 'In-Use' || status === 'Released') return 'Approved';
   return 'Rejected'; // Rejected, Expired
 }
 
@@ -127,7 +129,7 @@ export default function RoomRequestsAdminClient() {
   useEffect(() => { load(); }, [load]);
   // Live updates: new, cancelled or expired requests, or another admin's decision.
   // An open request shows its latest state (the dialog stays open).
-  useRealtime(['room-requests', 'schedule'], () => load(true).then(fresh => {
+  useRealtime(['room-requests', 'schedule', 'occupancy'], () => load(true).then(fresh => {
     if (!fresh || acting || done) return;
     setOpen(prev => (prev ? fresh.find(r => r.id === prev.id) ?? prev : prev));
   }), { enabled: !loading });

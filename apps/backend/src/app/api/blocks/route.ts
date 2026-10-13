@@ -10,6 +10,7 @@ import {
   blockCurriculumVersion,
 } from '@shared/curriculumVersion';
 import { withAudit } from '@/services/audit';
+import { notNstpSql } from '@/services/nstp';
 
 export async function GET(req: NextRequest) {
   try {
@@ -212,11 +213,14 @@ async function POST_handler(req: NextRequest) {
           [newBlock.id, curriculumIds]
         );
 
-        // 3. Create a master_schedule placeholder for each block subject.
+        // 3. Create a master_schedule placeholder for each block subject — not NSTP,
+        //    which is on the Class Program only (Settings → Day Combinations → NSTP).
         //    ON CONFLICT DO NOTHING guards against re-runs if migration already seeded entries.
         await client.query(
           `INSERT INTO master_schedule (block_subject_id, status, academic_year, semester)
-           SELECT bs.id, 'Unassigned', $2, $3 FROM block_subjects bs WHERE bs.block_id = $1
+           SELECT bs.id, 'Unassigned', $2, $3 FROM block_subjects bs
+             JOIN curriculums c ON c.id = bs.curriculum_id
+            WHERE bs.block_id = $1 AND ${notNstpSql('c.subject_code')}
            ON CONFLICT DO NOTHING`,
           [newBlock.id, academic_year, semester]
         );

@@ -305,7 +305,8 @@ function CenterLoading({ label }: { label: string | null }) {
 
 /* ─── Page ───────────────────────────────────────────────────────────────── */
 
-export default function RoomsPage() {
+/** `openNoRoom`: open Classes Without a Room at once (a link from Analytics) */
+export default function RoomsPage({ openNoRoom = false }: { openNoRoom?: boolean }) {
   const toast = useToast();
   const reduceMotion = useReducedMotion();
 
@@ -721,7 +722,7 @@ export default function RoomsPage() {
           </div>
         ) : (
           <div className="space-y-4">
-            <UnassignedRoomsPanel refreshKey={rooms.length} />
+            <UnassignedRoomsPanel refreshKey={rooms.length} initialOpen={openNoRoom} />
             <SplitMajorRoomsPanel refreshKey={rooms.length} />
             {/* Lecture Rooms | Laboratory Rooms — click to show that type (both closed at first) */}
             <div className="grid grid-cols-2 gap-4" role="tablist" aria-label="Room type">

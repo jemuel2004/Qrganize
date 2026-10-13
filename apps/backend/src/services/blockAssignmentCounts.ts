@@ -1,4 +1,5 @@
 import { query } from '@/database/db';
+import { notNstpSql } from '@/services/nstp';
 import { ensureBlockCurriculumVersion } from '@/database/migrateCurriculum';
 import { parseCurriculumVersion } from '@shared/curriculumVersion';
 
@@ -84,7 +85,8 @@ export async function fetchBlocksWithAssignmentCounts(filters: {
           ${withSubjects ? `, json_agg(json_build_object('subject_code', c.subject_code, 'subject_name', c.subject_name))
               FILTER (WHERE f.id IS NULL) AS unassigned_subjects` : ''}
         FROM block_subjects bs
-        JOIN curriculums c ON c.id = bs.curriculum_id AND c.is_active = true
+        -- NSTP is on the Class Program only (Settings → Day Combinations → NSTP), never assigned
+        JOIN curriculums c ON c.id = bs.curriculum_id AND c.is_active = true AND ${notNstpSql('c.subject_code')}
         LEFT JOIN LATERAL (
           SELECT faculty_id, status FROM master_schedule
           WHERE block_subject_id = bs.id

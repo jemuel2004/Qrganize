@@ -1,4 +1,5 @@
 ﻿import { NextRequest, NextResponse } from 'next/server';
+import { cleanText } from '@/services/requestInput';
 import { query } from '@/database/db';
 import { parseId } from '@/database/ids';
 import { getAuthUser } from '@/auth/auth';
@@ -46,8 +47,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ facu
     const facultyId = parseId((await params).facultyId);
     if (facultyId === null) return NextResponse.json({ error: 'Faculty not found' }, { status: 404 });
     const { searchParams } = new URL(req.url);
-    const academicYear = searchParams.get('academic_year');
-    const semester = searchParams.get('semester');
+    const academicYear = cleanText(searchParams.get('academic_year'), 20);
+    const semester = cleanText(searchParams.get('semester'), 20);
+    if (academicYear === null || semester === null) {
+      return NextResponse.json({ error: 'Invalid term.' }, { status: 400 });
+    }
 
     await ensureSchema();
     await ensureSessionTypes();

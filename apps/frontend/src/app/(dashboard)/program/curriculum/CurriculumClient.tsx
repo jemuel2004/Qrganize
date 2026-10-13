@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
+import { runExport } from '@/components/ui/ExportProgress';
 import dynamic from 'next/dynamic';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useToast } from '@/context/ToastContext';
@@ -438,15 +439,17 @@ export default function CurriculumPage() {
     if (!filters.program_id || filters.program_id === ALL_PROGRAMS || groups.length === 0) return;
     const prog = programs.find(p => String(p.id) === filters.program_id);
     try {
-      /* The same subjects as Print (the search box doesn't narrow the file),
-         read from the database at this moment */
-      const fresh = await fetchCurriculumGroups({
-        programId: filters.program_id, version: filters.curriculum_version,
-        yearLevel: filters.year_level, semester: filters.semester,
-      });
-      await downloadCurriculumExcel({
-        programName: prog?.name || 'Curriculum', programCode: prog?.code,
-        version: filters.curriculum_version, groups: fresh,
+      await runExport({ kind: 'excel', detail: prog?.code ? `${prog.code} curriculum` : 'Curriculum' }, async () => {
+        /* The same subjects as Print (the search box doesn't narrow the file),
+           read from the database at this moment */
+        const fresh = await fetchCurriculumGroups({
+          programId: filters.program_id, version: filters.curriculum_version,
+          yearLevel: filters.year_level, semester: filters.semester,
+        });
+        await downloadCurriculumExcel({
+          programName: prog?.name || 'Curriculum', programCode: prog?.code,
+          version: filters.curriculum_version, groups: fresh,
+        });
       });
     } catch (e) {
       toast.error(e instanceof Error && e.message ? e.message : 'Could not generate the Excel template.');

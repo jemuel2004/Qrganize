@@ -3,12 +3,14 @@
 import { useEffect, useState } from 'react';
 import { CheckCircle2, Circle, Eye, EyeOff, KeyRound, Lock, LogOut, ShieldAlert } from 'lucide-react';
 import { headingFont } from '@/lib/fonts';
+import { releaseReminderDevice } from '@/lib/classReminders';
 
 /** Sets the new password (no current password: the sign-in just proved it) */
 const ENDPOINT = '/api/auth/change-default-password';
 
 /** Ends this session and asks for a fresh sign-in (the page only works right after signing in) */
 async function signInAgain() {
+  await releaseReminderDevice();
   try { await fetch('/api/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); } catch { /* still go */ }
   window.location.replace('/login?again=1');
 }
@@ -129,6 +131,7 @@ export default function ChangePasswordClient() {
 
   async function signOut() {
     setSigningOut(true);
+    await releaseReminderDevice();
     try { await fetch('/api/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); } catch { /* still leave */ }
     window.location.replace('/login');
   }

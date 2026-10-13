@@ -15,6 +15,11 @@ import { useScrollLock } from '@/hooks/useScrollLock';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import { ListSkeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
+import { blockCode } from '@shared/blockCode';
+import {
+  HOLD_BEFORE_MIN, classTimes, requestWindow, shiftTime, time12, timeMinutes, timeRange12,
+  type ClassPart, type ClassTime,
+} from '@shared/roomRequestWindow';
 import { useRealtime } from '@/context/RealtimeContext';
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
@@ -57,7 +62,7 @@ interface Room {
 }
 
 type RoomGroup = 'lec' | 'lab';
-const roomGroupOf = (r: Room): RoomGroup => {
+const roomGroupOf = (r: { room_type: string }): RoomGroup => {
   const t = String(r.room_type ?? '').trim().toLowerCase();
   return t === 'laboratory' || t === 'computer lab' ? 'lab' : 'lec';
 };
@@ -93,7 +98,28 @@ interface RoomRequest {
   year_level: string | null;
   program_code: string | null;
   sessions: unknown;
+  /** Today-only request: the date and class time the room is held for ("HH:MM") */
+  use_date: string | null;
+  use_start: string | null;
+  use_end: string | null;
+  /** When its QR scan opens (15 minutes before the class) */
+  scan_opens_at: string | null;
 }
+
+/** A room another faculty's class frees for the chosen class time (Free My Room, or not checked in) */
+interface FreedRoom {
+  id: number; room_name: string; room_type: string; building: string | null; capacity: number | null;
+  freed_by: string | null;
+  /** Its class wasn't checked in within 15 minutes: free until this time ("HH:MM") */
+  unclaimed_until: string | null;
+}
+
+/** Today in Manila, from the server */
+interface TodayInfo { date: string; day: string; now: string }
+
+/** One of the faculty's class times today — what a request is made for */
+interface TodaySession { part: ClassPart; start: string; end: string; room_name: string | null }
+interface TodayClass { key: string; schedule: Schedule; time: ClassTime<TodaySession> }
 
 /* ─── Helpers ────────────────────────────────────────────────────────────── */
 function fmt12(t: string): string {
@@ -128,6 +154,40 @@ function normalizeSessions(raw: unknown): SessionData[] {
 
 function hasValidSessions(s: { sessions: unknown }): boolean {
   return normalizeSessions(s.sessions).some(ss => ss.day && ss.start_time && ss.end_time);
+}
+
+/** Manila "HH:MM" now from this device's clock — ticks every 30 s (null until mounted) */
+function useManilaNow(): string | null {
+  const [now, setNow] = useState<string | null>(null);
+  useEffect(() => {
+    const read = () => setNow(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'Asia/Manila' }));
+    read();
+    const id = setInterval(read, 30_000);
+    return () => clearInterval(id);
+  }, []);
+  return now;
+}
+
+/** A class's sessions on one weekday, as parts with times */
+function sessionsOn(s: Schedule, day: string): TodaySession[] {
+  return normalizeSessions(s.sessions)
+    .filter(ss => ss.day === day && ss.start_time && ss.end_time)
+    .map(ss => ({
+      part: sessionTypeLabel(ss.type) === 'Lab' ? 'lab' as const : 'lec' as const,
+      start: ss.start_time.slice(0, 5),
+      end: ss.end_time.slice(0, 5),
+      room_name: ss.room_name ?? null,
+    }));
+}
+
+/** "Lecture", "Laboratory" or both */
+const partsLabel = (parts: ClassPart[]) => parts.map(p => (p === 'lab' ? 'Laboratory' : 'Lecture'));
+
+/** A today-only request's day: "Today" or "Thu, Oct 8" */
+function dayLabelOf(date: string, today: string | null): string {
+  if (date === today) return 'Today';
+  const d = new Date(`${date}T12:00:00Z`);
+  return Number.isNaN(d.getTime()) ? date : d.toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' });
 }
 
 function sessionTypeLabel(type?: string): string {
@@ -165,6 +225,8 @@ const CARD =
   'bg-[var(--surface-elevated)] rounded-2xl border border-[color:var(--border)] shadow-[0_1px_3px_rgba(15,23,42,0.05)]';
 
 const ACTIVE_STATUSES = new Set(['Pending', 'Pending Confirmation', 'In-Use']);
+/** Still on: waiting, in use — or a today-only request approved for later today */
+const isActiveRequest = (r: RoomRequest) => ACTIVE_STATUSES.has(r.status) || (r.status === 'Approved' && !!r.use_date);
 
 const BTN_PRIMARY =
   'inline-flex items-center justify-center gap-2 min-h-12 px-5 rounded-xl text-base font-bold text-white bg-[#1D5BD6] hover:bg-[#2E7DD1] active:bg-[#2670BD] transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
@@ -321,6 +383,27 @@ function TypeBadge({ lecture_hours, laboratory_hours }: { lecture_hours: number 
   );
 }
 
+/** True once a today-only request's QR scan has opened (re-checks every 15 s) */
+function useScanOpen(opensAt: string | null): boolean {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!opensAt) return;
+    const at = new Date(opensAt).getTime();
+    const check = () => setOpen(Date.now() >= at);
+    check();
+    const id = setInterval(check, 15_000);
+    return () => clearInterval(id);
+  }, [opensAt]);
+  return open;
+}
+
+/** ISO timestamp → "1:15 PM" (Manila) */
+function clockOf(ts: string | null): string {
+  if (!ts) return '';
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' });
+}
+
 function CountdownBadge({ deadline }: { deadline: string }) {
   const { label, urgent } = useCountdown(deadline);
   if (!label) return null;
@@ -349,12 +432,15 @@ function HistoryRow({
   req,
   onDelete,
   deleting,
+  today,
 }: {
   req: RoomRequest;
   onDelete: (id: number) => void;
   deleting?: boolean;
+  today: string | null;
 }) {
   const [open, setOpen] = useState(false);
+  const useDay = dayLabelOf(req.use_date ?? '', today);
   const cfg = STATUS_CFG[req.status] ?? DEFAULT_CFG;
   const validSessions = normalizeSessions(req.sessions).filter(s => s.day && s.start_time && s.end_time);
 
@@ -407,7 +493,9 @@ function HistoryRow({
           {req.subject_name && (
             <p className="text-[color:var(--foreground-secondary)]">{req.subject_name}</p>
           )}
-          {validSessions.length > 0 && (
+          {req.use_date && req.use_start && req.use_end ? (
+            <p>{useDay} · {timeRange12(req.use_start, req.use_end)}</p>
+          ) : validSessions.length > 0 && (
             <p>{validSessions.map(formatSessionOption).join(' · ')}</p>
           )}
           {req.reason && (
@@ -442,11 +530,12 @@ function EmptyScheduleState({ assignedButUnscheduled }: { assignedButUnscheduled
 }
 
 function RequestCard({
-  req, onCancel, emphasize = false,
+  req, onCancel, emphasize = false, today,
 }: {
   req: RoomRequest;
   onCancel: (id: number) => void;
   emphasize?: boolean;
+  today: string | null;
 }) {
   const [expanded, setExpanded] = useState(emphasize);
   const cfg = STATUS_CFG[req.status] ?? DEFAULT_CFG;
@@ -457,8 +546,13 @@ function RequestCard({
   const isExpired = req.status === 'Expired';
   const isRejected = req.status === 'Rejected';
   const isApproved = req.status === 'Approved';
-  const canCancel = ['Pending', 'Pending Confirmation'].includes(req.status);
   const isPending = req.status === 'Pending';
+  // Today-only request: its class time, and whether its QR scan is open yet
+  const timed = !!(req.use_date && req.use_start && req.use_end);
+  const useDay = dayLabelOf(req.use_date ?? '', today);
+  const when = timed ? timeRange12(req.use_start ?? '', req.use_end ?? '') : '';
+  const scanOpen = useScanOpen(req.scan_opens_at);
+  const canCancel = ['Pending', 'Pending Confirmation'].includes(req.status) || (isApproved && timed);
 
   return (
     <article
@@ -473,7 +567,7 @@ function RequestCard({
           <div className="min-w-0 space-y-2">
             <div className="flex items-center gap-2 flex-wrap">
               <StatusBadge status={req.status} />
-              {isPendingConf && req.confirmation_deadline && (
+              {isPendingConf && req.confirmation_deadline && (!timed || scanOpen) && (
                 <CountdownBadge deadline={req.confirmation_deadline} />
               )}
               {(req.lecture_hours !== null || req.laboratory_hours !== null) && (
@@ -517,7 +611,7 @@ function RequestCard({
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="rounded-xl bg-[var(--background-secondary)] border border-[color:var(--border)] px-4 py-3">
-            <p className="text-xs font-bold uppercase tracking-wide text-[color:var(--foreground-muted)]">Room change</p>
+            <p className="text-xs font-bold uppercase tracking-wide text-[color:var(--foreground-muted)]">{timed ? 'Room for this class' : 'Room change'}</p>
             <p className="mt-1 text-base font-semibold text-[color:var(--foreground)] break-words">
               {req.original_room_name ?? 'No room'}
               <span className="text-[color:var(--foreground-muted)] mx-1.5">→</span>
@@ -527,9 +621,11 @@ function RequestCard({
           <div className="rounded-xl bg-[var(--background-secondary)] border border-[color:var(--border)] px-4 py-3">
             <p className="text-xs font-bold uppercase tracking-wide text-[color:var(--foreground-muted)]">When</p>
             <p className="mt-1 text-base font-semibold text-[color:var(--foreground)] break-words">
-              {validSessions.length > 0
-                ? validSessions.map(formatSessionOption).join(' · ')
-                : fmtDate(req.created_at)}
+              {timed
+                ? `${useDay} · ${when}`
+                : validSessions.length > 0
+                  ? validSessions.map(formatSessionOption).join(' · ')
+                  : fmtDate(req.created_at)}
             </p>
           </div>
         </div>
@@ -543,9 +639,11 @@ function RequestCard({
         {isPendingConf && (
           <div className="flex flex-col sm:flex-row sm:items-center gap-3 bg-[#EFF6FF] border border-[#BFDBFE] rounded-xl px-4 py-4">
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-bold text-[#0B2A5B]">Scan QR code to confirm</p>
+              <p className="text-sm font-bold text-[#0B2A5B]">{timed && !scanOpen ? 'Reserved for your class' : 'Scan QR code to confirm'}</p>
               <p className="text-sm text-[#475569] mt-1 leading-relaxed break-words">
-                Go to <strong>{req.requested_room_name}</strong> and scan within 15 minutes.
+                {timed
+                  ? <>Scan the QR code at <strong>{req.requested_room_name}</strong> {scanOpen ? 'by' : `from ${time12(shiftTime(req.use_start ?? '', -HOLD_BEFORE_MIN))} to`} <strong>{clockOf(req.confirmation_deadline)}</strong>.</>
+                  : <>Go to <strong>{req.requested_room_name}</strong> and scan within 15 minutes.</>}
               </p>
             </div>
             <Link href="/instructor/scan" className={`${BTN_PRIMARY} w-full sm:w-auto`}>
@@ -557,13 +655,17 @@ function RequestCard({
 
         {isInUse && (
           <p className="text-sm text-[#047857] bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl px-4 py-3 leading-relaxed break-words">
-            Confirmed — schedule updated to <strong>{req.requested_room_name}</strong>.
+            {timed
+              ? <>Confirmed — <strong>{req.requested_room_name}</strong> is yours until {time12(req.use_end ?? '')}.</>
+              : <>Confirmed — schedule updated to <strong>{req.requested_room_name}</strong>.</>}
           </p>
         )}
 
         {isApproved && (
           <p className="text-sm text-[#047857] bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl px-4 py-3 leading-relaxed">
-            Approved. Room assignment updated.
+            {timed
+              ? <>Approved — <strong>{req.requested_room_name}</strong> is held for you at {when}. No QR scan needed.</>
+              : 'Approved. Room assignment updated.'}
           </p>
         )}
 
@@ -593,12 +695,14 @@ function RequestCard({
                 Block {req.block_name}{req.year_level ? ` · ${req.year_level}` : ''}
               </p>
             )}
-            <div>
-              <p className="text-xs font-bold uppercase tracking-wide text-[color:var(--foreground-muted)] mb-1.5">Reason</p>
-              <p className="text-sm text-[color:var(--foreground)] leading-relaxed bg-[var(--background-secondary)] rounded-xl px-4 py-3 border border-[color:var(--border)]">
-                {req.reason}
-              </p>
-            </div>
+            {req.reason && (
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-[color:var(--foreground-muted)] mb-1.5">Reason</p>
+                <p className="text-sm text-[color:var(--foreground)] leading-relaxed bg-[var(--background-secondary)] rounded-xl px-4 py-3 border border-[color:var(--border)]">
+                  {req.reason}
+                </p>
+              </div>
+            )}
             {req.admin_notes && !isRejected && (
               <div>
                 <p className="text-xs font-bold uppercase tracking-wide text-[color:var(--foreground-muted)] mb-1.5">Admin note</p>
@@ -635,11 +739,14 @@ export default function RoomRequestsClient() {
   const [success, setSuccess] = useState('');
 
   const [selectedScheduleId, setSelectedScheduleId] = useState('');
+  /** Which of the class's times today ("HH:MM" start) */
+  const [selectedStart, setSelectedStart] = useState('');
+  const [today, setToday] = useState<TodayInfo | null>(null);
+  const nowHm = useManilaNow();
   const [requestedRoomId, setRequestedRoomId] = useState('');
   const [reason, setReason] = useState('');
-  const [openGroups, setOpenGroups] = useState<Record<RoomGroup, boolean>>({ lec: false, lab: false });
-  /** Rooms busy during the selected class's sessions → reason ("CS 413 · Mon 7:00 AM") */
-  const [busyRooms, setBusyRooms] = useState<Record<number, string>>({});
+  /** Rooms another faculty freed for the selected class time today (Free My Room) — the only ones that can be asked for; null until checked */
+  const [freedRooms, setFreedRooms] = useState<FreedRoom[] | null>(null);
   const [checkingRooms, setCheckingRooms] = useState(false);
   const reduceMotion = useReducedMotion();
 
@@ -652,7 +759,11 @@ export default function RoomRequestsClient() {
         fetch('/api/instructor/schedule'),
         fetch('/api/rooms?status=Active'),
       ]);
-      if (reqRes.ok) setRequests((await reqRes.json()).requests || []);
+      if (reqRes.ok) {
+        const d = await reqRes.json();
+        setRequests(d.requests || []);
+        if (d.today?.date && d.today?.day) setToday(d.today);
+      }
       if (schedRes.ok) setSchedules((await schedRes.json()).schedules || []);
       if (roomsRes.ok) setRooms((await roomsRes.json()).rooms || []);
     } catch { /* connection blip — keep what is on screen */ }
@@ -668,69 +779,110 @@ export default function RoomRequestsClient() {
   // selected class's rooms are re-checked against the new state.
   useRealtime(['room-requests', 'schedule', 'occupancy', 'rooms'], () => loadData(true), { enabled: !loading && !submitting });
 
-  // Arrived from the dashboard's "Request" button (?room=<id>) — open the form with that room picked
-  const preselected = useRef(false);
-  useEffect(() => {
-    if (preselected.current || loading || rooms.length === 0) return;
-    preselected.current = true;
-    const id = new URLSearchParams(window.location.search).get('room');
-    if (!id || !rooms.some(r => String(r.id) === id)) return;
-    setRequestedRoomId(id);
-    const room = rooms.find(r => String(r.id) === id);
-    if (room) setOpenGroups(g => ({ ...g, [roomGroupOf(room)]: true }));
-    setShowForm(true);
-    window.history.replaceState(null, '', window.location.pathname);
-  }, [loading, rooms]);
-
   const validSchedules = useMemo(
     () => schedules.filter(hasValidSessions),
     [schedules],
   );
 
-  const selectedSchedule = validSchedules.find(s => String(s.id) === selectedScheduleId) ?? null;
+  /** The faculty's class times for the rest of today, in time order — requests are for today only */
+  const todayClasses = useMemo<TodayClass[]>(() => {
+    if (!today) return [];
+    return validSchedules
+      .flatMap(s => classTimes(sessionsOn(s, today.day)).map(time => ({ key: `${s.id}-${time.start}`, schedule: s, time })))
+      .filter(c => !nowHm || timeMinutes(c.time.end) > timeMinutes(nowHm))
+      .sort((a, b) => a.time.start.localeCompare(b.time.start) || a.schedule.subject_code.localeCompare(b.schedule.subject_code));
+  }, [validSchedules, today, nowHm]);
+  /** Class times today that already have a request (one per class time) */
+  const requestedKeys = useMemo(() => new Set(todayClasses
+    .filter(c => requests.some(r => isActiveRequest(r) && r.master_schedule_id === c.schedule.id
+      && r.use_date === today?.date && r.use_start && r.use_end
+      && timeMinutes(r.use_start) < timeMinutes(c.time.end) && timeMinutes(r.use_end) > timeMinutes(c.time.start)))
+    .map(c => c.key)), [todayClasses, requests, today]);
+
+  // Arrived from a "Request" button (?room=<id>, and from Find Available Rooms maybe
+  // ?ms=<class>&at=<HH:MM> when one of the faculty's class times was picked) — open the form with them picked
+  const preselected = useRef(false);
+  useEffect(() => {
+    if (preselected.current || loading || rooms.length === 0 || !today || !nowHm) return;
+    preselected.current = true;
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get('room');
+    if (!id || !rooms.some(r => String(r.id) === id)) return;
+    const ms = params.get('ms');
+    const at = params.get('at');
+    const mine = todayClasses.filter(c => String(c.schedule.id) === ms && !requestedKeys.has(c.key));
+    // The class time that starts (or is going on) at that time, else the class's next one
+    const pick = (at && mine.find(c => timeMinutes(c.time.start) <= timeMinutes(at) && timeMinutes(at) < timeMinutes(c.time.end))) || mine[0];
+    if (pick) { setSelectedScheduleId(String(pick.schedule.id)); setSelectedStart(pick.time.start); }
+    setRequestedRoomId(id);
+    setShowForm(true);
+    window.history.replaceState(null, '', window.location.pathname);
+  }, [loading, rooms, today, nowHm, todayClasses, requestedKeys]);
+
+  const selectedClass = todayClasses.find(c => String(c.schedule.id) === selectedScheduleId && c.time.start === selectedStart) ?? null;
+  const selectedSchedule = selectedClass?.schedule ?? null;
   /** Lecture-only subjects may only use lecture rooms, laboratory-only subjects
    *  only laboratory rooms, and a Major subject's Lecture + Laboratory share one
    *  laboratory (same rules as the server) */
   const lectureOnly = !!selectedSchedule && !(parseFloat(String(selectedSchedule.laboratory_hours)) > 0);
   const labOnly = !!selectedSchedule && !(parseFloat(String(selectedSchedule.lecture_hours)) > 0);
   const oneRoom = selectedSchedule?.one_room === true;
-  const lockedGroup: RoomGroup | null = lectureOnly ? 'lab' : labOnly || oneRoom ? 'lec' : null;
+  /** What each kind of room would hold of the class time: a lecture room only its Lecture part */
+  const labWindow = selectedClass ? requestWindow(selectedClass.time.sessions, selectedClass.time.start, 'lab') : null;
+  const lecWindow = selectedClass ? requestWindow(selectedClass.time.sessions, selectedClass.time.start, 'lec') : null;
+  const lockedGroup: RoomGroup | null = lectureOnly ? 'lab' : labOnly || oneRoom || (selectedClass && !lecWindow) ? 'lec' : null;
 
-  // Check every room against each of the selected class's sessions
+  // Which rooms another faculty freed for the selected class time today — and are
+  // still free then (no other class, nobody reserved it or holds it)
+  const checkMs = selectedClass?.schedule.id ?? 0;
+  const todayDate = today?.date ?? '';
+  const todayDay = today?.day ?? '';
+  const labStart = labWindow?.start ?? '', labEnd = labWindow?.end ?? '';
+  const lecStart = lecWindow?.start ?? '', lecEnd = lecWindow?.end ?? '';
   useEffect(() => {
-    if (!selectedSchedule) { setBusyRooms({}); return; }
-    const sessions = normalizeSessions(selectedSchedule.sessions).filter(ss => ss.day && ss.start_time && ss.end_time);
+    if (!checkMs || !todayDate || !labStart) { setFreedRooms(null); return; }
+    type Checked = {
+      id: number; room_name: string; room_type: string; building: string | null; capacity: number | null;
+      is_available: boolean;
+      freed?: { faculty_name: string | null; unclaimed?: true; until?: string } | null;
+    };
+    const check = (start: string, end: string) => {
+      const qs = new URLSearchParams({ day: todayDay, date: todayDate, start_time: start, end_time: end, room_type: 'all', exclude_ms: String(checkMs) });
+      return fetch(`/api/instructor/available-rooms?${qs}`).then(r => (r.ok ? r.json() : { rooms: [] })).then(d => (d.rooms ?? []) as Checked[]);
+    };
     let cancelled = false;
     setCheckingRooms(true);
-    Promise.all(sessions.map(ss => {
-      const qs = new URLSearchParams({ day: ss.day, start_time: ss.start_time.slice(0, 5), end_time: ss.end_time.slice(0, 5), room_type: 'all', exclude_ms: String(selectedSchedule.id) });
-      return fetch(`/api/instructor/available-rooms?${qs}`).then(r => (r.ok ? r.json() : { rooms: [] })).then(d => ({ ss, rooms: (d.rooms ?? []) as { id: number; is_available: boolean; occupancy?: { status: string } | null; schedule_conflict?: { subject_code: string } | null }[] }));
-    })).then(results => {
+    // A lecture room is checked for the Lecture part only, when that differs
+    const lecDiffers = !!lecStart && (lecStart !== labStart || lecEnd !== labEnd);
+    Promise.all([check(labStart, labEnd), lecDiffers ? check(lecStart, lecEnd) : null]).then(([forLab, forLec]) => {
       if (cancelled) return;
-      const busy: Record<number, string> = {};
-      for (const { ss, rooms: list } of results) {
-        for (const r of list) {
-          if (r.is_available || busy[r.id]) continue;
-          busy[r.id] = r.schedule_conflict
-            ? `${r.schedule_conflict.subject_code} · ${ss.day.slice(0, 3)}`
-            : r.occupancy?.status === 'Pending' ? 'Reserved now' : 'In use now';
+      const list: FreedRoom[] = [];
+      for (const r of forLab) {
+        const at = forLec && roomGroupOf(r) === 'lec' ? forLec.find(x => x.id === r.id) ?? r : r;
+        if (at.is_available && at.freed) {
+          list.push({
+            id: r.id, room_name: r.room_name, room_type: r.room_type, building: r.building, capacity: r.capacity,
+            freed_by: at.freed.faculty_name, unclaimed_until: at.freed.unclaimed ? at.freed.until ?? null : null,
+          });
         }
       }
-      setBusyRooms(busy);
-    }).catch(() => { if (!cancelled) setBusyRooms({}); })
+      setFreedRooms(list);
+    }).catch(() => { if (!cancelled) setFreedRooms([]); })
       .finally(() => { if (!cancelled) setCheckingRooms(false); });
     return () => { cancelled = true; };
-  }, [selectedSchedule]);
+  }, [checkMs, todayDate, todayDay, labStart, labEnd, lecStart, lecEnd]);
+  /** The freed rooms this class can use (subject rules) */
+  const usableRooms = (freedRooms ?? []).filter(r => roomGroupOf(r) !== lockedGroup);
   const assignedButUnscheduled = !loading && schedules.length > 0 && validSchedules.length === 0;
   const hasNoSchedule = !loading && validSchedules.length === 0;
   const showSkeleton = useMinLoading(loading && requests.length === 0, LOADING_DELAY);
 
+  // A room that isn't freed for the chosen class time (or not allowed for it) can't stay picked
   useEffect(() => {
-    if (!requestedRoomId) return;
-    const r = rooms.find(x => String(x.id) === requestedRoomId);
-    if (!r) return;
-    if (busyRooms[r.id] || roomGroupOf(r) === lockedGroup) setRequestedRoomId('');
-  }, [busyRooms, lockedGroup, requestedRoomId, rooms]);
+    if (!requestedRoomId || !freedRooms || checkingRooms) return;
+    const r = freedRooms.find(x => String(x.id) === requestedRoomId);
+    if (!r || roomGroupOf(r) === lockedGroup) setRequestedRoomId('');
+  }, [freedRooms, checkingRooms, lockedGroup, requestedRoomId]);
 
   useScrollLock(showForm);
   useEffect(() => {
@@ -742,9 +894,9 @@ export default function RoomRequestsClient() {
 
   function resetForm() {
     setSelectedScheduleId('');
+    setSelectedStart('');
     setRequestedRoomId('');
     setReason('');
-    setOpenGroups({ lec: false, lab: false });
     setError('');
   }
 
@@ -752,9 +904,8 @@ export default function RoomRequestsClient() {
     e.preventDefault();
     setError(''); setSuccess('');
 
-    if (!selectedScheduleId) { setError('Please select a teaching schedule.'); return; }
+    if (!selectedScheduleId || !selectedStart) { setError('Please select one of your classes today.'); return; }
     if (!requestedRoomId) { setError('Please select a preferred room.'); return; }
-    if (reason.trim().length < 10) { setError('Reason must be at least 10 characters.'); return; }
 
     setSubmitting(true);
     try {
@@ -763,6 +914,7 @@ export default function RoomRequestsClient() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           master_schedule_id: parseInt(selectedScheduleId),
+          start_time: selectedStart,
           requested_room_id: parseInt(requestedRoomId),
           reason: reason.trim(),
         }),
@@ -772,7 +924,7 @@ export default function RoomRequestsClient() {
         setError(data.error || 'Failed to submit request.');
         return;
       }
-      setSuccess(data.message || 'Room request submitted. Scan the QR code within 15 minutes to confirm.');
+      setSuccess(data.message || 'Room request submitted.');
       setShowForm(false);
       resetForm();
       loadData();
@@ -816,16 +968,22 @@ export default function RoomRequestsClient() {
     }
   }
 
-  const activeConfirmation = requests.find(r => r.status === 'Pending Confirmation');
+  // The request whose QR scan is open now — or else the next one waiting for its time
+  const waiting = requests
+    .filter(r => r.status === 'Pending Confirmation')
+    .sort((a, b) => (a.use_start ?? '').localeCompare(b.use_start ?? ''));
+  const activeConfirmation = waiting.find(r => !r.scan_opens_at || (nowHm && r.use_start && timeMinutes(nowHm) >= timeMinutes(r.use_start) - HOLD_BEFORE_MIN)) ?? waiting[0];
+  const confirmationOpen = !!activeConfirmation && (!activeConfirmation.scan_opens_at
+    || (!!nowHm && !!activeConfirmation.use_start && timeMinutes(nowHm) >= timeMinutes(activeConfirmation.use_start) - HOLD_BEFORE_MIN));
   const activeRequests = useMemo(
-    () => requests.filter(r => ACTIVE_STATUSES.has(r.status)),
+    () => requests.filter(isActiveRequest),
     [requests],
   );
   const pastRequests = useMemo(
-    () => requests.filter(r => !ACTIVE_STATUSES.has(r.status)),
+    () => requests.filter(r => !isActiveRequest(r)),
     [requests],
   );
-  const canCreate = !hasNoSchedule && !activeConfirmation;
+  const canCreate = !hasNoSchedule;
 
   return (
     <div className="w-full min-w-0 bg-[var(--background)] px-4 sm:px-6 lg:px-8 py-6 overflow-x-hidden">
@@ -860,13 +1018,23 @@ export default function RoomRequestsClient() {
             <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap mb-1">
-                  <p className="text-base font-bold text-[#0B2A5B]">Scan QR code to confirm</p>
-                  {activeConfirmation.confirmation_deadline && (
+                  <p className="text-base font-bold text-[#0B2A5B]">{confirmationOpen ? 'Scan QR code to confirm' : 'Room reserved for later today'}</p>
+                  {confirmationOpen && activeConfirmation.confirmation_deadline && (
                     <CountdownBadge deadline={activeConfirmation.confirmation_deadline} />
                   )}
                 </div>
                 <p className="text-sm text-[#475569] leading-relaxed break-words">
-                  Go to <span className="font-semibold text-[#0B2A5B]">{activeConfirmation.requested_room_name}</span> and scan its QR code.
+                  {activeConfirmation.use_start && activeConfirmation.use_end ? (
+                    <>
+                      <span className="font-semibold text-[#0B2A5B]">{activeConfirmation.requested_room_name}</span>
+                      {' · '}{activeConfirmation.subject_code} {timeRange12(activeConfirmation.use_start, activeConfirmation.use_end)}.{' '}
+                      {confirmationOpen
+                        ? <>Scan its QR code by {clockOf(activeConfirmation.confirmation_deadline)}.</>
+                        : <>Scan its QR code from {time12(shiftTime(activeConfirmation.use_start, -HOLD_BEFORE_MIN))} to {clockOf(activeConfirmation.confirmation_deadline)}.</>}
+                    </>
+                  ) : (
+                    <>Go to <span className="font-semibold text-[#0B2A5B]">{activeConfirmation.requested_room_name}</span> and scan its QR code.</>
+                  )}
                 </p>
               </div>
               <Link href="/instructor/scan" className={`${BTN_PRIMARY} w-full sm:w-auto`}>
@@ -919,7 +1087,7 @@ export default function RoomRequestsClient() {
                     </span>
                     <div className="min-w-0">
                       <p className="text-[17px] font-bold" style={{ color: '#FFFFFF' }}>New Room Request</p>
-                      <p className="text-sm mt-0.5" style={{ color: 'rgba(255,255,255,0.8)' }}>Choose a class and preferred room.</p>
+                      <p className="text-sm mt-0.5" style={{ color: 'rgba(255,255,255,0.8)' }}>For your classes today only.</p>
                     </div>
                   </div>
                   <button
@@ -936,18 +1104,28 @@ export default function RoomRequestsClient() {
                 <form onSubmit={handleSubmit} className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-5 grid grid-cols-1 lg:grid-cols-2 gap-5 lg:gap-6 items-start">
 
                   <div className="min-w-0">
-                    <label className="block text-sm font-semibold text-[color:var(--foreground)] mb-2">Teaching Schedule</label>
+                    <label className="block text-sm font-semibold text-[color:var(--foreground)] mb-2">
+                      Your Classes Today{today ? <span className="font-medium text-[color:var(--foreground-muted)]"> · {today.day}</span> : null}
+                    </label>
+                    {todayClasses.length === 0 ? (
+                      <p className="rounded-xl border border-[color:var(--border)] bg-[var(--background-secondary)] px-4 py-4 text-[15px] text-[color:var(--foreground-muted)]">
+                        No more classes today. Room requests are for today&apos;s classes only.
+                      </p>
+                    ) : (
                     <div className="space-y-2 max-h-72 lg:max-h-[560px] overflow-y-auto pr-0.5">
-                      {validSchedules.map(s => {
-                        const selected = selectedScheduleId === String(s.id);
-                        const sessions = normalizeSessions(s.sessions).filter(ss => ss.day && ss.start_time && ss.end_time);
+                      {todayClasses.map(({ key, schedule: s, time: t }) => {
+                        const selected = selectedScheduleId === String(s.id) && selectedStart === t.start;
+                        const requested = requestedKeys.has(key);
+                        const block = [s.program_code, blockCode(s.year_level, s.block_name)].filter(Boolean).join(' ');
+                        const usual = [...new Set(t.sessions.map(x => x.room_name).filter(Boolean))].join(' / ');
                         return (
                           <button
-                            key={s.id}
+                            key={key}
                             type="button"
                             aria-pressed={selected}
-                            onClick={() => { setSelectedScheduleId(String(s.id)); setRequestedRoomId(''); }}
-                            className={`w-full text-left rounded-xl border px-4 py-3.5 min-w-0 min-h-12 transition-colors ${
+                            disabled={requested}
+                            onClick={() => { setSelectedScheduleId(String(s.id)); setSelectedStart(t.start); setRequestedRoomId(''); }}
+                            className={`w-full text-left rounded-xl border px-4 py-3 min-w-0 min-h-12 transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                               selected
                                 ? 'border-[#1D5BD6] bg-[#EFF6FF] ring-2 ring-[#1D5BD6]/20'
                                 : 'border-[color:var(--border)] bg-[var(--surface-elevated)] hover:bg-[var(--background-secondary)]'
@@ -963,30 +1141,33 @@ export default function RoomRequestsClient() {
                                 {selected && <span className="w-2 h-2 rounded-full bg-white" />}
                               </span>
                               <div className="min-w-0 flex-1">
-                                <div className="flex items-start justify-between gap-2">
-                                  <p className="text-base font-semibold text-[color:var(--foreground)] break-words leading-snug">
-                                    {s.subject_code} — {s.subject_name}
-                                  </p>
-                                  {selected && <span className="flex-shrink-0 text-sm font-semibold text-[#1D5BD6]">Selected</span>}
-                                </div>
-                                <p className="text-sm text-[color:var(--foreground-muted)] mt-1 break-words">
-                                  Block {s.block_name} · {s.year_level}
-                                  {s.room_name ? ` · Current room: ${s.room_name}` : ''}
-                                </p>
-                                <div className="mt-1.5 flex flex-col gap-1">
-                                  {sessions.map((ss, i) => (
-                                    <span key={i} className="text-sm text-[#1D5BD6] break-words">
-                                      {formatSessionOption(ss)}
-                                      {ss.room_name && ss.room_name !== s.room_name ? ` · ${ss.room_name}` : ''}
+                                {/* The time today, then its part(s) */}
+                                <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                                  <span className="text-[16px] font-bold tabular-nums text-[color:var(--foreground)]">{timeRange12(t.start, t.end)}</span>
+                                  {partsLabel(t.parts).map(label => (
+                                    <span key={label} className={`text-[12px] font-semibold px-2 py-0.5 rounded-md border ${
+                                      label === 'Laboratory' ? 'bg-[#FFFBEB] text-[#B45309] border-[#FDE68A]' : 'bg-[#EFF6FF] text-[#1D5BD6] border-[#BFDBFE]'
+                                    }`}>
+                                      {label}
                                     </span>
                                   ))}
+                                  {requested && <span className="text-[12px] font-semibold text-[#047857]">Requested</span>}
                                 </div>
+                                {/* The subject, then its block and usual room */}
+                                <p className="mt-1 text-[15px] leading-snug text-[color:var(--foreground)] break-words">
+                                  <span className="font-semibold">{s.subject_code}</span>
+                                  <span className="text-[color:var(--foreground-secondary)]"> · {s.subject_name}</span>
+                                </p>
+                                <p className="mt-0.5 text-[13px] text-[color:var(--foreground-muted)]">
+                                  {block}{usual ? ` · Room ${usual}` : ' · No room yet'}
+                                </p>
                               </div>
                             </div>
                           </button>
                         );
                       })}
                     </div>
+                    )}
                   </div>
 
                   {/* Right column: room · reason · submit */}
@@ -996,112 +1177,58 @@ export default function RoomRequestsClient() {
                       <label className="block text-sm font-semibold text-[color:var(--foreground)]">Preferred Room</label>
                       {checkingRooms && <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#1D5BD6]"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Checking rooms…</span>}
                     </div>
-                    {!selectedSchedule && <p className="mb-2 text-sm text-[color:var(--foreground-muted)]">Pick a class first to see which rooms are free.</p>}
-                    {selectedSchedule?.room_name && (
-                      <div className="mb-3 rounded-xl border border-[color:var(--border)] bg-[var(--background-secondary)] px-4 py-3">
-                        <p className="text-xs font-semibold text-[color:var(--foreground-muted)]">Current room</p>
-                        <p className="text-sm font-semibold text-[color:var(--foreground)] mt-0.5">{selectedSchedule.room_name}</p>
+                    {!selectedClass ? (
+                      <p className="text-sm text-[color:var(--foreground-muted)]">Pick a class first to see which rooms are free.</p>
+                    ) : freedRooms && !checkingRooms && usableRooms.length === 0 ? (
+                      <div className="rounded-xl border border-[color:var(--border)] bg-[var(--background-secondary)] px-4 py-4">
+                        <p className="text-[15px] font-semibold text-[color:var(--foreground)]">No room is free for {timeRange12(selectedClass.time.start, selectedClass.time.end)} today.</p>
+                        <p className="mt-1 text-sm text-[color:var(--foreground-muted)]">A room shows here when its faculty frees it with Free My Room, or its class isn’t scanned within 15 minutes.</p>
                       </div>
-                    )}
-                    <div className="space-y-2">
-                      {ROOM_GROUPS.map(({ key, label, Icon, bg, fg }) => {
-                        const list = rooms.filter(r => roomGroupOf(r) === key);
-                        if (list.length === 0) return null;
-                        const locked = key === lockedGroup;
-                        const open = openGroups[key] && !locked;
-                        const picked = list.find(r => requestedRoomId === String(r.id));
-                        return (
-                          <div key={key} className="rounded-xl border border-[color:var(--border)] bg-[var(--surface-elevated)] overflow-hidden">
-                            <motion.button
-                              type="button"
-                              onClick={() => { if (!locked) setOpenGroups(g => ({ ...g, [key]: !g[key] })); }}
-                              whileTap={reduceMotion || locked ? undefined : { scale: 0.99 }}
-                              aria-expanded={open}
-                              aria-disabled={locked}
-                              className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${locked ? 'opacity-55 cursor-not-allowed' : 'hover:bg-[var(--background-secondary)]'}`}
-                            >
-                              <span className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: bg, color: fg }}>
-                                <Icon className="w-4 h-4" />
-                              </span>
-                              <span className="flex-1 min-w-0">
-                                <span className="block text-sm font-semibold text-[color:var(--foreground)]">{label}</span>
-                                {locked
-                                  ? <span className="block text-xs font-medium text-[color:var(--foreground-muted)]">{oneRoom ? 'Not allowed — a Major subject keeps its Lecture and Lab in one lab' : `Not allowed for a ${key === 'lab' ? 'lecture' : 'laboratory'} subject`}</span>
-                                  : picked && <span className="block text-xs font-medium truncate" style={{ color: fg }}>{picked.room_name}</span>}
-                              </span>
-                              <motion.span
-                                animate={{ rotate: open ? 180 : 0 }}
-                                transition={{ duration: reduceMotion ? 0 : 0.3, ease: EASE }}
-                                className="text-[color:var(--foreground-muted)]"
+                    ) : (
+                      <>
+                        {labWindow && lecWindow && (lecWindow.start !== labWindow.start || lecWindow.end !== labWindow.end) && usableRooms.some(r => roomGroupOf(r) === 'lec') && (
+                          <p className="mb-2 text-sm text-[color:var(--foreground-muted)]">A lecture room is for the Lecture only ({timeRange12(lecWindow.start, lecWindow.end)}).</p>
+                        )}
+                        <div role="radiogroup" aria-label="Rooms freed for this class time" className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {usableRooms.map(r => {
+                            const { label, Icon, bg, fg } = ROOM_GROUPS.find(g => g.key === roomGroupOf(r)) ?? ROOM_GROUPS[0];
+                            const selected = requestedRoomId === String(r.id);
+                            return (
+                              <button
+                                key={r.id}
+                                type="button"
+                                role="radio"
+                                aria-checked={selected}
+                                onClick={() => setRequestedRoomId(String(r.id))}
+                                className="relative overflow-hidden text-left rounded-xl border-2 pl-4 pr-3 py-3 min-w-0 min-h-12 transition-all active:scale-[0.98]"
+                                style={selected
+                                  ? { borderColor: fg, backgroundColor: bg, boxShadow: `0 6px 16px -10px ${fg}` }
+                                  : { borderColor: `${fg}33`, backgroundColor: '#FFFFFF' }}
                               >
-                                <ChevronDown className="w-4 h-4" />
-                              </motion.span>
-                            </motion.button>
-                            <AnimatePresence initial={false}>
-                              {open && (
-                                <motion.div
-                                  key="rooms"
-                                  initial={reduceMotion ? false : { height: 0, opacity: 0 }}
-                                  animate={{ height: 'auto', opacity: 1, transition: { duration: 0.35, ease: EASE } }}
-                                  exit={reduceMotion ? { opacity: 0 } : { height: 0, opacity: 0, transition: { duration: 0.28, ease: EASE } }}
-                                  className="overflow-hidden"
-                                >
-                                  <div className="grid grid-cols-2 gap-2 p-3 pt-1 max-h-72 overflow-y-auto">
-                                    {list.map(r => {
-                                      const selected = requestedRoomId === String(r.id);
-                                      const busy = busyRooms[r.id];
-                                      const disabled = !!busy || !selectedSchedule;
-                                      return (
-                                        <button
-                                          key={r.id}
-                                          type="button"
-                                          disabled={disabled}
-                                          onClick={() => setRequestedRoomId(String(r.id))}
-                                          title={busy ? `Occupied — ${busy}` : undefined}
-                                          className={`relative overflow-hidden text-left rounded-xl border-2 pl-4 pr-3 py-3 min-w-0 min-h-12 transition-all ${disabled ? 'cursor-not-allowed' : 'active:scale-[0.98]'}`}
-                                          style={busy
-                                            ? { borderColor: '#E2E8F0', backgroundColor: '#F8FAFC' }
-                                            : selected
-                                              ? { borderColor: fg, backgroundColor: bg, boxShadow: `0 6px 16px -10px ${fg}` }
-                                              : { borderColor: `${fg}33`, backgroundColor: '#FFFFFF', opacity: selectedSchedule ? 1 : 0.6 }}
-                                        >
-                                          <span aria-hidden className="absolute left-0 top-0 bottom-0 w-1" style={{ backgroundColor: busy ? '#CBD5E1' : fg }} />
-                                          <p className={`text-sm font-bold break-words ${busy ? 'line-through' : ''}`} style={{ color: busy ? '#94A3B8' : selected ? fg : '#0B2A5B' }}>{r.room_name}</p>
-                                          {busy
-                                            ? <p className="text-xs font-semibold text-[#DC2626] mt-0.5 break-words">Occupied · {busy}</p>
-                                            : <p className="text-xs text-[color:var(--foreground-muted)] mt-0.5 break-words">
-                                                {[r.building, r.capacity ? `${r.capacity} seats` : null].filter(Boolean).join(' · ')}
-                                              </p>}
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </div>
-                        );
-                      })}
-                    </div>
+                                <span aria-hidden className="absolute left-0 top-0 bottom-0 w-1" style={{ backgroundColor: fg }} />
+                                <p className="text-[15px] font-bold break-words" style={{ color: selected ? fg : '#0B2A5B' }}>{r.room_name}</p>
+                                <p className="mt-0.5 inline-flex items-center gap-1 text-xs font-semibold" style={{ color: fg }}>
+                                  <Icon className="w-3.5 h-3.5" aria-hidden /> {label}
+                                </p>
+                                <p className="mt-0.5 text-xs font-medium text-[#047857] break-words">
+                                  {r.unclaimed_until ? `Not scanned · free until ${time12(r.unclaimed_until)}` : `Freed by ${r.freed_by ?? 'its faculty'}`}
+                                </p>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
                   </div>
 
                   <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <label className="block text-sm font-semibold text-[color:var(--foreground)]">Reason</label>
-                      <span className={`text-xs tabular-nums ${
-                        reason.trim().length > 0 && reason.trim().length < 10
-                          ? 'text-[#DC2626]'
-                          : reason.trim().length >= 10
-                            ? 'text-[#059669]'
-                            : 'text-[color:var(--foreground-muted)]'
-                      }`}>
-                        {reason.trim().length}/10 min
-                      </span>
-                    </div>
+                    <label htmlFor="room-request-reason" className="block text-sm font-semibold text-[color:var(--foreground)] mb-2">
+                      Reason <span className="font-medium text-[color:var(--foreground-muted)]">(optional)</span>
+                    </label>
                     <textarea
+                      id="room-request-reason"
                       value={reason}
                       onChange={e => setReason(e.target.value)}
-                      required
                       rows={3}
                       placeholder="Why do you need a different room?"
                       className={`${INPUT_CLS} resize-none`}
@@ -1111,7 +1238,7 @@ export default function RoomRequestsClient() {
                   <div className="flex flex-col-reverse sm:flex-row gap-2.5">
                     <button
                       type="submit"
-                      disabled={submitting || !selectedScheduleId || !requestedRoomId || reason.trim().length < 10}
+                      disabled={submitting || !selectedClass || !requestedRoomId}
                       className={`${BTN_PRIMARY} w-full sm:w-auto`}
                     >
                       {submitting ? <><Loader2 className="w-4 h-4 animate-spin" /> Submitting…</> : 'Submit Request'}
@@ -1193,16 +1320,14 @@ export default function RoomRequestsClient() {
                       <p className="text-base font-bold text-[#0B2A5B]">No active requests</p>
                       <p className="text-sm text-[#64748B] mt-1 max-w-sm">
                         {canCreate
-                          ? 'Need a different room for a class? Start a new request.'
-                          : hasNoSchedule
-                            ? 'A teaching schedule is required first.'
-                            : 'Complete your QR confirmation before creating another request.'}
+                          ? 'Need a room for one of your classes today? Start a new request.'
+                          : 'A teaching schedule is required first.'}
                       </p>
                     </div>
                   ) : (
                     <div className="space-y-3">
                       {activeRequests.map(req => (
-                        <RequestCard key={req.id} req={req} onCancel={handleCancel} emphasize />
+                        <RequestCard key={req.id} req={req} onCancel={handleCancel} emphasize today={today?.date ?? null} />
                       ))}
                     </div>
                   )
@@ -1217,7 +1342,7 @@ export default function RoomRequestsClient() {
                 ) : (
                   <div className={`${CARD} overflow-hidden`}>
                     {pastRequests.map(req => (
-                      <HistoryRow key={req.id} req={req} onDelete={handleDeleteHistory} deleting={deletingId === req.id} />
+                      <HistoryRow key={req.id} req={req} onDelete={handleDeleteHistory} deleting={deletingId === req.id} today={today?.date ?? null} />
                     ))}
                   </div>
                 )}

@@ -14,6 +14,14 @@ export async function GET(req: NextRequest) {
     await expireStaleOccupancy();
     await expireStaleRoomRequests();
 
+    // Menu badge: requests waiting for a decision (the page's Pending list)
+    if (req.nextUrl.searchParams.get('count') === '1') {
+      const n = await query(
+        `SELECT COUNT(*)::int AS n FROM room_change_requests WHERE status IN ('Pending', 'Pending Confirmation')`,
+      );
+      return NextResponse.json({ pending: n.rows[0]?.n ?? 0 });
+    }
+
     const result = await query(`
       SELECT
         rcr.id,
@@ -32,13 +40,17 @@ export async function GET(req: NextRequest) {
         orig.room_name  AS original_room_name,
         req.room_name   AS requested_room_name,
         req.room_type   AS requested_room_type,
-        -- When the room is needed: the class session on the day it was requested
-        -- (falls back to the class's first session)
-        (SELECT json_build_object('day', ss.day_of_week, 'start_time', ss.start_time::text, 'end_time', ss.end_time::text)
-         FROM schedule_sessions ss
-         WHERE ss.master_schedule_id = rcr.master_schedule_id AND ss.start_time IS NOT NULL
-         ORDER BY (ss.day_of_week = TRIM(to_char(rcr.created_at, 'FMDay'))) DESC, ss.start_time
-         LIMIT 1) AS use_session,
+        -- When the room is needed: a today-only request's class time; an older
+        -- request's class session on the day it was requested (else its first session)
+        CASE WHEN rcr.use_date IS NOT NULL
+             THEN json_build_object('day', TRIM(to_char(rcr.use_date, 'FMDay')),
+                                    'start_time', rcr.use_start::text, 'end_time', rcr.use_end::text)
+             ELSE (SELECT json_build_object('day', ss.day_of_week, 'start_time', ss.start_time::text, 'end_time', ss.end_time::text)
+                   FROM schedule_sessions ss
+                   WHERE ss.master_schedule_id = rcr.master_schedule_id AND ss.start_time IS NOT NULL
+                   ORDER BY (ss.day_of_week = TRIM(to_char(rcr.created_at, 'FMDay'))) DESC, ss.start_time
+                   LIMIT 1)
+        END AS use_session,
         c.subject_code,
         c.subject_name,
         b.block_name,

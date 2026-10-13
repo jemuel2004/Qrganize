@@ -34,6 +34,9 @@ test('checks, sign-in and personal settings change nothing shared', () => {
     '/api/scheduling/check-conflicts', '/api/settings/verify-password', '/api/curriculum/export',
     '/api/auth/login', '/api/auth/logout', '/api/account/change-password', '/api/instructor/profile/theme',
     '/api/notifications/5', '/api/notifications/read-all',
+    '/api/instructor/class-reminders', '/api/instructor/class-reminders/devices',
+    '/api/instructor/class-reminders/devices/status', '/api/instructor/class-reminders/test',
+    '/api/cron/class-reminders',
   ]) {
     assert.deepEqual(topicsForWrite('POST', p), [], p);
   }
