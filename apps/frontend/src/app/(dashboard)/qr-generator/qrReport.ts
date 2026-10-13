@@ -37,7 +37,7 @@ const cardHtml = (r: RoomQR) => `
     <div class="name">${esc(r.room_name)}</div>
     <div class="meta">${esc([r.room_type, r.building].filter(Boolean).join(' · '))}</div>
     <div class="id">${esc(r.qr_code_id ?? '')}</div>
-    <div class="hint">Scan to check in to this room</div>
+    <div class="hint">Scan to use this room</div>
   </div>`;
 
 /** Open the printable QR cards. Returns false when nothing to print or the pop-up was blocked. */

@@ -17,7 +17,7 @@ export interface ScanResult {
   message: string;
   scan_time: string;
   already_occupied?: boolean;
-  /** ISO timestamp from room_occupancy.occupied_at when already checked in */
+  /** ISO timestamp from room_occupancy.occupied_at when already scanned */
   checked_in_at?: string | null;
   room?: { id: number; name: string; type: string };
   schedule?: {
@@ -51,9 +51,14 @@ export type ModalKind =
 /**
  * What the button does. 'close' only dismisses — the camera keeps running and
  * the same QR is not read again until it has left the camera's view; 'retry'
- * reads the same QR again (no answer came back); 'sign_in' goes to the sign-in page.
+ * reads the same QR again (no answer came back); 'sign_in' goes to the sign-in page;
+ * 'session' opens the faculty dashboard, whose Active Room Session shows the room
+ * and the class start and end — proof the scan went through.
  */
-export type ScanAction = 'close' | 'retry' | 'sign_in';
+export type ScanAction = 'close' | 'retry' | 'sign_in' | 'session';
+
+/** Button for a scan that went through — goes to the Active Room Session */
+export const VIEW_SESSION_LABEL = 'View My Session';
 
 export interface ModalPresentation {
   kind: ModalKind;
@@ -157,7 +162,7 @@ export function presentScanResult(result: ScanResult): ModalPresentation {
       kind: 'pending',
       title: 'Room Reserved',
       message: result.message
-        || `This room is reserved for you for ${mins} minutes. Scan the QR code at the room to confirm your check-in.`,
+        || `This room is reserved for you for ${mins} minutes. Scan the QR code at the room to confirm.`,
       buttonLabel: 'Got it',
       action: 'close',
       tone: 'warning',
@@ -166,30 +171,30 @@ export function presentScanResult(result: ScanResult): ModalPresentation {
   if (result.status === 'In-Use' && result.already_occupied) {
     return {
       kind: 'already',
-      title: 'Already Checked In',
-      message: result.message || 'You are already occupying this room. This room has already been successfully scanned.',
-      buttonLabel: 'Done',
-      action: 'close',
+      title: 'Already Scanned',
+      message: result.message || 'You already scanned this room. It is yours for this class.',
+      buttonLabel: VIEW_SESSION_LABEL,
+      action: 'session',
       tone: 'success',
     };
   }
   if ((result.status === 'In-Use' && result.scan_status === 'Late') || result.status === 'Late') {
     return {
       kind: 'late',
-      title: 'Late Check-In',
-      message: result.message || 'You checked in after the scheduled start time.',
-      buttonLabel: 'Continue',
-      action: 'close',
+      title: 'Late Scan',
+      message: result.message || 'You scanned after the class started. Your class still ends at its usual time.',
+      buttonLabel: VIEW_SESSION_LABEL,
+      action: 'session',
       tone: 'warning',
     };
   }
   if (result.status === 'In-Use' || result.status === 'Valid') {
     return {
       kind: 'success',
-      title: 'Room Occupied Successfully',
-      message: result.message || 'You are now checked in and occupying this room.',
-      buttonLabel: 'Done',
-      action: 'close',
+      title: 'Scanned Successfully',
+      message: result.message || 'This room is yours for this class.',
+      buttonLabel: VIEW_SESSION_LABEL,
+      action: 'session',
       tone: 'success',
     };
   }

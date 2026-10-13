@@ -464,16 +464,16 @@ export default function AvailableRoomsClient() {
                     </div>
                     {/* Free only on that date: its class time there */}
                     {card.free && (
-                      <p className="-mt-1 mb-2.5 text-[13px] font-semibold tabular-nums text-[#047857]">
+                      <p className="-mt-1 mb-2.5 text-[13px] font-semibold tabular-nums text-[#1E7047] [html:not(.light)_&]:text-[#86C7A1]">
                         Only {releaseDateLabel(card.free.date).replace(/, \d{4}$/, '')} · {fmt12(card.free.start_time)} – {fmt12(card.free.end_time)}
                       </p>
                     )}
                     {/* Free today because its faculty made it available, or nobody checked in for its class */}
                     {!card.free && card.freed && (
-                      <p className="-mt-1 mb-2.5 text-[13px] font-semibold text-[#047857] break-words">
+                      <p className="-mt-1 mb-2.5 text-[13px] font-semibold text-[#1E7047] [html:not(.light)_&]:text-[#86C7A1] break-words">
                         {card.freed.unclaimed && card.freed.until
                           ? `Free until ${fmt12(card.freed.until)} · not scanned`
-                          : `Freed today by ${card.freed.faculty_name ?? 'its faculty'}`}
+                          : `Free today · ${card.freed.faculty_name ?? 'its faculty'} isn’t using it`}
                       </p>
                     )}
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#64748B]">

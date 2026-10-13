@@ -1210,8 +1210,8 @@ export default function RoomRequestsClient() {
                                 <p className="mt-0.5 inline-flex items-center gap-1 text-xs font-semibold" style={{ color: fg }}>
                                   <Icon className="w-3.5 h-3.5" aria-hidden /> {label}
                                 </p>
-                                <p className="mt-0.5 text-xs font-medium text-[#047857] break-words">
-                                  {r.unclaimed_until ? `Not scanned · free until ${time12(r.unclaimed_until)}` : `Freed by ${r.freed_by ?? 'its faculty'}`}
+                                <p className="mt-0.5 text-xs font-medium text-[#1E7047] [html:not(.light)_&]:text-[#86C7A1] break-words">
+                                  {r.unclaimed_until ? `Not scanned · free until ${time12(r.unclaimed_until)}` : `Free · ${r.freed_by ?? 'its faculty'} isn’t using it`}
                                 </p>
                               </button>
                             );

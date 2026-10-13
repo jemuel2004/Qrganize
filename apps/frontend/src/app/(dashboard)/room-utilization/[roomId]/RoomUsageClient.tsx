@@ -20,7 +20,7 @@ import { CardSkeleton, ListSkeleton } from '@/components/ui/skeletons';
 import { useSkeletonRefresh } from '@/hooks/useSkeletonRefresh';
 import { PageLoadTransition } from '@/components/ui/PageLoadTransition';
 import { PAGE_SKELETON_MIN_MS, useMinLoading } from '@/hooks/useMinLoading';
-import { CalendarDays, Check, CheckCircle2, ChevronDown, QrCode, XCircle } from 'lucide-react';
+import { CalendarDays, Check, CheckCircle2, ChevronDown, QrCode, UserRound, XCircle } from 'lucide-react';
 import {
   AnimatePresence, AutoHeight, DateButton, EASE, fmt12, fmtDate, motion, rangeLabel, RefreshButton, RoomIcon,
   ROOM_LABEL, ROOM_TONE, roomStatusFor, RowStatusPill, TypePill, useApplyingDate, useUtilization,
@@ -173,13 +173,19 @@ export default function RoomUsageClient() {
                       <span className="inline-flex items-center gap-1.5 text-sm font-semibold px-3 py-0.5 rounded-full border"
                         style={{ backgroundColor: ROOM_TONE[status].soft, color: ROOM_TONE[status].text, borderColor: ROOM_TONE[status].bar + '55' }}>
                         <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ROOM_TONE[status].bar }} /> {ROOM_LABEL[status]}
-                        {room.live_faculty && status === 'Occupied' ? ` · ${room.live_faculty}` : ''}
                       </span>
                     )}
                   </div>
                 </div>
                 <RefreshButton overlay={false} onRefresh={refresh} loading={refreshing || bodySkeleton} className="!h-12 flex-shrink-0" />
               </div>
+              {/* Who is using it now — its own line under the name, so a long name never crowds the chips */}
+              {liveDay && status === 'Occupied' && room.live_faculty && (
+                <p className="mt-3 sm:pl-[60px] flex items-start gap-2 text-[15px] text-[#475569]">
+                  <UserRound className="w-4 h-4 mt-[3px] flex-shrink-0 text-[#94A3B8]" aria-hidden="true" />
+                  <span className="min-w-0 break-words">Used by <span className="font-semibold text-[#0B2A5B]">{room.live_faculty}</span></span>
+                </p>
+              )}
               <div className="mt-4 pt-4 border-t border-[#EEF2F7] flex flex-col lg:flex-row lg:items-end gap-4 lg:gap-8">
                 <div className="min-w-0">
                   <p className={LABEL}>View</p>

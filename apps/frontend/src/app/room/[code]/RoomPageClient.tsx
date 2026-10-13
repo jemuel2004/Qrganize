@@ -10,7 +10,7 @@ import SystemLogo from '@/components/ui/SystemLogo';
 import { Skeleton } from '@/components/ui/skeletons';
 import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import { useRealtime } from '@/context/RealtimeContext';
-import { presentScanResult, type ScanResult } from '@/lib/scanResult';
+import { presentScanResult, VIEW_SESSION_LABEL, type ScanResult } from '@/lib/scanResult';
 
 /* ─── Data (GET /api/rooms/by-qr) ─────────────────────────────────────────── */
 
@@ -19,7 +19,7 @@ interface RoomClass {
   faculty_name: string | null; start_time: string; end_time: string; is_mine: boolean;
   /** Its faculty made this room available for today — the class isn't meeting here */
   released?: boolean;
-  /** Not checked in within 15 minutes of the start — anyone may use the room until the class ends */
+  /** Not scanned within 15 minutes of the start — anyone may use the room until the class ends */
   unclaimed?: boolean;
 }
 /** A faculty member's room request for this room today (one class time) */
@@ -31,7 +31,9 @@ interface RoomInfo {
   room: { id: number; room_name: string; room_type: string; building: string | null; capacity: number | null; qr_code_id: string };
   status:
     | { state: 'Available' }
-    | { state: 'Occupied' | 'Pending'; faculty_name: string | null; is_mine: boolean; since: string | null; until: string | null };
+    | { state: 'Occupied' | 'Pending'; faculty_name: string | null; is_mine: boolean; since: string | null; until: string | null;
+        /** 'HH:MM' — the class time the hold is for */
+        class_start: string | null; class_end: string | null };
   today: RoomClass[];
   reservations?: RoomReservation[];
   now: string;
@@ -98,7 +100,7 @@ export default function RoomPageClient({ code, role }: { code: string | null; ro
   }, [code]);
 
   useEffect(() => { void load(); }, [load]);
-  // Live: check-ins, releases, requests and schedule changes show within seconds
+  // Live: scans, releases, requests and schedule changes show within seconds
   useRealtime(['occupancy', 'rooms', 'schedule', 'room-requests'], () => load(true), { enabled: !loading });
   // The clock moves the current / next class along — re-read every 30 s while shown
   useEffect(() => {
@@ -106,8 +108,8 @@ export default function RoomPageClient({ code, role }: { code: string | null; ro
     return () => window.clearInterval(t);
   }, [load]);
 
-  /** Check in — the same request and rules as Scan Room QR */
-  async function checkIn() {
+  /** Records the scan — the same request and rules as Scan Room QR */
+  async function confirmScan() {
     if (!info?.viewer.faculty_id) return;
     setChecking(true);
     setResult(null);
@@ -133,14 +135,14 @@ export default function RoomPageClient({ code, role }: { code: string | null; ro
   }
 
   const nowMin = info ? toMin(info.now) : 0;
-  // A class nobody checked in for is free to others (its own faculty may still check in late)
+  // A class nobody scanned for is free to others (its own faculty may still scan late)
   const freedFor = (c: RoomClass) => c.released || (c.unclaimed && !c.is_mine);
   const current = info?.today.find(c => !freedFor(c) && toMin(c.start_time) <= nowMin && nowMin < toMin(c.end_time)) ?? null;
   const next = info?.today.find(c => !c.released && toMin(c.start_time) > nowMin) ?? null;
-  // A class time whose faculty made the room available, or nobody checked in for: free for others until it ends
+  // A class time whose faculty made the room available, or nobody scanned for: free for others until it ends
   const freedNow = current ? null : info?.today.find(c => freedFor(c) && toMin(c.start_time) <= nowMin && nowMin < toMin(c.end_time)) ?? null;
   const isFaculty = role === 'instructor';
-  const checkedInHere = info?.status.state === 'Occupied' && info.status.is_mine;
+  const scannedHere = info?.status.state === 'Occupied' && info.status.is_mine;
   // Today in time order: the room's classes and the class times faculty reserved it for
   const dayRows = info
     ? [
@@ -240,21 +242,31 @@ export default function RoomPageClient({ code, role }: { code: string | null; ro
             <section className="rounded-2xl border border-[#E2E8F0] bg-white p-5 shadow-sm space-y-3">
               {isFaculty ? (
                 <>
-                  {checkedInHere ? (
-                    <p className="flex items-center gap-2 text-[15px] font-semibold text-[#047857]">
-                      <CheckCircle2 className="w-5 h-5" /> You are checked in to this room.
-                    </p>
+                  {scannedHere ? (
+                    <>
+                      <p className="flex items-center gap-2 text-[15px] font-semibold text-[#047857]">
+                        <CheckCircle2 className="w-5 h-5 flex-shrink-0" /> Scanned — this room is yours for this class.
+                      </p>
+                      {/* The dashboard's Active Room Session shows the room and the class start and end */}
+                      <Link
+                        href="/instructor"
+                        className="flex h-14 w-full items-center justify-center gap-2 rounded-xl bg-[#1D5BD6] text-[17px] font-bold hover:bg-[#164BB5] transition-colors"
+                        style={WHITE}
+                      >
+                        <Home className="w-5 h-5" /> {VIEW_SESSION_LABEL}
+                      </Link>
+                    </>
                   ) : (
                     <motion.button
                       type="button"
-                      onClick={checkIn}
+                      onClick={confirmScan}
                       disabled={checking || !info.viewer.faculty_id}
                       whileTap={reduceMotion ? undefined : { scale: 0.98 }}
                       className="flex h-14 w-full items-center justify-center gap-2 rounded-xl bg-[#1D5BD6] text-[17px] font-bold hover:bg-[#164BB5] transition-colors disabled:opacity-60"
                       style={WHITE}
                     >
                       {checking ? <Loader2 className="w-5 h-5 animate-spin" /> : <QrCode className="w-5 h-5" />}
-                      {checking ? 'Checking in…' : 'Check in to this room'}
+                      {checking ? 'Confirming…' : 'Confirm My Scan'}
                     </motion.button>
                   )}
                   <AnimatePresence initial={false}>
@@ -380,8 +392,13 @@ function StatusPanel({ info }: { info: RoomInfo }) {
         </span>
         <span className="block text-sm text-[#334155]">
           {s.is_mine ? 'By you' : s.faculty_name ? `By ${s.faculty_name}` : ''}
-          {since ? `${s.is_mine || s.faculty_name ? ' · ' : ''}${occupied ? 'since' : 'reserved at'} ${since}` : ''}
-          {until ? ` · until ${until}` : ''}
+          {/* In use for a class: the class time (a late scan doesn't move it) */}
+          {occupied && s.class_start && s.class_end
+            ? `${s.is_mine || s.faculty_name ? ' · ' : ''}${clock(s.class_start)} – ${clock(s.class_end)}`
+            : <>
+                {since ? `${s.is_mine || s.faculty_name ? ' · ' : ''}${occupied ? 'since' : 'reserved at'} ${since}` : ''}
+                {until ? ` · until ${until}` : ''}
+              </>}
         </span>
       </span>
     </div>

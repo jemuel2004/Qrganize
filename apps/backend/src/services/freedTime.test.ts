@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { freedDayPhrase, mergeFreedTimes } from './freedTime';
+import { firstFreeTime, freedDayPhrase, mergeFreedTimes } from './freedTime';
 
 const room = { id: 7, room_name: 'Lecture-1', room_type: 'Lecture' };
 
@@ -16,4 +16,10 @@ test('one room\'s freed class times that touch become one time; other rooms and 
   assert.deepEqual(out.map(x => `${x.room.id} ${x.date} ${x.start}-${x.end}`), [
     '7 2026-10-14 10:00-12:00', '7 2026-10-14 13:00-14:30', '7 2026-10-15 10:00-11:00', '8 2026-10-14 10:00-11:00',
   ]);
+});
+
+test('the dashboard shows a room\'s earliest free time, joined with the times right after it', () => {
+  assert.equal(firstFreeTime([]), null);
+  assert.deepEqual(firstFreeTime([{ start: '13:00', end: '14:30' }, { start: '10:15', end: '11:30' }, { start: '11:30', end: '12:00' }]), { start: '10:15', end: '12:00' });
+  assert.deepEqual(firstFreeTime([{ start: '10:00', end: '12:00' }, { start: '10:15', end: '11:00' }]), { start: '10:00', end: '12:00' });
 });

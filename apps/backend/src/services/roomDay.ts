@@ -12,7 +12,9 @@ import { ensureRoomReleasesTable, releasedOnSql, unclaimedNowSql } from '@/servi
 
 export type RoomStatusNow =
   | { state: 'Available' }
-  | { state: 'Pending' | 'Occupied'; faculty_name: string | null; is_mine: boolean; since: string | null; until: string | null };
+  | { state: 'Pending' | 'Occupied'; faculty_name: string | null; is_mine: boolean; since: string | null; until: string | null;
+      /** 'HH:MM' — the class time the hold is for (a late scan doesn't move it); null for a hold with no class */
+      class_start: string | null; class_end: string | null };
 
 /** The room's status now — the same occupancy records Room Monitoring and the scan use */
 export async function roomStatusNow(roomId: number, viewerFacultyId: number | null): Promise<RoomStatusNow> {
@@ -20,6 +22,7 @@ export async function roomStatusNow(roomId: number, viewerFacultyId: number | nu
   await expireStaleOccupancy(roomId);
   const res = await query(`
     SELECT ro.status, ro.occupied_at, ro.reserved_at, ro.expires_at, ro.faculty_id,
+           to_char(ro.scheduled_start, 'HH24:MI') AS class_start, to_char(ro.scheduled_end, 'HH24:MI') AS class_end,
            COALESCE(NULLIF(trim(COALESCE(f.name, '')), ''),
                     NULLIF(trim(COALESCE(f.first_name,'') || ' ' || COALESCE(f.last_name,'')), '')) AS faculty_name
     FROM   room_occupancy ro
@@ -30,7 +33,7 @@ export async function roomStatusNow(roomId: number, viewerFacultyId: number | nu
   `, [roomId]);
   const occ = res.rows[0] as {
     status: 'Pending' | 'Occupied'; occupied_at: string | null; reserved_at: string | null; expires_at: string | null;
-    faculty_id: number; faculty_name: string | null;
+    faculty_id: number; faculty_name: string | null; class_start: string | null; class_end: string | null;
   } | undefined;
   if (!occ) return { state: 'Available' };
   return {
@@ -39,6 +42,8 @@ export async function roomStatusNow(roomId: number, viewerFacultyId: number | nu
     is_mine: viewerFacultyId != null && Number(occ.faculty_id) === viewerFacultyId,
     since: occ.status === 'Occupied' ? occ.occupied_at : occ.reserved_at,
     until: occ.expires_at,
+    class_start: occ.class_start,
+    class_end: occ.class_end,
   };
 }
 

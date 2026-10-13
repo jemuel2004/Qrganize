@@ -254,7 +254,7 @@ async function POST_handler(req: NextRequest) {
       }).catch(() => {});
       createNotification({
         recipientRole: 'admin',
-        title: 'Room Occupied via QR',
+        title: 'Room Scanned',
         message: `${scannerName} confirmed their room request for ${room.room_name}${r.subject_name ? ` (${r.subject_name})` : ''}, ${timeRange12(r.use_start, r.use_end)} today.`,
         type: 'room_occupied', relatedModule: 'room', relatedId: room.id,
       }).catch(() => {});
@@ -456,7 +456,7 @@ async function POST_handler(req: NextRequest) {
       }).catch(() => {});
       createNotification({
         recipientRole: 'admin',
-        title: 'Room Occupied via QR',
+        title: 'Room Scanned',
         message: `${scannerName} confirmed occupancy of ${room.room_name}${scheduleInfo ? ` for ${scheduleInfo.subject_name}` : ''}.`,
         type: 'room_occupied', relatedModule: 'room', relatedId: room.id,
       }).catch(() => {});
@@ -489,7 +489,7 @@ async function POST_handler(req: NextRequest) {
       return NextResponse.json({
         status:           'In-Use',
         already_occupied: true,
-        message:          'You are already occupying this room. This room has already been successfully scanned.',
+        message:          'You already scanned this room. It is yours for this class.',
         scan_time:        scanTime,
         checked_in_at:    occ.occupied_at ?? occ.reserved_at ?? null,
         room:             { id: room.id, name: room.room_name, type: room.room_type },
@@ -668,7 +668,7 @@ async function POST_handler(req: NextRequest) {
       const scanStatus = scanMins <= startMins + 5 ? 'Valid' : 'Late';
       const scanNote   = scanStatus === 'Valid'
         ? `On time — session: ${timeRange12(String(sched.start_time), String(sched.end_time))}`
-        : `Late check-in — class started at ${time12(String(sched.start_time))}`;
+        : `Late scan — class started at ${time12(String(sched.start_time))}`;
 
       // Create OCCUPIED — expires_at always based on scheduled end time (not scan time)
       await giveWay();
@@ -716,7 +716,7 @@ async function POST_handler(req: NextRequest) {
       if (scanStatus === 'Late') {
         createNotification({
           recipientId: Number(faculty_id), recipientRole: 'instructor',
-          title: 'Late QR Check-In',
+          title: 'Late QR Scan',
           message: `${room.room_name} — ${sched.subject_name}. Class started at ${time12(String(sched.start_time))}; you scanned at ${time12(scanTime)}.`,
           type: 'qr_scan_success', relatedModule: 'room', relatedId: room.id,
         }).catch(() => {});
@@ -730,8 +730,8 @@ async function POST_handler(req: NextRequest) {
       }
       createNotification({
         recipientRole: 'admin',
-        title: scanStatus === 'Late' ? 'Late Room Check-In' : 'Room Occupied via QR',
-        message: `${scannerName} checked in to ${room.room_name} for ${sched.subject_name} (${scanStatus}).`,
+        title: scanStatus === 'Late' ? 'Late Room Scan' : 'Room Scanned',
+        message: `${scannerName} scanned ${room.room_name} for ${sched.subject_name}${scanStatus === 'Late' ? ' (late)' : ''}.`,
         type: 'room_occupied', relatedModule: 'room', relatedId: room.id,
       }).catch(() => {});
 
@@ -739,8 +739,8 @@ async function POST_handler(req: NextRequest) {
         status:      'In-Use',
         scan_status: scanStatus, // 'Valid' (On Time) | 'Late'
         message:     scanStatus === 'Valid'
-          ? `Access granted. Session runs ${timeRange12(String(sched.start_time), String(sched.end_time))}.`
-          : `Late check-in. Class started at ${time12(String(sched.start_time))}.`,
+          ? `Your class runs ${timeRange12(String(sched.start_time), String(sched.end_time))}.`
+          : `Your class started at ${time12(String(sched.start_time))} and still ends at ${time12(String(sched.end_time))}.`,
         scan_time:   scanTime,
         room:        { id: room.id, name: room.room_name, type: room.room_type },
         schedule: {
@@ -959,7 +959,7 @@ async function POST_handler(req: NextRequest) {
         return NextResponse.json({
           status:           'In-Use',
           already_occupied: true,
-          message:          'You are already occupying this room. This room has already been successfully scanned.',
+          message:          'You already scanned this room. It is yours for this class.',
           scan_time:        scanTime,
           checked_in_at:    rcRow.occupied_at ?? null,
           room:             { id: room.id, name: room.room_name, type: room.room_type },
@@ -993,7 +993,7 @@ async function POST_handler(req: NextRequest) {
 
     createNotification({
       recipientId: Number(faculty_id), recipientRole: 'instructor',
-      title: 'Room Occupied Successfully',
+      title: 'QR Scan Successful',
       message: borrow
         ? `You are now using ${room.room_name} for ${borrow.subject_code} until ${time12(borrow.end_time)}.`
         : `You are now occupying ${room.room_name}.`,
@@ -1001,7 +1001,7 @@ async function POST_handler(req: NextRequest) {
     }).catch(() => {});
     createNotification({
       recipientRole: 'admin',
-      title: 'Room Occupied via QR',
+      title: 'Room Scanned',
       message: borrow
         ? `${scannerName} is using ${room.room_name} for ${borrow.subject_code} (no room), ${timeRange12(borrow.start_time, borrow.end_time)}.`
         : `${scannerName} occupied ${room.room_name} (walk-in).`,
@@ -1015,10 +1015,10 @@ async function POST_handler(req: NextRequest) {
         // Their class keeps its own times: the room is theirs until it ends
         ? `${room.room_name} is yours for ${borrow.subject_code} until ${time12(borrow.end_time)}.`
         : walkInUntil
-          ? `Room occupied until ${time12(walkInUntil)} — it is reserved for a class after that.`
+          ? `This room is yours until ${time12(walkInUntil)} — a class uses it after that.`
           : roomFreeUntil
-            ? `Room occupied until ${time12(roomFreeUntil)}.`
-            : 'Room occupied successfully.',
+            ? `This room is yours until ${time12(roomFreeUntil)}.`
+            : 'This room is yours.',
       scan_time:        scanTime,
       room:             { id: room.id, name: room.room_name, type: room.room_type },
       ...(borrow ? {

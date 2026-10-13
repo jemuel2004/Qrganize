@@ -25,13 +25,18 @@ import { blockCode } from '@shared/blockCode';
 interface Reservation {
   id: number; room_id: number; status: 'Pending' | 'Occupied';
   reserved_at: string; expires_at: string; occupied_at: string | null;
+  /** 'HH:MM' — the class time the room is held for (a late scan still starts and ends with the class) */
+  class_start: string | null; class_end: string | null;
   room_name: string; room_type: string; building: string | null; capacity: number | null;
 }
 interface RoomCounts { available: number; pending: number; occupied: number; total: number; }
 interface AvailableRoom {
   id: number; room_name: string; room_type: string; building: string | null; capacity: number | null;
-  /** Another faculty's class frees it today (Free My Room, or not checked in within 15 minutes) — only those can be requested */
+  /** Another faculty's class frees it today (Free My Room, or not scanned within 15 minutes) — only those can be requested */
   freed_today?: boolean;
+  /** 'HH:MM' — its earliest free time today */
+  free_from?: string | null;
+  free_until?: string | null;
 }
 interface TodaySession {
   id: number; subject_code: string; subject_name: string;
@@ -140,6 +145,29 @@ function TypeBadge({ type }: { type: string }) {
   );
 }
 
+/* ─── Active Room Session: the class's own start and end ─────────── */
+const schoolClock = (iso: string) => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: SCHOOL_TZ });
+
+/** Start and end of the class the room is held for — a late scan doesn't move either. A hold with no class time uses the scan and hold times. */
+function SessionTimes({ reservation: r }: { reservation: Reservation }) {
+  const start = r.class_start ? fmt12(r.class_start) : r.occupied_at ? schoolClock(r.occupied_at) : null;
+  const end = r.class_end ? fmt12(r.class_end) : schoolClock(r.expires_at);
+  return (
+    <div className="flex items-stretch gap-5">
+      {start && (
+        <div>
+          <p className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-1">Start</p>
+          <p className="text-lg sm:text-xl font-black text-white tabular-nums">{start}</p>
+        </div>
+      )}
+      <div className={start ? 'border-l border-white/10 pl-5' : ''}>
+        <p className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-1">End</p>
+        <p className="text-lg sm:text-xl font-black text-white tabular-nums">{end}</p>
+      </div>
+    </div>
+  );
+}
+
 /* ─── Available Rooms: 5 per page, slides on every 5 s ────────────── */
 const ROOMS_PER_PAGE = 5;
 const ROOM_ROW_PX = 78;
@@ -154,6 +182,11 @@ function RoomRow({ room }: { room: AvailableRoom }) {
     room.building,
     room.capacity != null ? `${room.capacity} seats` : null,
   ].filter(Boolean).join(' · ');
+  // "Free until 12:00 PM" once its free time has begun, else "Free 10:30 AM – 12:00 PM"
+  const free = !room.freed_today ? null
+    : room.free_from && room.free_until && sessionMins(room.free_from) > schoolMinutes()
+      ? `Free ${fmt12(room.free_from)} – ${fmt12(room.free_until)}`
+      : room.free_until ? `Free until ${fmt12(room.free_until)}` : 'Free today';
 
   return (
     <div className="flex items-center gap-3 px-5 border-b border-white/5 last:border-b-0" style={{ height: ROOM_ROW_PX }}>
@@ -163,7 +196,7 @@ function RoomRow({ room }: { room: AvailableRoom }) {
           <TypeBadge type={room.room_type} />
         </div>
         <p className="text-sm text-slate-300 mt-1 truncate">
-          {room.freed_today && <span className="font-semibold text-[#6EE7B7]">Freed today · </span>}
+          {free && <span className="font-semibold text-[#1E7047] [html:not(.light)_&]:text-[#86C7A1]">{free} · </span>}
           {meta || 'Capacity N/A'}
         </p>
       </div>
@@ -646,13 +679,8 @@ export default function InstructorDashboard() {
                 <Countdown expiresAt={data.my_reservation.expires_at} onExpired={() => load(true)} />
               </div>
             )}
-            {data.my_reservation.status === 'Occupied' && data.my_reservation.occupied_at && (
-              <div className="text-left sm:text-right">
-                <p className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-1">Session started</p>
-                <p className="text-lg sm:text-xl font-black text-white">
-                  {new Date(data.my_reservation.occupied_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: SCHOOL_TZ })}
-                </p>
-              </div>
+            {data.my_reservation.status === 'Occupied' && (
+              <SessionTimes reservation={data.my_reservation} />
             )}
             <div className="flex items-center gap-2.5 w-full sm:w-auto">
               {data.my_reservation.status === 'Pending' && (

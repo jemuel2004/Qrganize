@@ -42,7 +42,9 @@ interface RoomClass {
 }
 type Status =
   | { state: 'Available' }
-  | { state: 'Pending' | 'Occupied'; faculty_name: string | null; is_mine: boolean; since: string | null; until: string | null };
+  | { state: 'Pending' | 'Occupied'; faculty_name: string | null; is_mine: boolean; since: string | null; until: string | null;
+      /** 'HH:MM' — the class time the hold is for */
+      class_start?: string | null; class_end?: string | null };
 
 const WHITE = { color: '#FFFFFF' } as const;
 
@@ -167,7 +169,9 @@ export default function RoomDetailsDialog({
             <span>
               <span className="font-bold">{status.state === 'Occupied' ? 'In use now' : 'Reserved now'}</span>
               {' · '}{status.is_mine ? 'by you' : status.faculty_name || 'another faculty'}
-              {clockOf(status.since) && <span className="opacity-75">, since {clockOf(status.since)}</span>}
+              {status.state === 'Occupied' && status.class_start && status.class_end
+                ? <span className="opacity-75">, {fmt12(status.class_start)} – {fmt12(status.class_end)}</span>
+                : clockOf(status.since) && <span className="opacity-75">, since {clockOf(status.since)}</span>}
             </span>
           </p>
         )}

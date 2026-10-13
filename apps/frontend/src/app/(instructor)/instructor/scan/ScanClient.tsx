@@ -9,6 +9,7 @@ import { useScrollLock } from '@/hooks/useScrollLock';
 import BackButton from '@/components/ui/BackButton';
 import WatermarkTitle from '@/components/ui/WatermarkTitle';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   QrCode, CheckCircle, XCircle, AlertTriangle, Clock,
   MapPin, Camera, CameraOff, SwitchCamera, CalendarX2, DoorClosed,
@@ -20,7 +21,7 @@ import { LOADING_DELAY, useMinLoading } from '@/hooks/useMinLoading';
 import { NAV_EASE } from '@/components/layout/navMotion';
 import { isQrCode, qrCodeFromScan } from '@shared/qrLink';
 import {
-  presentScanResult,
+  presentScanResult, VIEW_SESSION_LABEL,
   type ModalKind, type ModalPresentation, type ScanAction, type ScanResult,
 } from '@/lib/scanResult';
 
@@ -85,8 +86,8 @@ function formatScanClock(scanTime: string): string {
   }
 }
 
-/** Format occupancy checked-in timestamp for the Already Checked In modal. */
-function formatCheckedInAt(iso: string | null | undefined): string | null {
+/** When the faculty first scanned the room they hold — for the Already Scanned pop-up */
+function formatScannedAt(iso: string | null | undefined): string | null {
   if (!iso) return null;
   try {
     const dt = new Date(iso);
@@ -292,9 +293,9 @@ function ScanResultDialog({
           {p.message}
         </p>
 
-        {p.kind === 'already' && formatCheckedInAt(result.checked_in_at) && (
+        {p.kind === 'already' && formatScannedAt(result.checked_in_at) && (
           <p className="mt-3 text-xs font-medium text-[#64748B]">
-            Checked in at: {formatCheckedInAt(result.checked_in_at)}
+            Scanned at {formatScannedAt(result.checked_in_at)}
           </p>
         )}
 
@@ -305,7 +306,7 @@ function ScanResultDialog({
           </p>
         )}
 
-        {result.scan_time && p.kind === 'already' && !formatCheckedInAt(result.checked_in_at) && (
+        {result.scan_time && p.kind === 'already' && !formatScannedAt(result.checked_in_at) && (
           <p className="mt-3 text-xs text-[#94A3B8] flex items-center justify-center gap-1.5">
             <Clock className="w-3.5 h-3.5" aria-hidden="true" />
             Scanned at {formatScanClock(result.scan_time)}
@@ -320,6 +321,16 @@ function ScanResultDialog({
         >
           {p.buttonLabel}
         </button>
+        {/* A scan that went through: the button above opens My Session; this only closes */}
+        {p.action === 'session' && (
+          <button
+            type="button"
+            onClick={() => onAction('close')}
+            className="mt-2 w-full min-h-11 rounded-xl text-sm font-semibold text-[#475569] hover:bg-[#F1F5F9] transition"
+          >
+            Close
+          </button>
+        )}
       </div>
     </div>,
     document.body,
@@ -329,6 +340,7 @@ function ScanResultDialog({
 /* ─── Main component ─────────────────────────────────────────────────────── */
 export default function ScanClient() {
   const { facultyId } = useInstructorProfile();
+  const router = useRouter();
   const reduceMotion = useReducedMotion();
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -533,7 +545,7 @@ export default function ScanClient() {
     setShowProcessing(false);
     setSubmitting(false);
     showAnswer(answer);
-    // Checked in: the camera's work is done. Signed out: let the camera go.
+    // Scanned: the camera's work is done. Signed out: let the camera go.
     // Any other answer leaves the camera running.
     if (answer.status === 'In-Use' || answer.status === 'SignedOut') await stopCamera();
   }, [facultyId, showAnswer, stopCamera]);
@@ -566,9 +578,12 @@ export default function ScanClient() {
       void checkRoom(code);
     } else if (action === 'sign_in') {
       window.location.assign(`/login?next=${encodeURIComponent('/instructor/scan')}`);
+    } else if (action === 'session') {
+      // The dashboard's Active Room Session: the room and the class start and end
+      router.push('/instructor');
     }
     // 'close': the camera keeps running — the same QR is read again once it has left the view
-  }, [checkRoom]);
+  }, [checkRoom, router]);
 
   async function toggleCamera() {
     if (typeof window === 'undefined' || cameraLoading) return;
@@ -787,7 +802,7 @@ function ScanResultCard({ result }: { result: ScanResult }) {
           'bg-[#ECFDF5] text-[#059669] border-[#A7F3D0]'
         }`}>
           <AlertTriangle className="w-3 h-3" />
-          {result.scan_status === 'Late' ? 'Late check-in recorded' :
+          {result.scan_status === 'Late' ? 'Late scan recorded' :
            result.scan_status === 'Overuse' ? 'Overuse recorded' : 'Valid'}
         </div>
       )}
@@ -848,6 +863,12 @@ function ScanResultCard({ result }: { result: ScanResult }) {
         <p className="text-xs text-[#94A3B8] flex items-center gap-1.5 mt-3">
           <Clock className="w-3 h-3" /> Scanned at {formatScanClock(result.scan_time)}
         </p>
+      )}
+
+      {p.action === 'session' && (
+        <Link href="/instructor" className="mt-3 inline-flex items-center gap-1 text-sm font-semibold text-[#1D5BD6] hover:underline">
+          {VIEW_SESSION_LABEL} →
+        </Link>
       )}
     </div>
   );

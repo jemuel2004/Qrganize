@@ -6,6 +6,8 @@ import { bumpTopics } from '@/services/realtime';
 import { manilaCalendarDateString, manilaClock } from '@/services/appTimezone';
 import { ensureRoomReleasesTable, releasedOnSql, unclaimedNowSql } from '@/services/roomReleases';
 import { getActiveAcademicPeriod } from '@/services/activeAcademicPeriod';
+import { firstFreeTime, type FreeTime } from '@/services/freedTime';
+import { SCAN_WITHIN_MIN } from '@shared/roomRequestWindow';
 
 export async function GET(req: NextRequest) {
   try {
@@ -39,18 +41,36 @@ export async function GET(req: NextRequest) {
     if ((restored?.rowCount ?? 0) > 0) bumpTopics(['occupancy']);
 
     /* ── 1. My active reservation ───────────────────────────────── */
+    // class_start / class_end: the class time the hold is for, never the scan time —
+    // a late scan still ends with the class. Holds without stored times use this
+    // faculty's class in that room that hasn't ended today.
     const reservationRes = await query(`
       SELECT
         ro.id, ro.room_id, ro.faculty_id, ro.status,
         ro.reserved_at, ro.expires_at, ro.occupied_at,
+        to_char(COALESCE(ro.scheduled_start, cls.start_time), 'HH24:MI') AS class_start,
+        to_char(COALESCE(ro.scheduled_end,   cls.end_time),   'HH24:MI') AS class_end,
         r.room_name, r.room_type, r.building, r.capacity
       FROM  room_occupancy ro
       JOIN  rooms r ON ro.room_id = r.id
+      LEFT JOIN LATERAL (
+        SELECT ss.start_time, ss.end_time
+        FROM   schedule_sessions ss
+        JOIN   master_schedule  ms ON ms.id = ss.master_schedule_id
+        WHERE  ro.scheduled_start IS NULL
+          AND  ms.faculty_id = ro.faculty_id
+          AND  ms.status IN ('Assigned', 'Scheduled')
+          AND  COALESCE(ss.room_id, ms.room_id) = ro.room_id
+          AND  ss.day_of_week = $2
+          AND  ss.end_time > $3::time
+        ORDER  BY ss.start_time
+        LIMIT  1
+      ) cls ON TRUE
       WHERE ro.faculty_id = $1
         AND ro.status IN ('Pending', 'Occupied')
       ORDER BY ro.reserved_at DESC
       LIMIT 1
-    `, [facultyId]);
+    `, [facultyId, manilaClock().dayOfWeek, manilaClock().time.slice(0, 5)]);
 
     /* ── 2. Room status counts ──────────────────────────────────── */
     const totalRoomsRes = await query(`
@@ -68,45 +88,52 @@ export async function GET(req: NextRequest) {
     const availableCount = Math.max(0, totalRooms - pendingCount - occupiedCount);
 
     /* ── 3. Available rooms list ────────────────────────────────── */
-    // freed_today: another faculty made it available for a class time today that
-    // hasn't ended (Free My Room), or their class now wasn't checked in within
-    // 15 minutes — only those can be requested; they come first
+    // Free time today: another faculty's class time freed with Free My Room that
+    // hasn't ended, or their class now not scanned within 15 minutes (free from then
+    // until it ends) — only those rooms can be requested; they come first
     await ensureRoomReleasesTable();
     const period = await getActiveAcademicPeriod();
     const availableRes = await query(`
-      SELECT r.id, r.room_name, r.room_type, r.building, r.capacity,
-             EXISTS (
-               SELECT 1
-               FROM   room_releases rr
-               JOIN   schedule_sessions ss ON ss.id = rr.session_id
-               JOIN   master_schedule  ms ON ms.id = ss.master_schedule_id AND ms.faculty_id = rr.faculty_id
-               WHERE  ss.room_id = r.id
-                 AND  rr.release_date = $1::date
-                 AND  rr.faculty_id <> $2
-                 AND  ss.end_time > $3::time
-                 AND  ms.status IN ('Assigned', 'Scheduled')
-             ) OR EXISTS (
-               SELECT 1
-               FROM   schedule_sessions ss
-               JOIN   master_schedule  ms ON ms.id = ss.master_schedule_id
-               JOIN   block_subjects   bs ON bs.id = ms.block_subject_id
-               JOIN   blocks            b ON b.id  = bs.block_id
-               WHERE  ss.room_id = r.id
-                 AND  ms.faculty_id <> $2
-                 AND  ms.status IN ('Assigned', 'Scheduled')
-                 AND  ($4 = '' OR b.academic_year = $4)
-                 AND  ($5 = '' OR b.semester      = $5)
-                 AND  ${unclaimedNowSql('ss', 'ms')}
-             ) AS freed_today
+      SELECT r.id, r.room_name, r.room_type, r.building, r.capacity, fw.times AS free_times
       FROM   rooms r
+      LEFT JOIN LATERAL (
+        SELECT json_agg(json_build_object('start', to_char(w.s, 'HH24:MI'), 'end', to_char(w.e, 'HH24:MI')) ORDER BY w.s) AS times
+        FROM (
+          SELECT ss.start_time AS s, ss.end_time AS e
+          FROM   room_releases rr
+          JOIN   schedule_sessions ss ON ss.id = rr.session_id
+          JOIN   master_schedule  ms ON ms.id = ss.master_schedule_id AND ms.faculty_id = rr.faculty_id
+          WHERE  ss.room_id = r.id
+            AND  rr.release_date = $1::date
+            AND  rr.faculty_id <> $2
+            AND  ss.end_time > $3::time
+            AND  ms.status IN ('Assigned', 'Scheduled')
+          UNION ALL
+          SELECT ss.start_time + INTERVAL '${SCAN_WITHIN_MIN} minutes', ss.end_time
+          FROM   schedule_sessions ss
+          JOIN   master_schedule  ms ON ms.id = ss.master_schedule_id
+          JOIN   block_subjects   bs ON bs.id = ms.block_subject_id
+          JOIN   blocks            b ON b.id  = bs.block_id
+          WHERE  ss.room_id = r.id
+            AND  ms.faculty_id <> $2
+            AND  ms.status IN ('Assigned', 'Scheduled')
+            AND  ($4 = '' OR b.academic_year = $4)
+            AND  ($5 = '' OR b.semester      = $5)
+            AND  ${unclaimedNowSql('ss', 'ms')}
+        ) w
+      ) fw ON TRUE
       WHERE  r.status = 'Active'
         AND  NOT EXISTS (
                SELECT 1 FROM room_occupancy ro
                WHERE  ro.room_id = r.id
                  AND  ro.status IN ('Pending', 'Occupied')
              )
-      ORDER BY freed_today DESC, r.room_name
+      ORDER BY (fw.times IS NOT NULL) DESC, r.room_name
     `, [manilaCalendarDateString(), facultyId, manilaClock().time.slice(0, 5), period.schoolYear ?? '', period.semester ?? '']);
+    const availableRooms = availableRes.rows.map(({ free_times, ...room }) => {
+      const free = firstFreeTime((free_times ?? []) as FreeTime[]);
+      return { ...room, freed_today: free !== null, free_from: free?.start ?? null, free_until: free?.end ?? null };
+    });
 
     /* ── 4. Today's schedule ────────────────────────────────────── */
     // Today in Manila (the server itself may run in UTC), active term only
@@ -160,7 +187,7 @@ export async function GET(req: NextRequest) {
         occupied:  occupiedCount,
         total:     totalRooms,
       },
-      available_rooms: availableRes.rows,
+      available_rooms: availableRooms,
       today_schedule:  todayRes.rows,
       stats: {
         sessions_month: Number(stats.sessions_month),

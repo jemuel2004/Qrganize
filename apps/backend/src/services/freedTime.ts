@@ -24,6 +24,21 @@ export function freedDayPhrase(date: string, today = manilaCalendarDateString())
   return `${weekday}, ${short}`;
 }
 
+/** A free time in one room on one day ('HH:MM') */
+export interface FreeTime { start: string; end: string }
+
+/** The earliest free time, joined with the ones right after it ("10:00–11:00" + "11:00–12:00" → "10:00–12:00"); null when there are none */
+export function firstFreeTime(times: FreeTime[]): FreeTime | null {
+  const sorted = [...times].sort((a, b) => a.start.localeCompare(b.start));
+  if (sorted.length === 0) return null;
+  const out = { ...sorted[0] };
+  for (const t of sorted.slice(1)) {
+    if (t.start > out.end) break;
+    if (t.end > out.end) out.end = t.end;
+  }
+  return out;
+}
+
 /** Merges one room's freed class times that touch or overlap ("10:00–11:00" + "11:00–12:00" → "10:00–12:00") */
 export function mergeFreedTimes<T extends FreedTime>(times: T[]): T[] {
   const sorted = [...times].sort((a, b) => a.room.id - b.room.id || a.date.localeCompare(b.date) || a.start.localeCompare(b.start));
